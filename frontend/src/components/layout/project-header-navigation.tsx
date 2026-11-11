@@ -1,0 +1,408 @@
+// SPDX-License-Identifier: Elastic-2.0
+// Copyright (c) 2026 ClaymoreLab
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Sparkles } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  PROJECT_SECTION_ROUTES,
+  projectModeFromPath,
+  projectSectionFromPath,
+} from "@/components/layout/project-navigation-routes";
+import { normalizeLastEpisodeLocation, useEpisodeWorkbenchStore } from "@/stores/episode-workbench-store";
+import { isRememberedSection, useProjectNavStore } from "@/stores/project-nav-store";
+import { useAllProjectSummaries } from "@/lib/queries/projects";
+import { getProjectCover } from "@/lib/project-cover";
+import { beginRouteSwitch } from "@/lib/route-switch-transition";
+import { cn } from "@/lib/utils";
+import { surfaceAccess, useProductSurfaces } from "@/lib/queries/product-surfaces";
+import { SlidingTabs, type SlidingTabItem } from "@/components/nav/sliding-tabs";
+import { useFreezoneViewMode, type FreezoneViewMode } from "@/features/freezone/useFreezoneViewMode";
+import { PROJECT_SUBMENU_HEIGHT, PROJECT_SUBMENU_TOP_GAP, PROJECT_SUBMENU_BOTTOM_GAP } from "./layout-metrics";
+
+const XIAJI_DEFAULT_ROUTE = PROJECT_SECTION_ROUTES.ingest;
+const PROJECT_SUBMENU_CLASS = "backdrop-blur-tap flex items-center gap-3 whitespace-nowrap rounded-full border border-white/[0.08] bg-[rgb(var(--surface-rgb)/0.78)] px-3.5 py-px text-sidebar-foreground";
+const PROJECT_SUBMENU_ITEM_CLASS = "flex h-[26px] items-center px-1.5 text-[11px] font-semibold transition-colors duration-150 ease-[var(--ease-out-quint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring";
+type ProjectSubmenuPlacement = "flow" | "overlay";
+
+function ProjectSubmenu({ label, role, children }: { label: string; role?: 'tablist'; children: ReactNode }) {
+  return <nav role={role} aria-label={label} style={{ height: PROJECT_SUBMENU_HEIGHT }} className={PROJECT_SUBMENU_CLASS}>{children}</nav>;
+}
+
+function ProjectSubmenuRow({
+  placement,
+  children,
+}: {
+  placement: ProjectSubmenuPlacement;
+  children: ReactNode;
+}) {
+  const isOverlay = placement === "overlay";
+  return (
+    <div
+      className={cn(
+        "z-30 flex justify-center",
+        isOverlay
+          ? "absolute left-1/2 top-full -translate-x-1/2"
+          : "relative px-4",
+      )}
+      style={{
+        paddingTop: PROJECT_SUBMENU_TOP_GAP,
+        paddingBottom: isOverlay ? 0 : PROJECT_SUBMENU_BOTTOM_GAP,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function ProjectXiahuaMenu() {
+  const { t } = useTranslation();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [viewMode, setViewMode] = useFreezoneViewMode();
+  if (projectModeFromPath(pathname) !== "xiahua") return null;
+  const modes: FreezoneViewMode[] = ["workflow", "board"];
+
+  return (
+    <ProjectSubmenuRow placement="overlay">
+      <ProjectSubmenu role="tablist" label={t("freezone.viewMode.label")}>
+        {modes.map((mode, index) => (
+          <button key={mode} type="button" role="tab"
+            data-testid={`freezone-view-${mode}`}
+            aria-selected={viewMode === mode}
+            tabIndex={viewMode === mode ? 0 : -1}
+            onClick={() => setViewMode(mode)}
+            onKeyDown={(event) => {
+              const next = event.key === "ArrowRight" ? modes[(index + 1) % modes.length]
+                : event.key === "ArrowLeft" ? modes[(index + modes.length - 1) % modes.length]
+                  : event.key === "Home" ? modes[0] : event.key === "End" ? modes[modes.length - 1] : null;
+              if (!next) return;
+              event.preventDefault();
+              setViewMode(next);
+              event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="freezone-view-${next}"]`)?.focus();
+            }}
+            className={cn(PROJECT_SUBMENU_ITEM_CLASS, "cursor-pointer",
+              viewMode === mode ? "text-foreground" : "text-muted-foreground hover:text-foreground")}
+          >{t(`freezone.viewMode.${mode}`)}</button>
+        ))}
+      </ProjectSubmenu>
+    </ProjectSubmenuRow>
+  );
+}
+
+const xiajiMenuItems = [
+  { labelKey: "nav.ingest", to: PROJECT_SECTION_ROUTES.ingest },
+  { labelKey: "nav.assets", to: PROJECT_SECTION_ROUTES.characters },
+  {
+    labelKey: "nav.episodes",
+    to: PROJECT_SECTION_ROUTES.episodes,
+    rememberKey: "episodes",
+  },
+  { labelKey: "nav.aiAssistant", to: PROJECT_SECTION_ROUTES.assistant },
+  { labelKey: "nav.styles", to: PROJECT_SECTION_ROUTES.styles },
+] as const;
+
+function ProjectAvatar({ name }: { name: string }) {
+  const { gradient, initial } = useMemo(() => getProjectCover(name), [name]);
+  return (
+    <span
+      className="flex size-5 shrink-0 items-center justify-center rounded text-xs font-bold text-white/95"
+      style={{ background: gradient }}
+    >
+      {initial}
+    </span>
+  );
+}
+
+export function ProjectSwitcher({ current }: { current: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { data: summaries } = useAllProjectSummaries();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const targetSection = projectSectionFromPath(pathname) ?? "freezone";
+  const productSurfaces = useProductSurfaces();
+  const mainlineAvailable =
+    surfaceAccess(productSurfaces.data, "mainline")?.available ?? productSurfaces.isPending;
+  const freezoneAvailable =
+    surfaceAccess(productSurfaces.data, "freezone")?.available ?? productSurfaces.isPending;
+  const assistantAvailable = surfaceAccess(productSurfaces.data, "assistant")?.available ?? false;
+  const availableTargetSection =
+    targetSection === "freezone" && !freezoneAvailable
+      ? "ingest"
+      : targetSection === "assistant" && !assistantAvailable
+        ? mainlineAvailable
+          ? "ingest"
+          : "freezone"
+        : targetSection !== "freezone" && !mainlineAvailable
+          ? "freezone"
+          : targetSection;
+  const [open, setOpen] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const projects = useMemo(
+    () =>
+      (summaries ?? [])
+        .filter((project) => project.status === "active")
+        .map((project) => ({ id: project.id || project.name, name: project.name })),
+    [summaries],
+  );
+  const currentSummary = useMemo(
+    () =>
+      projects.find((project) => project.id === current) ??
+      projects.find((project) => project.name === current),
+    [current, projects],
+  );
+  const currentName = currentSummary?.name ?? current;
+
+  const cancelClose = () => {
+    if (closeTimerRef.current === null) return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+  const openMenu = () => {
+    cancelClose();
+    setOpen(true);
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      closeTimerRef.current = null;
+    }, 120);
+  };
+
+  useEffect(() => cancelClose, []);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        onMouseEnter={openMenu}
+        onMouseLeave={scheduleClose}
+        className="inline-flex h-8 max-w-[156px] cursor-pointer items-center gap-1.5 bg-transparent px-1 text-left text-[13px] leading-none text-sidebar-foreground/90 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+      >
+        <span className="min-w-0 truncate leading-none">{currentName}</span>
+        <ChevronDown className="size-3.5 shrink-0 translate-y-px text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={8}
+        onMouseEnter={openMenu}
+        onMouseLeave={scheduleClose}
+        className="w-56 rounded-md border border-white/10 bg-popover p-1 shadow-xl shadow-black/20 ring-0"
+      >
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onClick={() => navigate({ to: "/" })}
+            className="min-h-8 gap-2 rounded-sm px-2 py-1.5 text-xs focus:bg-white/8 focus:text-current"
+          >
+            <ArrowLeft className="size-3.5" />
+            {t("project.dashboardReturn")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+            {t("nav.switchProject")}
+          </DropdownMenuLabel>
+          {projects.map((project) => (
+            <DropdownMenuItem
+              key={project.id}
+              onClick={() =>
+                navigate({
+                  to: PROJECT_SECTION_ROUTES[availableTargetSection],
+                  params: { project: project.id },
+                })
+              }
+              className="min-h-8 gap-2 rounded-sm px-2 py-1.5 text-xs focus:bg-white/8 focus:text-current"
+            >
+              <ProjectAvatar name={project.name} />
+              <span className="flex-1 truncate">{project.name}</span>
+              {project.id === current ? (
+                <Check className="size-3.5 text-primary" aria-hidden />
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * 「虾集」子页菜单，作为 header 的第二行渲染 —— 它必须在文档流里占真实高度，
+ * 而不是浮在内容之上：内容区是独立滚动容器，任何浮层都会被滚上来的内容穿过。
+ */
+export function ProjectXiajiMenu({ project }: { project: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const rememberedEpisodeLocation = useEpisodeWorkbenchStore(
+    (state) => state.lastEpisodeLocationByProject[project],
+  );
+  const productSurfaces = useProductSurfaces();
+  const mainlineAvailable =
+    surfaceAccess(productSurfaces.data, "mainline")?.available ?? productSurfaces.isPending;
+  const assistantAvailable = surfaceAccess(productSurfaces.data, "assistant")?.available ?? false;
+
+  if (projectModeFromPath(pathname) !== "xiaji" || !mainlineAvailable) return null;
+  const visibleMenuItems = xiajiMenuItems.filter(
+    (item) => item.to !== PROJECT_SECTION_ROUTES.assistant || assistantAvailable,
+  );
+
+  return (
+    <ProjectSubmenuRow placement="flow">
+      <ProjectSubmenu label={t("nav.xiajiMenu")}>
+        {visibleMenuItems.map((item) => {
+          const target =
+            "rememberKey" in item && rememberedEpisodeLocation
+              ? normalizeLastEpisodeLocation(project, rememberedEpisodeLocation) ?? item.to
+              : item.to;
+          // 高亮按栏目自身的路由判断：target 可能是带 ?query 的剧集深链，
+          // 拿它比 pathname 永远不相等（虾镜里就不会高亮）。
+          const sectionPath = item.to.replace("$project", encodeURIComponent(project));
+          const active = pathname === sectionPath || pathname.startsWith(`${sectionPath}/`);
+          return (
+            <Link
+              key={item.labelKey}
+              to={target}
+              params={{ project }}
+              className={cn(
+                PROJECT_SUBMENU_ITEM_CLASS,
+                active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+              aria-current={active ? "page" : undefined}
+              // 保留 <Link> 是为了留住 href（中键 / ⌘ 点开新标签页、右键复制链接），
+              // 只把普通左键那一条接管过来，先亮 loading 再跳 —— 换页是同步长任务，
+              // 不这样切一刀的话中间一帧都画不出来。
+              onClick={(event) => {
+                if (active || event.defaultPrevented) return;
+                if (
+                  event.button !== 0 ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                beginRouteSwitch(() => navigate({ to: target, params: { project } }));
+              }}
+            >
+              {t(item.labelKey)}
+            </Link>
+          );
+        })}
+      </ProjectSubmenu>
+      <div
+        id="superchat-search-anchor"
+        className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2"
+      />
+    </ProjectSubmenuRow>
+  );
+}
+
+export function ProjectHeaderNavigation({ project }: { project: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const activeMode = projectModeFromPath(pathname);
+  const rememberedEpisodeLocation = useEpisodeWorkbenchStore(
+    (state) => state.lastEpisodeLocationByProject[project],
+  );
+  const setLastEpisodeLocation = useEpisodeWorkbenchStore((state) => state.setLastEpisodeLocation);
+  const clearLastEpisodeLocation = useEpisodeWorkbenchStore((state) => state.clearLastEpisodeLocation);
+  const rememberSection = useProjectNavStore((state) => state.rememberSection);
+  const lastXiajiSection = useProjectNavStore(
+    (state) => state.lastXiajiSectionByProject[project],
+  );
+  const productSurfaces = useProductSurfaces();
+  const mainlineAvailable =
+    surfaceAccess(productSurfaces.data, "mainline")?.available ?? productSurfaces.isPending;
+  const freezoneAvailable =
+    surfaceAccess(productSurfaces.data, "freezone")?.available ?? productSurfaces.isPending;
+
+  // 记住当前停留的区块（虾画 / 虾集子页），进项目和切「虾集」时按此恢复。
+  useEffect(() => {
+    const section = projectSectionFromPath(pathname);
+    if (isRememberedSection(section)) {
+      rememberSection(project, section);
+    }
+  }, [pathname, project, rememberSection]);
+
+  useEffect(() => {
+    const episodesRoot = `/projects/${encodeURIComponent(project)}/episodes`;
+    if (pathname === episodesRoot) {
+      clearLastEpisodeLocation(project);
+      return;
+    }
+    const match = pathname.match(/^\/projects\/([^/]+)\/episodes\/(\d+)(?:\/|$)/);
+    if (!match || decodeURIComponent(match[1]) !== project) return;
+    setLastEpisodeLocation(project, `${pathname}${window.location.search}`);
+  }, [clearLastEpisodeLocation, pathname, project, setLastEpisodeLocation]);
+
+  const changeMode = (mode: "xiahua" | "xiaji") => {
+    if ((mode === "xiahua" && !freezoneAvailable) || (mode === "xiaji" && !mainlineAvailable)) {
+      return;
+    }
+    if (mode === activeMode) return;
+    if (mode === "xiahua") {
+      beginRouteSwitch(() =>
+        navigate({ to: PROJECT_SECTION_ROUTES.freezone, params: { project } }),
+      );
+      return;
+    }
+    // 切「虾集」时回到上次停留的子页（默认虾料）；上次在虾镜且有剧集深链则直达。
+    let target: string = lastXiajiSection
+      ? PROJECT_SECTION_ROUTES[lastXiajiSection]
+      : XIAJI_DEFAULT_ROUTE;
+    if (lastXiajiSection === "episodes" && rememberedEpisodeLocation) {
+      target =
+        normalizeLastEpisodeLocation(project, rememberedEpisodeLocation) ?? target;
+    }
+    beginRouteSwitch(() => navigate({ to: target, params: { project } }));
+  };
+
+  if (!mainlineAvailable && !freezoneAvailable) return null;
+
+  const creationModes: SlidingTabItem<"xiahua" | "xiaji">[] = [
+    ...(freezoneAvailable
+      ? [{
+          value: "xiahua" as const,
+          label: t("nav.freezone"),
+          icon: Sparkles,
+        }]
+      : []),
+    ...(mainlineAvailable
+      ? [{
+          value: "xiaji" as const,
+          label: t("nav.xiaji"),
+          icon: Clapperboard,
+        }]
+      : []),
+  ];
+
+  return (
+    <nav
+      aria-label={t("nav.creationMode")}
+      className="absolute left-1/2 top-1/2 z-30 flex -translate-x-1/2 -translate-y-1/2 items-center"
+    >
+      <SlidingTabs
+        items={creationModes}
+        value={activeMode}
+        onValueChange={changeMode}
+        className="sliding-tabs--project-modes"
+        animateActiveIcon
+        aria-label={t("nav.creationMode")}
+      />
+    </nav>
+  );
+}

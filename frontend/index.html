@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/brand/reelforge.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReelForge 虾导 — 通用 AIGC 视频引擎 / General-purpose AIGC Video Engine</title>
+    <meta
+      name="description"
+      content="A general-purpose AIGC video engine: script to finished film in one pipeline — dramas, ads, product videos, otome games, and more. | 通用 AIGC 视频引擎 —— 从剧本到成片一条流水线，漫剧、广告、电商、乙游皆可"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ReelForge" />
+    <meta property="og:title" content="ReelForge 虾导 — 通用 AIGC 视频引擎 / General-purpose AIGC Video Engine" />
+    <meta
+      property="og:description"
+      content="A general-purpose AIGC video engine: script to finished film in one pipeline — dramas, ads, product videos, otome games, and more. | 通用 AIGC 视频引擎 —— 从剧本到成片一条流水线，漫剧、广告、电商、乙游皆可"
+    />
+    <meta property="og:url" content="https://github.com/yangda611/reelforge" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ReelForge 虾导 — 通用 AIGC 视频引擎 / General-purpose AIGC Video Engine" />
+    <meta
+      name="twitter:description"
+      content="A general-purpose AIGC video engine: script to finished film in one pipeline — dramas, ads, product videos, otome games, and more. | 通用 AIGC 视频引擎 —— 从剧本到成片一条流水线，漫剧、广告、电商、乙游皆可"
+    />
+    <style>
+      /* Paint the saved theme before the application stylesheet arrives. */
+      html { background: var(--background, #090909); color-scheme: dark; }
+      html.light { background: var(--background, oklch(0.9605 0.0046 258.3248)); color-scheme: light; }
+      html.preauth-shell { background: #181818; }
+      body { margin: 0; }
+      /* Keep document surfaces opaque during reload and app bootstrap. */
+      html, body, #root { height: 100%; }
+      body, #root { background: inherit; }
+    </style>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("supertale-app");
+          var theme = "dark";
+          if (stored) {
+            var parsed = JSON.parse(stored);
+            if (parsed && parsed.state && ["dark", "light", "system"].indexOf(parsed.state.theme) !== -1) {
+              theme = parsed.state.theme;
+            }
+          }
+          var resolved =
+            theme === "system"
+              ? window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : theme;
+          document.documentElement.classList.add(resolved);
+          var pathname = window.location.pathname;
+          if (pathname === "/login" || pathname.indexOf("/watch/") === 0) {
+            document.documentElement.classList.add("preauth-shell");
+            document.documentElement.style.backgroundColor = "#181818";
+          }
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

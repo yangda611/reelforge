@@ -1,0 +1,1139 @@
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from novelvideo import config
+from novelvideo.ports.project import ProjectRecord
+from novelvideo.project_context import ProjectContext
+
+
+def _patch_roots(monkeypatch, tmp_path) -> None:
+    """把三类数据根指向 tmp_path,让归属校验器认得测试目录。"""
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(config, "RUNTIME_DIR", tmp_path / "runtime")
+
+
+def _record(
+    tmp_path,
+    *,
+    status: str = "active",
+    owner: str = "alice",
+    storage_org_id: str | None = None,
+    storage_org_name: str | None = None,
+) -> ProjectRecord:
+    relative = (
+        ("_orgs", storage_org_name, owner, "demo")
+        if storage_org_name
+        else (owner, "demo")
+    )
+    return ProjectRecord(
+        id="01PROJECT",
+        owner_type="user",
+        owner_id="local",
+        owner_username=owner,
+        name="demo",
+        home_node_id="local",
+        output_dir=str(tmp_path / "output" / Path(*relative)),
+        state_dir=str(tmp_path / "state" / Path(*relative)),
+        runtime_dir=str(tmp_path / "runtime" / Path(*relative)),
+        status=status,
+        storage_org_id=storage_org_id,
+        storage_org_name=storage_org_name,
+    )
+
+
+def _context(record: ProjectRecord) -> ProjectContext:
+    return ProjectContext(
+        project_id=record.id,
+        project_name=record.name,
+        owner_type=record.owner_type,
+        owner_id=record.owner_id,
+        owner_username=record.owner_username,
+        requester_user_id="local",
+        requester_username="alice",
+        requester_principals=(("user", "local"),),
+        effective_role="owner",
+        home_node_id="local",
+        output_dir=record.output_dir,
+        state_dir=record.state_dir,
+        runtime_dir=record.runtime_dir,
+        is_home_node=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage_org", [None, ("org_01HXYZ", "acme")])
+async def test_create_project_does_not_reuse_orphaned_same_name_data(
+    monkeypatch, tmp_path, storage_org
+):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    storage_org_id, storage_org_name = storage_org or (None, None)
+    record = _record(
+        tmp_path,
+        storage_org_id=storage_org_id,
+        storage_org_name=storage_org_name,
+    )
+    old_canvas = Path(record.state_dir) / "freezone" / "canvases"
+    old_canvas.mkdir(parents=True)
+    (old_canvas / "default.json").write_text('{"old": true}', encoding="utf-8")
+    (Path(record.state_dir) / "data.db").write_bytes(b"old workflow db")
+    Path(record.output_dir).mkdir(parents=True)
+    Path(record.runtime_dir).mkdir(parents=True)
+
+    class Registry:
+        async def create_project(self, **_kwargs):
+            return record
+
+        async def delete_uncommitted_project(self, _project_id):
+            raise AssertionError("successful creation must not be compensated")
+
+    async def fake_user_id(_user):
+        return "local"
+
+    def ensure_dirs(*, output_dir, state_dir, runtime_dir):
+        for path in (output_dir, state_dir, runtime_dir):
+            projects.Path(path).mkdir(parents=True, exist_ok=True)
+
+    def save_config(state_dir, *, config):
+        projects.Path(state_dir, "project_config.json").write_text(
+            str(config),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(projects, "validate_project_name", lambda _name: None)
+    monkeypatch.setattr(projects, "user_id_from_api_user", fake_user_id)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+    monkeypatch.setattr(projects, "ensure_project_dirs_at_paths", ensure_dirs)
+    monkeypatch.setattr(projects, "save_project_config_in_state_dir", save_config)
+    monkeypatch.setattr(
+        projects,
+        "embedding_model_binding_for_new_project",
+        lambda: SimpleNamespace(internal_model="embed", dimensions=1024),
+    )
+
+    result = await projects.create_project(
+        projects.ProjectCreate(name="demo"),
+        user={"id": "local", "username": "alice"},
+    )
+
+    assert result["ok"] is True
+    assert not projects.Path(record.state_dir, "freezone").exists()
+    assert not projects.Path(record.state_dir, "data.db").exists()
+    assert projects.Path(record.state_dir, "project_config.json").exists()
+    assert not list(projects.Path(record.state_dir).parent.glob(".demo.orphaned-*"))
+
+
+@pytest.mark.asyncio
+async def test_purge_detaches_files_before_releasing_project_name(monkeypatch, tmp_path):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(tmp_path, status="deleted")
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        path.mkdir(parents=True)
+        (path / "retained.txt").write_text("old", encoding="utf-8")
+    ctx = _context(record)
+    from novelvideo.interactive_story.publication_storage import project_store
+    publication_store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    publication = publication_store.work("owner", record.id)
+    publication_path = publication_store.directory(publication["public_id"])
+    media_path = publication_store.media_directory(publication["public_id"], "a" * 32)
+    media_path.mkdir(parents=True)
+    (media_path / "clip.mp4").write_bytes(b"video")
+    calls: list[str] = []
+
+    class Registry:
+        async def get_project(self, _project_id):
+            return record
+
+        async def mark_project_purged(self, _project_id):
+            assert all(
+                not projects.Path(path).exists()
+                for path in (record.output_dir, record.state_dir, record.runtime_dir)
+            )
+            calls.append("purged")
+            return replace(record, purged_at="2026-07-31T00:00:00+00:00")
+
+        async def delete_project_home(self, _project_id):
+            calls.append("home")
+
+    async def resolve_context(**_kwargs):
+        return ctx
+
+    async def emit_audit(**_kwargs):
+        calls.append("audit")
+
+    async def delete_codex_threads(*_args, **kwargs):
+        assert all(
+            not projects.Path(path).exists()
+            for path in (record.output_dir, record.state_dir, record.runtime_dir)
+        )
+        isolated_state = projects.Path(kwargs["project_state_dir"])
+        assert isolated_state.exists()
+        assert isolated_state.name.startswith(".demo.purging-")
+        calls.append("codex")
+        return 1
+
+    monkeypatch.setattr(projects, "resolve_project_context", resolve_context)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+    monkeypatch.setattr(projects, "emit_project_audit", emit_audit)
+    monkeypatch.setattr(
+        projects.chat_service,
+        "delete_codex_project_threads",
+        delete_codex_threads,
+    )
+
+    result = await projects.purge_project("01PROJECT", user={"username": "alice"})
+
+    assert result["ok"] is True
+    assert calls == ["codex", "purged", "home", "audit"]
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        assert not path.exists()
+        assert not list(path.parent.glob(".demo.purging-*"))
+
+    assert not publication_path.exists()
+    assert not media_path.exists()
+    assert not publication_store.root.exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_restores_files_when_registry_purge_fails(monkeypatch, tmp_path):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(tmp_path, status="deleted")
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        path.mkdir(parents=True)
+        (path / "retained.txt").write_text("old", encoding="utf-8")
+    ctx = _context(record)
+    from novelvideo.interactive_story.publication_storage import project_store
+    publication_store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    publication = publication_store.work("owner", record.id)
+    publication_path = publication_store.directory(publication["public_id"])
+    media_path = publication_store.media_directory(publication["public_id"], "a" * 32)
+    media_path.mkdir(parents=True)
+    (media_path / "retained.mp4").write_bytes(b"video")
+
+    class Registry:
+        async def get_project(self, _project_id):
+            return record
+
+        async def mark_project_purged(self, _project_id):
+            raise RuntimeError("registry unavailable")
+
+    async def resolve_context(**_kwargs):
+        return ctx
+
+    monkeypatch.setattr(projects, "resolve_project_context", resolve_context)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        await projects.purge_project("01PROJECT", user={"username": "alice"})
+
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        assert (path / "retained.txt").read_text(encoding="utf-8") == "old"
+        assert not list(path.parent.glob(".demo.purging-*"))
+
+    assert (media_path / "retained.mp4").read_bytes() == b"video"
+    assert (publication_path / "work.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_organization_purge_restores_files_when_codex_cleanup_fails(
+    monkeypatch, tmp_path
+):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(
+        tmp_path,
+        status="deleted",
+        storage_org_id="org_01HXYZ",
+        storage_org_name="acme",
+    )
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        path.mkdir(parents=True)
+        (path / "retained.txt").write_text("old", encoding="utf-8")
+    ctx = _context(record)
+
+    class Registry:
+        async def get_project(self, _project_id):
+            return record
+
+        async def mark_project_purged(self, _project_id):
+            raise AssertionError("registry purge must not run after Codex cleanup fails")
+
+    async def resolve_context(**_kwargs):
+        return ctx
+
+    async def delete_codex_threads(*_args, **kwargs):
+        isolated_state = projects.Path(kwargs["project_state_dir"])
+        assert isolated_state.exists()
+        assert isolated_state.name.startswith(".demo.purging-")
+        raise RuntimeError("Codex unavailable")
+
+    monkeypatch.setattr(projects, "resolve_project_context", resolve_context)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+    monkeypatch.setattr(
+        projects.chat_service,
+        "delete_codex_project_threads",
+        delete_codex_threads,
+    )
+
+    with pytest.raises(RuntimeError, match="Codex unavailable"):
+        await projects.purge_project("01PROJECT", user={"username": "alice"})
+
+    for raw_path in (record.output_dir, record.state_dir, record.runtime_dir):
+        path = projects.Path(raw_path)
+        assert (path / "retained.txt").read_text(encoding="utf-8") == "old"
+        assert not list(path.parent.glob(".demo.purging-*"))
+
+
+# --------------------------------------------------------------------------- #
+# 存储归属校验器:用户操作必须互相隔离,绝不移动/删除他人目录                     #
+# --------------------------------------------------------------------------- #
+
+
+def _valid_dirs(tmp_path, owner="alice"):
+    return dict(
+        owner_username=owner,
+        project_name="demo",
+        storage_org_id=None,
+        storage_org_name=None,
+        output_dir=str(tmp_path / "output" / owner / "demo"),
+        state_dir=str(tmp_path / "state" / owner / "demo"),
+        runtime_dir=str(tmp_path / "runtime" / owner / "demo"),
+    )
+
+
+def test_validator_accepts_owned_dirs(monkeypatch, tmp_path):
+    from novelvideo.security import assert_owned_project_storage
+
+    _patch_roots(monkeypatch, tmp_path)
+    validated = assert_owned_project_storage(**_valid_dirs(tmp_path))
+    assert validated.state_dir == (tmp_path / "state" / "alice" / "demo").resolve()
+
+
+@pytest.mark.parametrize("root_link", ["root", "ancestor"])
+@pytest.mark.parametrize("organization", [False, True])
+@pytest.mark.parametrize("resolved_record", [False, True])
+def test_validator_accepts_trusted_symlink_roots(
+    monkeypatch, tmp_path, root_link, organization, resolved_record
+):
+    from novelvideo.security import assert_owned_project_storage
+    from novelvideo.shared.project_dirs import default_project_dirs
+
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    roots = []
+    for kind in ("output", "state", "runtime"):
+        target = real / kind
+        target.mkdir()
+        if root_link == "root":
+            root = tmp_path / kind
+            root.symlink_to(target, target_is_directory=True)
+        else:
+            root = alias / kind
+        monkeypatch.setattr(config, f"{kind.upper()}_DIR", root)
+        roots.append(root)
+
+    suffix = (
+        Path("_orgs", "acme", "alice", "demo")
+        if organization
+        else Path("alice", "demo")
+    )
+    if organization:
+        paths = tuple(str((root / suffix).resolve()) for root in roots)
+    else:
+        paths = default_project_dirs("alice", "demo")
+    if not resolved_record:
+        paths = tuple(str(root / suffix) for root in roots)
+    validated = assert_owned_project_storage(
+        owner_username="alice",
+        project_name="demo",
+        storage_org_id="org_01HXYZ" if organization else None,
+        storage_org_name="acme" if organization else None,
+        output_dir=paths[0],
+        state_dir=paths[1],
+        runtime_dir=paths[2],
+    )
+    assert validated.as_tuple() == tuple(
+        (real / kind / suffix).resolve() for kind in ("output", "state", "runtime")
+    )
+
+
+@pytest.mark.parametrize(
+    "boundary", ["_orgs", "_orgs/acme", "_orgs/acme/alice", "_orgs/acme/alice/demo"]
+)
+@pytest.mark.parametrize("resolved_record", [False, True])
+def test_validator_rejects_boundary_symlinks_below_trusted_symlink_root(
+    monkeypatch, tmp_path, boundary, resolved_record
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    _patch_roots(monkeypatch, alias)
+    link = real / "state" / boundary
+    link.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link.symlink_to(outside, target_is_directory=True)
+    suffix = Path("_orgs", "acme", "alice", "demo")
+    paths = [alias / kind / suffix for kind in ("output", "state", "runtime")]
+    if resolved_record:
+        paths = [path.resolve() for path in paths]
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(
+            owner_username="alice",
+            project_name="demo",
+            storage_org_id="org_01HXYZ",
+            storage_org_name="acme",
+            output_dir=paths[0],
+            state_dir=paths[1],
+            runtime_dir=paths[2],
+        )
+
+
+def test_validator_rejects_personal_owner_that_collides_with_org_namespace(
+    monkeypatch, tmp_path
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**_valid_dirs(tmp_path, owner="_orgs"))
+
+
+def test_validator_accepts_owned_organization_dirs(monkeypatch, tmp_path):
+    from novelvideo.security import assert_owned_project_storage
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path)
+    suffix = Path("_orgs", "acme", "alice", "demo")
+    args.update(
+        storage_org_id="org_01HXYZ",
+        storage_org_name="acme",
+        output_dir=str(tmp_path / "output" / suffix),
+        state_dir=str(tmp_path / "state" / suffix),
+        runtime_dir=str(tmp_path / "runtime" / suffix),
+    )
+
+    validated = assert_owned_project_storage(**args)
+
+    assert validated.state_dir == (tmp_path / "state" / suffix).resolve()
+
+
+@pytest.mark.parametrize(
+    ("storage_org_id", "storage_org_name"),
+    [
+        (None, "acme"),
+        ("org_01HXYZ", None),
+        ("", ""),
+        (" ", " "),
+    ],
+)
+def test_validator_rejects_incomplete_or_empty_organization_metadata(
+    monkeypatch, tmp_path, storage_org_id, storage_org_name
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path)
+    args.update(
+        storage_org_id=storage_org_id,
+        storage_org_name=storage_org_name,
+    )
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_validator_rejects_different_organization_even_when_all_paths_match(
+    monkeypatch, tmp_path
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path)
+    wrong_suffix = Path("_orgs", "other-org", "alice", "demo")
+    args.update(
+        storage_org_id="org_01HXYZ",
+        storage_org_name="acme",
+        output_dir=str(tmp_path / "output" / wrong_suffix),
+        state_dir=str(tmp_path / "state" / wrong_suffix),
+        runtime_dir=str(tmp_path / "runtime" / wrong_suffix),
+    )
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_validator_rejects_symlinked_organization_directory(monkeypatch, tmp_path):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    org_root = tmp_path / "state" / "_orgs"
+    org_root.mkdir(parents=True)
+    (org_root / "acme").symlink_to(outside, target_is_directory=True)
+    args = _valid_dirs(tmp_path)
+    suffix = Path("_orgs", "acme", "alice", "demo")
+    args.update(
+        storage_org_id="org_01HXYZ",
+        storage_org_name="acme",
+        output_dir=str(tmp_path / "output" / suffix),
+        state_dir=str(tmp_path / "state" / suffix),
+        runtime_dir=str(tmp_path / "runtime" / suffix),
+    )
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_validator_rejects_organization_owner_that_collides_with_system_namespace(
+    monkeypatch, tmp_path
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path, owner="_system")
+    suffix = Path("_orgs", "acme", "_system", "demo")
+    args.update(
+        storage_org_id="org_01HXYZ",
+        storage_org_name="acme",
+        output_dir=str(tmp_path / "output" / suffix),
+        state_dir=str(tmp_path / "state" / suffix),
+        runtime_dir=str(tmp_path / "runtime" / suffix),
+    )
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_validator_rejects_other_users_directory(monkeypatch, tmp_path):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    # state_dir 指向 bob 的目录,owner 是 alice —— 必须拒绝。
+    args = _valid_dirs(tmp_path)
+    args["state_dir"] = str(tmp_path / "state" / "bob" / "demo")
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+@pytest.mark.parametrize(
+    "override_key, override_value_fn",
+    [
+        # 指向数据根本身
+        ("output_dir", lambda t: str(t / "output")),
+        # 指向 owner 用户根(会连带删掉该用户全部项目)
+        ("state_dir", lambda t: str(t / "state" / "alice")),
+        # 路径穿越到别的用户
+        ("runtime_dir", lambda t: str(t / "runtime" / "alice" / ".." / "bob" / "demo")),
+    ],
+)
+def test_validator_rejects_dangerous_paths(
+    monkeypatch, tmp_path, override_key, override_value_fn
+):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path)
+    args[override_key] = override_value_fn(tmp_path)
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_validator_rejects_symlinked_project_dir(monkeypatch, tmp_path):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    # alice 的 state 目录里放一个软链接指向 bob 的目录。
+    (tmp_path / "state" / "bob" / "demo").mkdir(parents=True)
+    alice_state = tmp_path / "state" / "alice"
+    alice_state.mkdir(parents=True)
+    link = alice_state / "demo"
+    link.symlink_to(tmp_path / "state" / "bob" / "demo")
+    args = _valid_dirs(tmp_path)
+    args["state_dir"] = str(link)
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+def test_quarantine_rejects_nonexistent_path_outside_owner_roots(monkeypatch, tmp_path):
+    from novelvideo.api.routes import projects
+    from novelvideo.security import ProjectStorageOwnershipError
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = replace(
+        _record(tmp_path),
+        state_dir=str(tmp_path / "outside" / "alice" / "demo"),
+    )
+    # Any remaining project tree keeps strict validation enabled for every
+    # registered path, including missing paths outside the configured roots.
+    projects.Path(record.output_dir).mkdir(parents=True)
+    assert not projects.Path(record.state_dir).exists()
+
+    with pytest.raises(ProjectStorageOwnershipError):
+        projects._quarantine_project_dirs(
+            record,
+            project_id=record.id,
+            reason="orphaned",
+        )
+
+    assert not projects.Path(record.state_dir).exists()
+
+
+def test_quarantine_allows_registry_only_purge_when_all_legacy_dirs_are_missing(
+    monkeypatch,
+    tmp_path,
+):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path / "current")
+    legacy_root = tmp_path / "retired-root"
+    record = ProjectRecord(
+        id="01LEGACY",
+        owner_type="user",
+        owner_id="local",
+        owner_username="alice",
+        name="demo",
+        home_node_id="local",
+        output_dir=str(legacy_root / "output" / "alice" / "demo"),
+        state_dir=str(legacy_root / "state" / "alice" / "demo"),
+        runtime_dir=str(legacy_root / "runtime" / "alice" / "demo"),
+        status="deleted",
+    )
+
+    assert projects._quarantine_project_dirs(
+        record,
+        project_id=record.id,
+        reason="purging",
+    ) == []
+
+
+def test_validator_rejects_nested_dirs(monkeypatch, tmp_path):
+    from novelvideo.security import (
+        ProjectStorageOwnershipError,
+        assert_owned_project_storage,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    args = _valid_dirs(tmp_path)
+    # runtime 嵌在 state 下 —— 移动/删除会互相牵连,拒绝。
+    args["runtime_dir"] = str(tmp_path / "state" / "alice" / "demo" / "runtime")
+    with pytest.raises(ProjectStorageOwnershipError):
+        assert_owned_project_storage(**args)
+
+
+@pytest.mark.asyncio
+async def test_purge_refuses_when_record_points_at_other_user(monkeypatch, tmp_path):
+    """数据库记录被篡改指向别人目录时,purge 必须拒绝且不动任何文件。"""
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(tmp_path, status="deleted")
+    # 篡改:把 alice 项目的 state_dir 指到 bob 的真实数据。
+    bob_state = tmp_path / "state" / "bob" / "demo"
+    bob_state.mkdir(parents=True)
+    (bob_state / "keep.txt").write_text("bob's data", encoding="utf-8")
+    record = replace(record, state_dir=str(bob_state))
+    for raw_path in (record.output_dir, record.runtime_dir):
+        projects.Path(raw_path).mkdir(parents=True)
+    ctx = _context(record)
+
+    class Registry:
+        async def get_project(self, _project_id):
+            return record
+
+        async def mark_project_purged(self, _project_id):
+            raise AssertionError("must not reach purge after validation failure")
+
+    async def resolve_context(**_kwargs):
+        return ctx
+
+    async def delete_codex_threads(*_args, **_kwargs):
+        raise AssertionError("ownership validation must happen before Codex deletion")
+
+    monkeypatch.setattr(projects, "resolve_project_context", resolve_context)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+    monkeypatch.setattr(
+        projects.chat_service,
+        "delete_codex_project_threads",
+        delete_codex_threads,
+    )
+
+    with pytest.raises(projects.HTTPException) as exc_info:
+        await projects.purge_project("01PROJECT", user={"username": "alice"})
+
+    assert exc_info.value.status_code == 500
+    # bob 的数据毫发无损,alice 自己的目录也没被移动。
+    assert (bob_state / "keep.txt").read_text(encoding="utf-8") == "bob's data"
+    assert not list(bob_state.parent.glob(".demo.purging-*"))
+    for raw_path in (record.output_dir, record.runtime_dir):
+        assert projects.Path(raw_path).exists()
+
+
+def test_restore_never_deletes_a_reoccupied_original(monkeypatch, tmp_path, caplog):
+    """恢复隔离目录时,若原位置已被并发重建占用,绝不递归删除新数据。"""
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    original = tmp_path / "state" / "alice" / "demo"
+    quarantine = original.with_name(".demo.purging-x")
+    quarantine.mkdir(parents=True)
+    (quarantine / "old.txt").write_text("quarantined", encoding="utf-8")
+    # 原位置在隔离之后被重新创建,写入了新数据。
+    original.mkdir(parents=True)
+    (original / "new.txt").write_text("fresh", encoding="utf-8")
+
+    projects._restore_quarantined_project_dirs([(original, quarantine)])
+
+    # 新数据保留,隔离目录也保留(留给人工处置),都没被删。
+    assert (original / "new.txt").read_text(encoding="utf-8") == "fresh"
+    assert (quarantine / "old.txt").read_text(encoding="utf-8") == "quarantined"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["deleted", "archived"])
+async def test_project_status_updates_publication_availability(monkeypatch, tmp_path, status):
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(tmp_path)
+    ctx = _context(record)
+    from novelvideo.interactive_story.publication_storage import project_store
+
+    Path(record.state_dir).mkdir(parents=True)
+    store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    work = store.work("owner", record.id)
+    work["listed"] = True
+    store.write(store.directory(work["public_id"]) / "work.json", work)
+
+    class Registry:
+        async def get_project(self, _):
+            return record
+
+        async def update_project_status(self, _, status):
+            return replace(record, status=status)
+
+    async def summary(*args, **kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    monkeypatch.setattr(projects, "get_project_registry", lambda: Registry())
+    monkeypatch.setattr(projects, "_summary_for_record", summary)
+    await projects._set_project_status(ctx, status)
+    assert "project_deleted" not in store.read(work["public_id"])
+    assert not store.read(work["public_id"])["listed"]
+    await projects._set_project_status(ctx, "active")
+    assert "project_deleted" not in store.read(work["public_id"])
+    assert not store.read(work["public_id"])["listed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("status", ["deleted", "archived", "active"])
+async def test_delete_publications_registry_failure_or_missing_state(
+    monkeypatch, tmp_path, missing, status
+):
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication_storage import (
+        set_project_status_and_unlist,
+        project_store,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    record = _record(tmp_path)
+    registry = SimpleNamespace(update_project_status=AsyncMock(return_value=record))
+    if missing:
+        assert (
+            await set_project_status_and_unlist(record.id, record.state_dir, registry, status)
+            is record
+        )
+        assert not Path(record.state_dir).exists()
+        return
+    Path(record.state_dir).mkdir(parents=True)
+    store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    work = store.work("owner", record.id)
+    work["listed"] = True
+    store.write(store.directory(work["public_id"]) / "work.json", work)
+    registry.update_project_status.side_effect = OSError("registry unavailable")
+    with pytest.raises(OSError, match="registry unavailable"):
+        await set_project_status_and_unlist(record.id, record.state_dir, registry, status)
+    assert store.read(work["public_id"])["listed"]
+    assert not (store.root / "availability.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_publications_cancellation_finishes_commit(monkeypatch, tmp_path):
+    import asyncio
+    from novelvideo.interactive_story.publication_storage import (
+        delete_project_and_unlist,
+        project_store,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    record = _record(tmp_path)
+    Path(record.state_dir).mkdir(parents=True)
+    store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    work = store.work("owner", record.id)
+    work["listed"] = True
+    store.write(store.directory(work["public_id"]) / "work.json", work)
+    entered, release = asyncio.Event(), asyncio.Event()
+    committed = []
+
+    async def update(*args):
+        entered.set()
+        await release.wait()
+        committed.append(True)
+        return record
+
+    task = asyncio.create_task(
+        delete_project_and_unlist(
+            record.id, record.state_dir, SimpleNamespace(update_project_status=update)
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert committed == [True]
+    assert not store.read(work["public_id"])["listed"]
+
+
+@pytest.mark.asyncio
+async def test_purge_cancellation_during_detach_restores_directories(
+    monkeypatch, tmp_path
+):
+    import asyncio
+    import threading
+    from unittest.mock import AsyncMock
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    record = _record(tmp_path, status="deleted")
+    for path in (record.state_dir, record.output_dir, record.runtime_dir):
+        Path(path).mkdir(parents=True)
+    registry = SimpleNamespace(
+        get_project=AsyncMock(return_value=record),
+        mark_project_purged=AsyncMock(return_value=replace(record, purged_at="now")),
+        delete_project_home=AsyncMock(),
+    )
+    monkeypatch.setattr(projects, "get_project_registry", lambda: registry)
+    monkeypatch.setattr(
+        projects, "resolve_project_context", AsyncMock(return_value=_context(record))
+    )
+    monkeypatch.setattr(
+        projects.chat_service, "delete_codex_project_threads", AsyncMock()
+    )
+    monkeypatch.setattr(projects, "emit_project_audit", AsyncMock())
+    loop = asyncio.get_running_loop()
+    entered, release = asyncio.Event(), threading.Event()
+    original = projects._quarantine_project_dirs
+
+    def detach(*args, **kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(projects, "_quarantine_project_dirs", detach)
+    task = asyncio.create_task(projects.purge_project(record.id, {"username": "alice"}))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    registry.mark_project_purged.assert_not_awaited()
+    for path in (record.state_dir, record.output_dir, record.runtime_dir):
+        assert Path(path).exists()
+        assert not list(Path(path).parent.glob(".demo.purging-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["deleted", "archived"])
+async def test_unlisting_write_failure_leaves_registry_and_other_works_unchanged(
+    monkeypatch, tmp_path, status
+):
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication import PublicationStore
+    from novelvideo.interactive_story.publication_storage import (
+        set_project_status_and_unlist,
+        project_store,
+    )
+
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    record = _record(tmp_path)
+    Path(record.state_dir).mkdir(parents=True)
+    store = project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    works = [store.work(owner, record.id) for owner in ("a", "b")]
+    for work in works:
+        work["listed"] = True
+        store.write(store.directory(work["public_id"]) / "work.json", work)
+    original = PublicationStore.write
+    writes = []
+
+    def fail_second(self, path, value):
+        writes.append(path)
+        if len(writes) == 2:
+            raise OSError("disk failure")
+        return original(self, path, value)
+
+    monkeypatch.setattr(PublicationStore, "write", fail_second)
+    registry = SimpleNamespace(update_project_status=AsyncMock())
+    with pytest.raises(OSError, match="disk failure"):
+        await set_project_status_and_unlist(record.id, record.state_dir, registry, status)
+    registry.update_project_status.assert_not_awaited()
+    assert all(store.read(work["public_id"])["listed"] for work in works)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["deleted", "archived"])
+async def test_publication_mutation_rechecks_status_after_delete_lock(
+    monkeypatch, tmp_path, status
+):
+    import asyncio
+    from novelvideo.interactive_story import publication_storage as storage
+    from novelvideo.interactive_story.publication import PublicationError
+
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    record = _record(tmp_path)
+    Path(record.state_dir).mkdir(parents=True)
+    store = storage.project_store(record.id, Path(record.state_dir), Path(record.output_dir))
+    work = store.work("owner", record.id)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def update(*args):
+        nonlocal record
+        entered.set()
+        await release.wait()
+        record = replace(record, status=status)
+        return record
+
+    async def get(*args):
+        return record
+
+    registry = SimpleNamespace(update_project_status=update, get_project=get)
+    monkeypatch.setattr(storage, "get_project_registry", lambda: registry)
+    deletion = asyncio.create_task(
+        storage.set_project_status_and_unlist(record.id, record.state_dir, registry, status)
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    mutation = asyncio.create_task(
+        storage.invoke_active(
+            store, store.activate, work["public_id"], "owner", None, False
+        )
+    )
+    release.set()
+    await deletion
+    with pytest.raises(PublicationError, match="unavailable"):
+        await mutation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ["index", "project_state"])
+@pytest.mark.parametrize("error_code", [13, 30])  # EACCES / EROFS, including read-only mounts.
+async def test_unpublished_delete_tolerates_unwritable_publication_storage(
+    monkeypatch, tmp_path, blocked, error_code
+):
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication_storage import delete_project_and_unlist
+
+    record = _record(tmp_path)
+    state = Path(record.state_dir)
+    state.mkdir(parents=True)
+    index = tmp_path / "publication-index"
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(index))
+    original_mkdir = Path.mkdir
+
+    def readonly_mkdir(path, *args, **kwargs):
+        if path == (index / "locks" if blocked == "index" else state / "publications"):
+            raise OSError(error_code, "publication storage is unwritable")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", readonly_mkdir)
+    deleted = replace(record, status="deleted")
+    registry = SimpleNamespace(update_project_status=AsyncMock(return_value=deleted))
+    assert await delete_project_and_unlist(record.id, state, registry) is deleted
+    registry.update_project_status.assert_awaited_once_with(record.id, "deleted")
+    assert not (state / "publications").exists()
+
+
+@pytest.mark.asyncio
+async def test_unwritable_publication_lock_never_skips_existing_publication(monkeypatch, tmp_path):
+    import errno
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication import PublicationStore
+    from novelvideo.interactive_story.publication_storage import delete_project_and_unlist, project_store
+
+    record = _record(tmp_path)
+    state = Path(record.state_dir)
+    state.mkdir(parents=True)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    store = project_store(record.id, state, Path(record.output_dir))
+    work = store.work("owner", record.id)
+    work["listed"] = True
+    work_path = store.directory(work["public_id"]) / "work.json"
+    store.write(work_path, work)
+    before = work_path.read_bytes()
+
+    def denied_lock(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "read-only lock")
+
+    monkeypatch.setattr(PublicationStore, "file_lock", denied_lock)
+    registry = SimpleNamespace(update_project_status=AsyncMock())
+    with pytest.raises(PermissionError):
+        await delete_project_and_unlist(record.id, state, registry)
+    registry.update_project_status.assert_not_awaited()
+    assert work_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_unpublished_delete_still_honors_busy_publication_lock(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication import PublicationError
+    from novelvideo.interactive_story.publication_storage import delete_project_and_unlist, project_store
+
+    record = _record(tmp_path)
+    state = Path(record.state_dir)
+    state.mkdir(parents=True)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    store = project_store(record.id, state, Path(record.output_dir))
+    registry = SimpleNamespace(update_project_status=AsyncMock())
+    with store.locked():
+        with pytest.raises(PublicationError, match="publication_busy"):
+            await delete_project_and_unlist(record.id, state, registry)
+    registry.update_project_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unpublished_delete_does_not_retry_registry_permission_failure(monkeypatch, tmp_path):
+    import errno
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication_storage import delete_project_and_unlist
+
+    record = _record(tmp_path)
+    state = Path(record.state_dir)
+    state.mkdir(parents=True)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+    registry = SimpleNamespace(update_project_status=AsyncMock(
+        side_effect=PermissionError(errno.EACCES, "registry denied"),
+    ))
+    with pytest.raises(PermissionError, match="registry denied"):
+        await delete_project_and_unlist(record.id, state, registry)
+    registry.update_project_status.assert_awaited_once()
+
+
+def test_delete_unpublished_project_api_with_readonly_publication_index(monkeypatch, tmp_path):
+    import errno
+    from unittest.mock import AsyncMock
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from novelvideo.api.auth import get_api_user
+    from novelvideo.api.routes import projects
+
+    _patch_roots(monkeypatch, tmp_path)
+    record = _record(tmp_path)
+    ctx = _context(record)
+    Path(record.state_dir).mkdir(parents=True)
+    index = tmp_path / "publication-index"
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(index))
+    original_mkdir = Path.mkdir
+
+    def readonly_mkdir(path, *args, **kwargs):
+        if path == index / "locks":
+            raise OSError(errno.EROFS, "read-only publication mount")
+        return original_mkdir(path, *args, **kwargs)
+
+    async def resolve(**kwargs):
+        return ctx
+
+    async def summary(value, **kwargs):
+        return SimpleNamespace(model_dump=lambda: {"id": value.id, "status": value.status})
+
+    registry = SimpleNamespace(get_project=AsyncMock(return_value=record),
+        update_project_status=AsyncMock(return_value=replace(record, status="deleted")))
+    monkeypatch.setattr(Path, "mkdir", readonly_mkdir)
+    monkeypatch.setattr(projects, "resolve_project_context", resolve)
+    monkeypatch.setattr(projects, "get_project_registry", lambda: registry)
+    monkeypatch.setattr(projects, "_summary_for_record", summary)
+    app = FastAPI()
+    app.include_router(projects.router, prefix="/api/v1")
+    app.dependency_overrides[get_api_user] = lambda: {"id": "local", "username": "alice"}
+    with TestClient(app) as client:
+        response = client.post(f"/api/v1/projects/{record.id}/delete")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "deleted"
+    registry.update_project_status.assert_awaited_once_with(record.id, "deleted")
+
+
+@pytest.mark.asyncio
+async def test_unpublished_delete_propagates_other_lock_io_errors(monkeypatch, tmp_path):
+    import errno
+    from unittest.mock import AsyncMock
+    from novelvideo.interactive_story.publication import PublicationStore
+    from novelvideo.interactive_story.publication_storage import delete_project_and_unlist
+
+    record = _record(tmp_path)
+    Path(record.state_dir).mkdir(parents=True)
+    monkeypatch.setenv("ST_PUBLICATION_DIR", str(tmp_path / "index"))
+
+    def broken_lock(*args, **kwargs):
+        raise OSError(errno.EIO, "storage I/O failure")
+
+    monkeypatch.setattr(PublicationStore, "file_lock", broken_lock)
+    registry = SimpleNamespace(update_project_status=AsyncMock())
+    with pytest.raises(OSError, match="storage I/O failure"):
+        await delete_project_and_unlist(record.id, record.state_dir, registry)
+    registry.update_project_status.assert_not_awaited()
