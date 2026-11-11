@@ -31,6 +31,7 @@ from novelvideo.model_gateway_settings import (
     save_agent_llm_config,
     save_official_media_catalog_auto_update,
     save_official_newapi_key,
+    save_official_text_model,
     save_relayclaw_brainclaw_key,
     save_custom_newapi_gateway,
     save_newapi_database_config,
@@ -43,6 +44,7 @@ from novelvideo.model_gateway_settings import (
     get_newapi_provider_channels,
     set_model_gateway_mode,
     set_custom_llm_mode,
+    test_official_gateway,
 )
 from novelvideo.official_media_catalog_remote import (
     check_official_media_catalog_update,
@@ -179,6 +181,11 @@ def require_ce_gateway_management() -> None:
 class OfficialGatewayBody(BaseModel):
     new_api_base_url: str | None = Field(default=None, alias="newApiBaseUrl")
     new_api_api_key: str = Field(alias="newApiApiKey")
+    # Text model to use when the Official channel points at a third-party
+    # gateway. When omitted the save probes the gateway's /v1/models list
+    # and picks one; when the base URL is the official RelayClaw relay the
+    # model is always "brainclaw" and this field is ignored.
+    text_model: str | None = Field(default=None, alias="textModel")
 
 
 class OfficialMediaCatalogPreferencesBody(BaseModel):
@@ -683,13 +690,30 @@ async def save_official_gateway_config(body: OfficialGatewayBody) -> dict[str, A
     save_official_newapi_key(
         api_key=api_key, base_url=body.new_api_base_url or "", activate=True
     )
+    # Probe the gateway now so a bad model is caught at save time, not at
+    # generation time. The probe is best-effort: a temporarily unreachable
+    # gateway never blocks saving, it only reports ok=False and the UI
+    # warns. A resolved model is stored so text routes use a model that
+    # actually exists on this gateway.
+    test_result = test_official_gateway(
+        body.new_api_base_url or "",
+        api_key,
+        text_model=(body.text_model or "").strip() or None,
+    )
+    if test_result["ok"] and test_result.get("model"):
+        if test_result.get("brainclaw"):
+            save_official_text_model("")
+        else:
+            save_official_text_model(str(test_result["model"]))
     runtime = _refresh_runtime_after_gateway_write()
+    data = build_model_gateway_status(
+        official_base_url=app_config.OFFICIAL_NEWAPI_BASE_URL,
+        official_api_key=app_config.NEWAPI_API_KEY,
+    )
+    data["test"] = test_result
     return {
         "ok": True,
-        "data": build_model_gateway_status(
-            official_base_url=app_config.OFFICIAL_NEWAPI_BASE_URL,
-            official_api_key=app_config.NEWAPI_API_KEY,
-        ),
+        "data": data,
         "runtime": runtime,
     }
 

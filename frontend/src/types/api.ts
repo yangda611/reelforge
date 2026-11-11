@@ -29,6 +29,13 @@ export interface ErrorResponse {
   ok: false;
   error: string;
   code?: string;
+  /**
+   * Structured gateway failure detail (HTTP 502 `gateway_model_error`):
+   * the model the gateway rejected and the gateway's own message/status.
+   */
+  model?: string;
+  gatewayMessage?: string;
+  gatewayStatus?: number | null;
 }
 
 export type ApiResponse<T> = OkResponse<T> | ErrorResponse;

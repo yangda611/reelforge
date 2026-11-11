@@ -22,6 +22,7 @@ const modelGatewayMocks = vi.hoisted(() => ({
   saveAgent: vi.fn(),
   saveBrainClaw: vi.fn(),
   saveMediaRelay: vi.fn(),
+  saveOfficial: vi.fn(),
   setCustomLlmMode: vi.fn(),
 }));
 const freezoneAgentConfigMocks = vi.hoisted(() => ({
@@ -68,6 +69,14 @@ vi.mock("@/lib/queries/freezone-agent-config", () => ({
 }));
 
 vi.mock("@/lib/queries/model-gateway", () => ({
+  OFFICIAL_RELAY_BASE_URL: "https://relayclaw.cdnfg.com/v1",
+  isOfficialRelayBaseUrl: (baseUrl: string | undefined | null) => {
+    if (!baseUrl) return false;
+    return (
+      baseUrl.trim().replace(/\/+$/, "").toLowerCase() ===
+      "https://relayclaw.cdnfg.com/v1"
+    );
+  },
   useModelGatewayConfig: () => ({
     data: modelGatewayMocks.config ? { data: modelGatewayMocks.config } : undefined,
     isLoading: false,
@@ -83,7 +92,10 @@ vi.mock("@/lib/queries/model-gateway", () => ({
   useEnableCustom: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useEnableHybrid: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useEnableBrainClaw: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSaveOfficialConfig: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSaveOfficialConfig: () => ({
+    mutateAsync: modelGatewayMocks.saveOfficial,
+    isPending: false,
+  }),
   useSaveAgentLlmConfig: () => ({
     mutateAsync: modelGatewayMocks.saveAgent,
     isPending: false,
@@ -167,12 +179,11 @@ vi.mock("react-i18next", async () => {
         "settings.modelConfig.modes.official": "官方渠道",
         "settings.modelConfig.modes.custom": "自定义 NewAPI",
         "settings.modelConfig.official.description": "官方渠道说明",
-        "settings.modelConfig.official.registerLink": "注册",
         "settings.modelConfig.official.save": "保存并启用",
-        "settings.modelConfig.brainclaw.tab": "虾驿 BrainClaw（推荐）",
+        "settings.modelConfig.brainclaw.tab": "BrainClaw（推荐）",
         "settings.modelConfig.brainclaw.advancedTab": "高级自定义",
         "settings.modelConfig.brainclaw.title": "虾脑 BrainClaw（推荐）",
-        "settings.modelConfig.brainclaw.description": "虾脑仅通过虾驿提供",
+        "settings.modelConfig.brainclaw.description": "虾脑 BrainClaw 说明",
         "settings.modelConfig.brainclaw.model": "固定模型",
         "settings.modelConfig.brainclaw.save": "保存并启用 BrainClaw",
         "settings.modelConfig.agent.title": "Agent 模型",
@@ -398,6 +409,7 @@ beforeEach(() => {
   modelGatewayMocks.saveAgent.mockReset();
   modelGatewayMocks.saveBrainClaw.mockReset();
   modelGatewayMocks.saveMediaRelay.mockReset();
+  modelGatewayMocks.saveOfficial.mockReset();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.success).mockClear();
   modelGatewayMocks.setCustomLlmMode.mockReset();
@@ -757,6 +769,105 @@ describe("SettingsDialog pages", () => {
     });
   });
 
+  it("saves a third-party text model for the official gateway and shows the save-time check", async () => {
+    modelGatewayMocks.config = {
+      mode: "official",
+      effective: { source: "official", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false },
+      llmEffective: { mode: "official", source: "official", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false, model: "gpt-4.1-mini", brainclaw: false },
+      agent: { mode: "inherit", baseUrl: "", apiKeyPreview: "", configured: false, model: "" },
+      official: { source: "database", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false, environment: { baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false } },
+      custom: { llmMode: "advanced", baseUrl: "", apiKeyPreview: "", configured: false, adminBaseUrl: "", tokenName: "", tokenId: "" },
+    };
+    modelGatewayMocks.saveOfficial.mockResolvedValue({
+      ok: true,
+      data: {
+        ...modelGatewayMocks.config,
+        test: { ok: true, model: "gpt-4.1-mini", brainclaw: false, modelCount: 42, error: null },
+      },
+    });
+
+    renderSettingsDialog();
+    const textModel = screen.getByLabelText(
+      zhT("settings.modelConfig.fields.textModel"),
+    );
+    expect(textModel).toHaveValue("gpt-4.1-mini");
+    fireEvent.change(textModel, { target: { value: "gpt-4.1" } });
+    const apiKey = document.querySelector(
+      'input[name="relayclaw-official-api-key"]',
+    );
+    expect(apiKey).not.toBeNull();
+    fireEvent.change(apiKey!, { target: { value: "sk-official-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并启用" }));
+
+    await waitFor(() => {
+      expect(modelGatewayMocks.saveOfficial).toHaveBeenCalledWith({
+        newApiApiKey: "sk-official-secret",
+        newApiBaseUrl: "https://relay.example/v1",
+        textModel: "gpt-4.1",
+      });
+    });
+    expect(
+      await screen.findByText(
+        `${zhT("settings.modelConfig.official.textModelTestOk", { model: "gpt-4.1-mini" })} ${zhT("settings.modelConfig.official.textModelTestCount", { count: 42 })}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the text-model field when the official gateway points at the official relay", () => {
+    modelGatewayMocks.config = {
+      mode: "official",
+      effective: { source: "official", baseUrl: "https://relayclaw.cdnfg.com/v1", apiKeyPreview: "", configured: true },
+      llmEffective: { mode: "official", source: "official", baseUrl: "https://relayclaw.cdnfg.com/v1", apiKeyPreview: "", configured: true, model: "brainclaw", brainclaw: true },
+      agent: { mode: "inherit", baseUrl: "", apiKeyPreview: "", configured: false, model: "" },
+      official: { source: "database", baseUrl: "https://relayclaw.cdnfg.com/v1", apiKeyPreview: "sk-r...cret", configured: true, environment: { baseUrl: "https://relayclaw.cdnfg.com/v1", apiKeyPreview: "", configured: false } },
+      custom: { llmMode: "advanced", baseUrl: "", apiKeyPreview: "", configured: false, adminBaseUrl: "", tokenName: "", tokenId: "" },
+    };
+
+    renderSettingsDialog();
+    expect(
+      screen.queryByLabelText(zhT("settings.modelConfig.fields.textModel")),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("https://relayclaw.cdnfg.com/v1"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a warning when the save-time gateway check fails", async () => {
+    modelGatewayMocks.config = {
+      mode: "official",
+      effective: { source: "official", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false },
+      llmEffective: { mode: "official", source: "official", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false, model: "", brainclaw: false },
+      agent: { mode: "inherit", baseUrl: "", apiKeyPreview: "", configured: false, model: "" },
+      official: { source: "database", baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false, environment: { baseUrl: "https://relay.example/v1", apiKeyPreview: "", configured: false } },
+      custom: { llmMode: "advanced", baseUrl: "", apiKeyPreview: "", configured: false, adminBaseUrl: "", tokenName: "", tokenId: "" },
+    };
+    modelGatewayMocks.saveOfficial.mockResolvedValue({
+      ok: true,
+      data: {
+        ...modelGatewayMocks.config,
+        test: { ok: false, model: null, brainclaw: false, modelCount: null, error: "connect timed out" },
+      },
+    });
+
+    renderSettingsDialog();
+    const apiKey = document.querySelector(
+      'input[name="relayclaw-official-api-key"]',
+    );
+    expect(apiKey).not.toBeNull();
+    fireEvent.change(apiKey!, { target: { value: "sk-official-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并启用" }));
+
+    expect(
+      await screen.findByText(
+        zhT("settings.modelConfig.official.textModelTestFailed", {
+          error: "connect timed out",
+        }),
+      ),
+    ).toBeInTheDocument();
+    // The config is still saved; only the check failed.
+    expect(toast.success).toHaveBeenCalled();
+  });
+
   it("lets BrainClaw use an editable NewAPI endpoint in custom mode", async () => {
     modelGatewayMocks.config = {
       mode: "custom",
@@ -804,7 +915,7 @@ describe("SettingsDialog pages", () => {
 
     renderSettingsDialog();
 
-    expect(screen.getByRole("tab", { name: "虾驿 BrainClaw（推荐）" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "BrainClaw（推荐）" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "高级自定义" })).toBeInTheDocument();
     expect(screen.getByText("虾脑 BrainClaw（推荐）")).toBeInTheDocument();
     const endpoint = screen.getByDisplayValue("https://relay.example/v1");

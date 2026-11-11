@@ -6,6 +6,24 @@ import type { ErrorResponse } from "@/types/api";
 
 export const NOVEL_IMPORT_REQUIRED_CODE = "NOVEL_IMPORT_REQUIRED";
 
+/** Structured gateway failure: the gateway rejected the text model. */
+export const GATEWAY_MODEL_ERROR_CODE = "gateway_model_error";
+
+/** User-facing toast for a gateway model rejection, naming model + reason. */
+export function gatewayModelRejectedToastMessage(
+  model: string | undefined,
+  gatewayMessage: string | undefined,
+  fallback: string,
+  t: TFunction,
+): string {
+  const detail = gatewayMessage?.trim() || fallback;
+  return t("common.gatewayModelRejected", {
+    model: model?.trim() || "?",
+    gatewayMessage: detail,
+    defaultValue: `模型 ${model?.trim() || "?"} 被网关拒绝：${detail}`,
+  });
+}
+
 export function mediaStorageErrorMessage(raw: string, t: TFunction): string | null {
   // Generation errors can wrap this code in several provider/task exceptions.
   const code = raw.match(/\b(MEDIA_STORAGE_[A-Z_]+)\b/)?.[1];
@@ -45,9 +63,17 @@ export function taskResponseToastMessage(
 }
 
 export function backendErrorResponseToastMessage(
-  response: Pick<ErrorResponse, "code" | "error">,
+  response: Pick<ErrorResponse, "code" | "error" | "model" | "gatewayMessage">,
   t: TFunction,
 ): string {
+  if (response.code === GATEWAY_MODEL_ERROR_CODE) {
+    return gatewayModelRejectedToastMessage(
+      response.model,
+      response.gatewayMessage,
+      response.error,
+      t,
+    );
+  }
   return (
     backendErrorCodeToastMessage(response.code, response.error, t) ??
     backendErrorToastMessage(new Error(response.error), t)
@@ -107,6 +133,21 @@ export class BillingRuleNotConfiguredError extends BackendStatusError {
   ) {
     super(message, status, body);
     this.name = "BillingRuleNotConfiguredError";
+  }
+}
+
+/** The gateway rejected the text model (HTTP 502 `gateway_model_error`). */
+export class GatewayModelError extends BackendStatusError {
+  constructor(
+    message: string,
+    status: number,
+    public readonly model: string,
+    public readonly gatewayMessage: string,
+    public readonly gatewayStatus: number | null,
+    body?: unknown,
+  ) {
+    super(message, status, body);
+    this.name = "GatewayModelError";
   }
 }
 
@@ -211,6 +252,32 @@ export function errorFromBackendBody(status: number, body: unknown, fallback: st
   }
   if (errorCode === "BILLING_RULE_NOT_CONFIGURED") {
     return new BillingRuleNotConfiguredError(message, status, body);
+  }
+  // Structured gateway failure (HTTP 502): the gateway rejected the text
+  // model (unknown model, no permission, unreachable). Keep model +
+  // gateway message so the toast can name both instead of a bare 502.
+  const gatewayCode = (body as { code?: unknown }).code;
+  if (gatewayCode === GATEWAY_MODEL_ERROR_CODE) {
+    const record = body as {
+      model?: unknown;
+      gatewayMessage?: unknown;
+      gatewayStatus?: unknown;
+    };
+    const model = typeof record.model === "string" ? record.model : "";
+    const gatewayMessage =
+      typeof record.gatewayMessage === "string" && record.gatewayMessage.trim()
+        ? record.gatewayMessage
+        : message;
+    const gatewayStatus =
+      typeof record.gatewayStatus === "number" ? record.gatewayStatus : null;
+    return new GatewayModelError(
+      message,
+      status,
+      model,
+      gatewayMessage,
+      gatewayStatus,
+      body,
+    );
   }
   // Some older EE responses leaked the internal exception text without the
   // structured error code. Keep those responses on the same safe UI path.
@@ -505,6 +572,33 @@ export function humanizeTaskError(
   }
   const reviewMessage = raw ? humanReviewAssetMessage(raw, t) : null;
   if (reviewMessage) return reviewMessage;
+  // A generation task can fail with the gateway's 502 body embedded in the
+  // task error string (`... body={"code":"gateway_model_error",...}`).
+  // Surface it as the model-rejection toast instead of the raw blob.
+  if (raw) {
+    const payload = providerErrorPayload(raw);
+    if (payload && typeof payload === "object") {
+      const record = payload as Record<string, unknown>;
+      if (record.code === GATEWAY_MODEL_ERROR_CODE) {
+        const model =
+          typeof record.model === "string" ? record.model : undefined;
+        const gatewayMessage =
+          typeof record.gatewayMessage === "string"
+            ? record.gatewayMessage
+            : undefined;
+        const fallback =
+          typeof record.error === "string" && record.error.trim()
+            ? record.error
+            : raw;
+        return gatewayModelRejectedToastMessage(
+          model,
+          gatewayMessage,
+          fallback,
+          t,
+        );
+      }
+    }
+  }
   switch (classifyGatewayError(raw)) {
     case "channel_policy":
       return t("common.generationChannelPolicyBlocked", { defaultValue: fallback });
@@ -522,6 +616,14 @@ export function humanizeTaskError(
 }
 
 export function backendErrorToastMessage(error: unknown, t: TFunction): string {
+  if (error instanceof GatewayModelError) {
+    return gatewayModelRejectedToastMessage(
+      error.model,
+      error.gatewayMessage,
+      error.message,
+      t,
+    );
+  }
   if (error instanceof InsufficientCreditsError) {
     return t("common.insufficientCredits", {
       defaultValue: error.message || t("common.error"),

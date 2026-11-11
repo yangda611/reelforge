@@ -21,6 +21,7 @@ from novelvideo.brainclaw_contract import (
     merge_brainclaw_headers,
 )
 from novelvideo.model_gateway_settings import (
+    OFFICIAL_RELAY_BASE_URL,
     get_model_gateway_settings,
     CUSTOM_LLM_MODE_ADVANCED,
     CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW,
@@ -554,7 +555,11 @@ def test_custom_brainclaw_endpoint_does_not_replace_official_gateway(
     monkeypatch, tmp_path
 ):
     _isolate_settings_db(monkeypatch, tmp_path)
-    save_official_newapi_key(api_key="sk-official-secret", base_url="https://relay.example")
+    # The official channel points at the real RelayClaw relay, so it
+    # still serves "brainclaw". A third-party URL in the Official
+    # channel would not (see test_official_mode_with_third_party_
+    # gateway_uses_stored_text_model).
+    save_official_newapi_key(api_key="sk-official-secret", base_url=OFFICIAL_RELAY_BASE_URL)
     save_relayclaw_brainclaw_key(
         api_key="sk-local-secret",
         base_url="http://127.0.0.1:8317",
@@ -568,7 +573,7 @@ def test_custom_brainclaw_endpoint_does_not_replace_official_gateway(
 
     set_model_gateway_mode("official")
     official_llm = get_effective_llm_config()
-    assert official_llm.base_url == "https://relay.example/v1"
+    assert official_llm.base_url == OFFICIAL_RELAY_BASE_URL
     assert official_llm.api_key == "sk-official-secret"
     assert official_llm.model == "brainclaw"
 

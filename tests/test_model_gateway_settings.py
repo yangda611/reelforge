@@ -4554,3 +4554,421 @@ def test_bundled_catalog_offers_the_default_blockout_model():
     blockout = get_official_media_model_catalog("blockout")
     assert [entry["id"] for entry in blockout] == ["DC-previz-blockout-LLM"]
     assert blockout[0]["apiModel"] == "DC-previz-blockout-LLM"
+
+
+# ---------------------------------------------------------------------------
+# Official channel on a third-party gateway (P0: "brainclaw" hardcode)
+#
+# Official mode used to send model="brainclaw" for every text route no
+# matter which base URL the operator configured. A third-party gateway has
+# no "brainclaw" model, so every text function failed with
+# model_not_found while pure image calls (which use real model names)
+# kept working. Only the operator-run RelayClaw relay serves "brainclaw".
+# ---------------------------------------------------------------------------
+
+
+def test_official_mode_with_official_relay_uses_brainclaw(monkeypatch, tmp_path):
+    from novelvideo.model_gateway_settings import (
+        OFFICIAL_RELAY_BASE_URL,
+        get_effective_llm_config,
+    )
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    save_official_newapi_key(
+        api_key="sk-official-secret",
+        base_url=OFFICIAL_RELAY_BASE_URL,
+        activate=True,
+    )
+
+    llm = get_effective_llm_config()
+
+    assert llm.mode == MODE_OFFICIAL
+    assert llm.base_url == OFFICIAL_RELAY_BASE_URL
+    assert llm.model == "brainclaw"
+    assert llm.is_brainclaw is True
+
+
+def test_official_mode_with_third_party_gateway_uses_stored_text_model(
+    monkeypatch, tmp_path
+):
+    from novelvideo.model_gateway_settings import (
+        get_effective_llm_config,
+        save_official_text_model,
+    )
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    save_official_newapi_key(
+        api_key="sk-third-party-secret",
+        base_url="https://zeroshell.top/v1",
+        activate=True,
+    )
+    save_official_text_model("gpt-6-astra")
+
+    llm = get_effective_llm_config()
+
+    assert llm.mode == MODE_OFFICIAL
+    assert llm.base_url == "https://zeroshell.top/v1"
+    assert llm.model == "gpt-6-astra"
+    assert llm.is_brainclaw is False
+
+
+def test_official_mode_third_party_without_text_model_has_empty_model(
+    monkeypatch, tmp_path
+):
+    from novelvideo.model_gateway_settings import get_effective_llm_config
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    save_official_newapi_key(
+        api_key="sk-third-party-secret",
+        base_url="https://third-party.example/v1",
+        activate=True,
+    )
+
+    llm = get_effective_llm_config()
+
+    assert llm.model == ""
+    assert llm.is_brainclaw is False
+
+
+def test_is_official_relay_base_url_matches_only_the_relay():
+    from novelvideo.model_gateway_settings import (
+        OFFICIAL_RELAY_BASE_URL,
+        is_official_relay_base_url,
+    )
+
+    assert is_official_relay_base_url(OFFICIAL_RELAY_BASE_URL) is True
+    assert (
+        is_official_relay_base_url("https://relayclaw.cdnfg.com")
+        is True
+    )
+    assert is_official_relay_base_url("https://zeroshell.top/v1") is False
+    assert is_official_relay_base_url("https://relay.example/v1") is False
+    assert is_official_relay_base_url("") is False
+    assert is_official_relay_base_url(None) is False
+
+
+def test_pick_gateway_text_model_prefers_chat_and_skips_media():
+    from novelvideo.model_gateway_settings import pick_gateway_text_model
+
+    assert pick_gateway_text_model([]) == ""
+    assert (
+        pick_gateway_text_model(
+            ["gpt-image-2.5", "seedance-2.0", "gpt-6-astra", "grok-4.7"]
+        )
+        == "gpt-6-astra"
+    )
+    assert (
+        pick_gateway_text_model(["gpt-image-2.5", "claude-sonnet-4-5"])
+        == "claude-sonnet-4-5"
+    )
+    assert pick_gateway_text_model(["some-unknown-model"]) == "some-unknown-model"
+
+
+@respx.mock
+def test_fetch_gateway_text_models_lists_models():
+    from novelvideo.model_gateway_settings import fetch_gateway_text_models
+
+    respx.get("https://zeroshell.top/v1/models").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": [
+                    {"id": "gpt-6-astra"},
+                    {"id": "gpt-image-2.5"},
+                    {"id": "grok-4.7"},
+                ]
+            },
+        )
+    )
+
+    assert fetch_gateway_text_models(
+        "https://zeroshell.top/v1", "sk-test-secret"
+    ) == ["gpt-6-astra", "gpt-image-2.5", "grok-4.7"]
+
+
+@respx.mock
+def test_fetch_gateway_text_models_rejects_bad_key():
+    from novelvideo.model_gateway_settings import fetch_gateway_text_models
+
+    respx.get("https://zeroshell.top/v1/models").mock(
+        return_value=Response(401, json={"error": {"message": "bad key"}})
+    )
+
+    with pytest.raises(ValueError, match="401"):
+        fetch_gateway_text_models("https://zeroshell.top/v1", "sk-bad-secret")
+
+
+def test_test_official_gateway_official_relay_needs_no_call(monkeypatch, tmp_path):
+    from novelvideo.model_gateway_settings import (
+        OFFICIAL_RELAY_BASE_URL,
+        test_official_gateway,
+    )
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+
+    result = test_official_gateway(OFFICIAL_RELAY_BASE_URL, "sk-official-secret")
+
+    assert result == {
+        "ok": True,
+        "model": "brainclaw",
+        "brainclaw": True,
+        "modelCount": None,
+        "error": None,
+    }
+
+
+def test_test_official_gateway_picks_model_from_list(monkeypatch, tmp_path):
+    from novelvideo import model_gateway_settings as settings_module
+    from novelvideo.model_gateway_settings import test_official_gateway
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        settings_module,
+        "fetch_gateway_text_models",
+        lambda base_url, api_key, **kwargs: [
+            "gpt-image-2.5",
+            "gpt-6-astra",
+            "grok-4.7",
+        ],
+    )
+
+    result = test_official_gateway("https://zeroshell.top/v1", "sk-test-secret")
+
+    assert result["ok"] is True
+    assert result["model"] == "gpt-6-astra"
+    assert result["brainclaw"] is False
+    assert result["modelCount"] == 3
+    assert result["error"] is None
+
+
+def test_test_official_gateway_validates_requested_model(monkeypatch, tmp_path):
+    from novelvideo import model_gateway_settings as settings_module
+    from novelvideo.model_gateway_settings import test_official_gateway
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        settings_module,
+        "fetch_gateway_text_models",
+        lambda base_url, api_key, **kwargs: ["gpt-6-astra"],
+    )
+
+    result = test_official_gateway(
+        "https://zeroshell.top/v1",
+        "sk-test-secret",
+        text_model="no-such-model",
+    )
+
+    assert result["ok"] is False
+    assert result["model"] is None
+    assert "no-such-model" in (result["error"] or "")
+
+
+def test_test_official_gateway_unreachable_is_best_effort(monkeypatch, tmp_path):
+    from novelvideo import model_gateway_settings as settings_module
+    from novelvideo.model_gateway_settings import test_official_gateway
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+
+    def _boom(base_url, api_key, **kwargs):
+        raise ValueError("连接网关超时")
+
+    monkeypatch.setattr(settings_module, "fetch_gateway_text_models", _boom)
+
+    result = test_official_gateway("https://down.example/v1", "sk-test-secret")
+
+    assert result["ok"] is False
+    assert result["model"] is None
+    assert "超时" in (result["error"] or "")
+
+
+@respx.mock
+def test_save_official_gateway_route_resolves_text_model(monkeypatch, tmp_path):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "true")
+    monkeypatch.setattr(
+        model_gateway.app_config, "NEWAPI_BASE_URL", "https://env.example/v1"
+    )
+    monkeypatch.setattr(model_gateway.app_config, "NEWAPI_API_KEY", "sk-env-secret")
+    respx.get("https://zeroshell.top/v1/models").mock(
+        return_value=Response(
+            200,
+            json={"data": [{"id": "gpt-image-2.5"}, {"id": "gpt-6-astra"}]},
+        )
+    )
+
+    app = FastAPI()
+    app.include_router(model_gateway.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/model-gateway/official/config",
+        json={
+            "newApiBaseUrl": "https://zeroshell.top/v1",
+            "newApiApiKey": "sk-user-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["official"]["baseUrl"] == "https://zeroshell.top/v1"
+    assert data["test"]["ok"] is True
+    assert data["test"]["model"] == "gpt-6-astra"
+    assert data["test"]["brainclaw"] is False
+    assert data["test"]["modelCount"] == 2
+    assert data["llmEffective"]["model"] == "gpt-6-astra"
+    assert data["llmEffective"]["brainclaw"] is False
+
+
+@respx.mock
+def test_save_official_gateway_route_reports_unreachable_gateway(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "true")
+    monkeypatch.setattr(
+        model_gateway.app_config, "NEWAPI_BASE_URL", "https://env.example/v1"
+    )
+    monkeypatch.setattr(model_gateway.app_config, "NEWAPI_API_KEY", "sk-env-secret")
+    respx.get("https://down.example/v1/models").mock(
+        return_value=Response(401, json={"error": {"message": "bad key"}})
+    )
+
+    app = FastAPI()
+    app.include_router(model_gateway.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/model-gateway/official/config",
+        json={
+            "newApiBaseUrl": "https://down.example/v1",
+            "newApiApiKey": "sk-bad-secret",
+        },
+    )
+
+    # Saving is never blocked by a failed probe; the failure is reported so
+    # the UI can warn instead of failing later at generation time.
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["test"]["ok"] is False
+    assert data["test"]["model"] is None
+    assert "401" in (data["test"]["error"] or "")
+
+
+def test_effective_text_model_uses_official_text_model_for_third_party(
+    monkeypatch, tmp_path
+):
+    from novelvideo.model_gateway_settings import save_official_text_model
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    save_official_newapi_key(
+        api_key="sk-third-party-secret",
+        base_url="https://zeroshell.top/v1",
+        activate=True,
+    )
+    save_official_text_model("gpt-6-astra")
+
+    assert (
+        config.get_effective_newapi_text_model_name("CONTENT_REWRITER_MODEL")
+        == "gpt-6-astra"
+    )
+    assert (
+        config.get_effective_newapi_text_model_name("SCENE_BUILD_MODEL")
+        == "gpt-6-astra"
+    )
+
+
+def test_effective_text_model_still_prefers_explicit_override_for_third_party(
+    monkeypatch, tmp_path
+):
+    from novelvideo.model_gateway_settings import save_official_text_model
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    save_official_newapi_key(
+        api_key="sk-third-party-secret",
+        base_url="https://zeroshell.top/v1",
+        activate=True,
+    )
+    save_official_text_model("gpt-6-astra")
+
+    assert (
+        config.get_effective_newapi_text_model_name(
+            "CONTENT_REWRITER_MODEL", model_name_override="grok-4.7"
+        )
+        == "grok-4.7"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Structured gateway errors (bare 500 -> displayable 502)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_gateway_error_reads_openai_status_error():
+    from httpx import Request
+    from openai import APIStatusError
+
+    from novelvideo.gateway_errors import extract_gateway_error
+
+    err = APIStatusError(
+        "No channel is currently available for model brainclaw under group test",
+        response=Response(
+            503,
+            json={
+                "error": {
+                    "message": (
+                        "No channel is currently available for model brainclaw "
+                        "under group test"
+                    ),
+                    "type": "model_not_found",
+                }
+            },
+            request=Request("POST", "https://zeroshell.top/v1/chat/completions"),
+        ),
+        body={
+            "error": {
+                "message": (
+                    "No channel is currently available for model brainclaw "
+                    "under group test"
+                ),
+                "type": "model_not_found",
+            }
+        },
+    )
+
+    found = extract_gateway_error(err)
+
+    assert found is not None
+    assert found["status"] == 503
+    assert "brainclaw" in found["message"]
+    assert found["model"] == "brainclaw"
+
+
+def test_extract_gateway_error_returns_none_for_plain_errors():
+    from novelvideo.gateway_errors import extract_gateway_error
+
+    assert extract_gateway_error(ValueError("lines 不能为空")) is None
+    assert extract_gateway_error(RuntimeError("something broke")) is None
+
+
+def test_gateway_model_error_message_names_model_and_status():
+    from httpx import Request
+    from novelvideo.gateway_errors import GatewayModelError, gateway_error_message
+    from openai import APIStatusError
+
+    err = APIStatusError(
+        "model_not_found",
+        response=Response(
+            503,
+            json={"error": {"message": "model brainclaw not found"}},
+            request=Request("POST", "https://zeroshell.top/v1/chat/completions"),
+        ),
+        body={"error": {"message": "model brainclaw not found"}},
+    )
+
+    converted = gateway_error_message(err, model="brainclaw")
+
+    assert isinstance(converted, GatewayModelError)
+    assert converted.model == "brainclaw"
+    assert converted.gateway_status == 503
+    assert "brainclaw" in str(converted)
+    assert "503" in str(converted)

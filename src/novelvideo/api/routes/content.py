@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from novelvideo.api.auth import get_api_user, require_project_scope
 from novelvideo.api.deps import get_sqlite_store, resolve_project_scope
 from novelvideo.api.schemas import ContentUpdateRequest, RewriteGenerateRequest
+from novelvideo.gateway_errors import gateway_error_message
+from novelvideo.model_gateway_settings import get_effective_llm_config
 from novelvideo.ports import get_usage_meter
 from novelvideo.sqlite_store import SQLiteStore
 
@@ -210,6 +212,15 @@ async def generate_rewrite(
                 )
         if isinstance(exc, ValueError):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # A gateway refusal (unknown model, bad key, unreachable host) used
+        # to escape as a bare 500 "Internal Server Error". Convert it to a
+        # structured error naming the model and the gateway's message so the
+        # UI can show a useful Toast instead.
+        gateway_error = gateway_error_message(
+            exc, model=get_effective_llm_config().model
+        )
+        if gateway_error is not None:
+            raise gateway_error from exc
         raise
     finally:
         usage_meter.clear_llm_usage_context()

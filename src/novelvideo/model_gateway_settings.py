@@ -42,6 +42,11 @@ MODE_OFFICIAL = "official"
 MODE_CUSTOM = "custom"
 MODE_HYBRID = "hybrid"
 VALID_MODES = {MODE_OFFICIAL, MODE_CUSTOM, MODE_HYBRID}
+# The operator-run RelayClaw relay endpoint. Only this host serves the
+# "brainclaw" model: a third-party gateway pointed at the Official channel
+# must use a model that exists on that gateway instead (see
+# ``official_text_model`` and ``get_effective_llm_config``).
+OFFICIAL_RELAY_BASE_URL = "https://relayclaw.cdnfg.com/v1"
 CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW = "relayclaw_brainclaw"
 CUSTOM_LLM_MODE_ADVANCED = "advanced"
 VALID_CUSTOM_LLM_MODES = {
@@ -329,6 +334,16 @@ def save_official_newapi_key(
     if activate:
         values["model_gateway_mode"] = MODE_OFFICIAL
     _write_many(values)
+
+
+def save_official_text_model(model: str) -> None:
+    """Persist the text model for an Official channel on a third-party relay.
+
+    The model is resolved (and validated) by ``test_official_gateway`` at
+    save time, so text routes never have to probe the gateway's model list
+    on every call. An empty value clears the stored model.
+    """
+    _write_many({"official_text_model": str(model or "").strip()})
 
 
 def save_custom_newapi_gateway(
@@ -1276,6 +1291,22 @@ def _is_official_relay_url(
     return normalize_relay_base_url(base_url or "") == official
 
 
+def is_official_relay_base_url(base_url: str | None) -> bool:
+    """Whether a base URL is the operator-run RelayClaw relay endpoint.
+
+    Only the official relay serves the "brainclaw" model. Any other host —
+    a third-party relay the operator pointed the Official channel at, or a
+    local gateway — must use a text model that exists on that gateway
+    (``official_text_model``), never "brainclaw".
+    """
+    normalized = normalize_relay_base_url(base_url)
+    if not normalized:
+        return False
+    return normalized.lower() == normalize_relay_base_url(
+        OFFICIAL_RELAY_BASE_URL
+    ).lower()
+
+
 def get_effective_llm_config() -> EffectiveLlmConfig:
     """Resolve LLM independently from media and embedding gateways."""
     if not _uses_ce_gateway_settings():
@@ -1300,13 +1331,29 @@ def get_effective_llm_config() -> EffectiveLlmConfig:
         settings.get("official_newapi_base_url", "")
     )
     if gateway_mode in {MODE_OFFICIAL, MODE_HYBRID}:
+        # "brainclaw" only exists on the official RelayClaw relay. When the
+        # operator pointed the Official channel at a third-party gateway,
+        # sending "brainclaw" makes every text route fail with
+        # model_not_found on that gateway, so use the text model resolved
+        # for that gateway instead (see test_official_gateway). An empty
+        # URL means the channel is not configured yet, which keeps the
+        # historical brainclaw default so an unconfigured channel still
+        # reports the same model it always did.
+        official_is_relay = (
+            not official_base_url or is_official_relay_base_url(official_base_url)
+        )
+        text_model = (
+            "brainclaw"
+            if official_is_relay
+            else str(settings.get("official_text_model", "")).strip()
+        )
         return EffectiveLlmConfig(
             mode=gateway_mode,
             source="hybrid" if gateway_mode == MODE_HYBRID else "official",
             base_url=official_base_url,
             api_key=normalize_api_key(settings.get("official_newapi_api_key", "")),
-            model="brainclaw",
-            is_brainclaw=True,
+            model=text_model,
+            is_brainclaw=official_is_relay,
         )
     if custom_llm_mode == CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW:
         brainclaw_base_url = normalize_relay_base_url(
@@ -1345,6 +1392,179 @@ def get_effective_llm_config() -> EffectiveLlmConfig:
         model="",
         is_brainclaw=False,
     )
+
+
+# Substrings that mark a model as a chat/text model when picking one from a
+# third-party gateway's model list. Anything that looks like an image,
+# video, audio, embedding or rerank model is skipped first.
+_TEXT_MODEL_HINTS = (
+    "gpt",
+    "claude",
+    "gemini",
+    "deepseek",
+    "qwen",
+    "grok",
+    "llama",
+    "mistral",
+    "chat",
+    "kimi",
+    "doubao",
+)
+_NON_TEXT_MODEL_HINTS = (
+    "image",
+    "video",
+    "audio",
+    "embedding",
+    "embed",
+    "tts",
+    "whisper",
+    "rerank",
+    "reranker",
+)
+
+
+def fetch_gateway_text_models(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 15.0,
+) -> list[str]:
+    """List the model ids a gateway serves, via its OpenAI-compatible list.
+
+    Uses a dedicated client. It honours the process proxy settings (the
+    default), so it reaches the internet the same way the rest of the app
+    does — a VM or desktop behind a proxy needs that proxy to reach the
+    gateway. Raises ``ValueError`` with a plain-language reason when the
+    gateway cannot be reached, the key is rejected, or the response is not
+    a model list.
+    """
+    import httpx
+
+    base = normalize_relay_base_url(base_url)
+    if not base:
+        raise ValueError("网关地址为空，请先填写网关地址")
+    if not normalize_api_key(api_key):
+        raise ValueError("网关密钥为空，请先填写网关密钥")
+    url = f"{base}/models"
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.TimeoutException as exc:
+        raise ValueError(f"连接网关超时（{base}），请检查地址是否可达") from exc
+    except httpx.HTTPError as exc:
+        raise ValueError(f"连接网关失败（{base}）：{exc}") from exc
+    if response.status_code == 401:
+        raise ValueError("网关拒绝了该密钥（401），请检查密钥是否正确")
+    if response.status_code == 403:
+        raise ValueError("网关拒绝了该请求（403），请检查密钥权限")
+    if response.status_code >= 400:
+        raise ValueError(f"网关返回错误（{response.status_code}），请检查地址与密钥")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError("网关返回的不是有效的模型列表") from exc
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        raise ValueError("网关返回的不是有效的模型列表")
+    models = [
+        str(item.get("id", "")).strip()
+        for item in data
+        if isinstance(item, dict) and str(item.get("id", "")).strip()
+    ]
+    return models
+
+
+def pick_gateway_text_model(models: list[str]) -> str:
+    """Pick a text model from a gateway's model list.
+
+    Prefers ids that look like chat models and skips image/video/audio,
+    embedding and rerank models. Falls back to the first id when nothing
+    matches, and to "" when the list is empty.
+    """
+    if not models:
+        return ""
+    lowered = [(model, model.lower()) for model in models]
+    for model, low in lowered:
+        if any(hint in low for hint in _NON_TEXT_MODEL_HINTS):
+            continue
+        if any(hint in low for hint in _TEXT_MODEL_HINTS):
+            return model
+    for model, low in lowered:
+        if not any(hint in low for hint in _NON_TEXT_MODEL_HINTS):
+            return model
+    return models[0]
+
+
+def test_official_gateway(
+    base_url: str,
+    api_key: str,
+    *,
+    text_model: str | None = None,
+) -> dict[str, Any]:
+    """Test an Official-channel gateway and resolve its text model.
+
+    The official RelayClaw relay needs no live call: its text model is
+    always "brainclaw". A third-party gateway gets a real ``/v1/models``
+    probe: the caller's ``text_model`` is validated against the list, or
+    one is picked automatically. The result is best-effort — a failed
+    probe never raises, so saving a gateway config is never blocked by a
+    temporarily unreachable gateway; the caller reports ``ok: False`` and
+    the UI warns instead.
+    """
+    if is_official_relay_base_url(base_url):
+        return {
+            "ok": True,
+            "model": "brainclaw",
+            "brainclaw": True,
+            "modelCount": None,
+            "error": None,
+        }
+    try:
+        models = fetch_gateway_text_models(base_url, api_key)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "model": None,
+            "brainclaw": False,
+            "modelCount": None,
+            "error": str(exc),
+        }
+    requested = str(text_model or "").strip()
+    if requested:
+        if requested not in models:
+            return {
+                "ok": False,
+                "model": None,
+                "brainclaw": False,
+                "modelCount": len(models),
+                "error": f"模型 {requested} 不在该网关上，请从网关的模型列表中选择",
+            }
+        return {
+            "ok": True,
+            "model": requested,
+            "brainclaw": False,
+            "modelCount": len(models),
+            "error": None,
+        }
+    picked = pick_gateway_text_model(models)
+    if not picked:
+        return {
+            "ok": False,
+            "model": None,
+            "brainclaw": False,
+            "modelCount": 0,
+            "error": "该网关没有可用的文字模型",
+        }
+    return {
+        "ok": True,
+        "model": picked,
+        "brainclaw": False,
+        "modelCount": len(models),
+        "error": None,
+    }
 
 
 def get_effective_agent_llm_config() -> EffectiveLlmConfig:

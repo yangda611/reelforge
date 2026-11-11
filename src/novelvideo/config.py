@@ -181,9 +181,22 @@ def get_effective_newapi_text_model_name(
             return selected
         raise ValueError(f"Missing required EE model route: {model_env}")
 
-    if get_effective_llm_config().is_brainclaw:
+    llm_config = get_effective_llm_config()
+    if llm_config.is_brainclaw:
         return "brainclaw"
-    selected = explicit_model or env_model or ADVANCED_TEXT_MODEL_BY_ENV.get(model_env)
+    # Official channel pointed at a third-party gateway: use the text model
+    # resolved (and saved) for that gateway. The DC-* aliases below only
+    # exist on a self-hosted NewAPI with those mappings, so falling through
+    # to them here would fail with model_not_found on the third-party
+    # gateway. A per-call override still wins; a task env var does not,
+    # because it usually holds a DC-* alias that does not exist on this
+    # gateway. In Custom/Advanced mode llm_config.model is empty, so the
+    # env var and the DC-* alias keep working exactly as before.
+    if explicit_model:
+        return explicit_model
+    if llm_config.model:
+        return llm_config.model
+    selected = env_model or ADVANCED_TEXT_MODEL_BY_ENV.get(model_env)
     if selected:
         return selected
     if default_model:

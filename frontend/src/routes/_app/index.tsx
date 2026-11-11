@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import {
+  AlertTriangle,
   ArchiveRestore,
   BookOpen,
   Brush,
@@ -64,6 +65,9 @@ import {
   useSoftDeleteProject,
   useUnarchiveProject,
 } from "@/lib/queries/projects";
+import { useModelGatewayConfig } from "@/lib/queries/model-gateway";
+import { openSettingsDialog } from "@/components/settings/settings-dialog-events";
+import { isCeRuntime } from "@/lib/runtime-config";
 import { ProjectFolder } from "@/components/projects/project-folder";
 import { ShareProjectDialog } from "@/components/projects/share-project-dialog";
 import { getProjectCover, NOISE_DATA_URI } from "@/lib/project-cover";
@@ -871,6 +875,34 @@ function LoadingGrid({ size = "md" }: { size?: "md" | "sm" }) {
   );
 }
 
+function GatewayNotConfiguredBanner() {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2.5">
+      <AlertTriangle
+        className="size-4 shrink-0 text-amber-300"
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium text-amber-100">
+          {t("project.gatewayNotConfiguredTitle")}
+        </p>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-amber-100/80">
+          {t("project.gatewayNotConfiguredDescription")}
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => openSettingsDialog("models")}
+      >
+        {t("project.gatewayNotConfiguredAction")}
+      </Button>
+    </div>
+  );
+}
+
 function FirstTimeEmpty({ onCreate }: { onCreate: () => void }) {
   const { t } = useTranslation();
   const { gradient } = useMemo(() => getProjectCover("empty-dashboard"), []);
@@ -1115,6 +1147,18 @@ function ProjectDashboard() {
   const restore = useRestoreProject();
   const purge = usePurgeProject();
 
+  // 首屏引导：网关未配置时，创建项目也无法继续生成，先提示去配置。
+  // 只在 CE 下生效；配置加载完成前不拦截，避免误拦。
+  const ceRuntime = isCeRuntime();
+  const gatewayConfigQuery = useModelGatewayConfig(ceRuntime);
+  const gatewayConfig = gatewayConfigQuery.data?.data;
+  const gatewayNotConfigured = Boolean(
+    ceRuntime &&
+      gatewayConfig &&
+      (!gatewayConfig.effective.configured ||
+        !gatewayConfig.llmEffective.configured),
+  );
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "/") return;
@@ -1189,6 +1233,15 @@ function ProjectDashboard() {
   const handleCreate = async () => {
     const name = trimmedNewName;
     if (!name || createNameError) return;
+    if (gatewayNotConfigured) {
+      toast.error(t("project.gatewayNotConfiguredToast"), {
+        action: {
+          label: t("project.gatewayNotConfiguredAction"),
+          onClick: () => openSettingsDialog("models"),
+        },
+      });
+      return;
+    }
     try {
       const res = await createProject.mutateAsync(name);
       const createdName = res.data.name || name;
@@ -1406,6 +1459,8 @@ function ProjectDashboard() {
           </Dialog>
         </div>
       </div>
+
+      {gatewayNotConfigured ? <GatewayNotConfiguredBanner /> : null}
 
       {/* Tab strip + sort */}
       <div className="mb-10 flex flex-wrap items-center gap-x-3 gap-y-2">

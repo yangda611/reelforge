@@ -3,8 +3,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backendErrorResponseToastMessage,
   backendErrorToastMessage,
   classifyGatewayError,
+  errorFromBackendBody,
+  GatewayModelError,
   humanizeTaskError,
   providerErrorMessage,
   mediaStorageErrorMessage,
@@ -36,7 +39,10 @@ describe("media storage error localization", () => {
 
 // A stub TFunction: return the key, unless a `defaultValue` is supplied and
 // the key is unknown. Our two keys are "known", so return a marker per key.
-const t = ((key: string, opts?: { defaultValue?: string; index?: number }) => {
+const t = ((key: string, opts?: { defaultValue?: string; index?: number; model?: string; gatewayMessage?: string }) => {
+  if (key === "common.gatewayModelRejected") {
+    return `MODEL_REJECTED:${opts?.model ?? "?"}:${opts?.gatewayMessage ?? ""}`;
+  }
   if (key === "common.generationChannelPolicyBlocked") return "POLICY_MSG";
   if (key === "common.generationInputContentPolicyBlocked") return "INPUT_POLICY_MSG";
   if (key === "common.generationOutputContentPolicyBlocked") return "OUTPUT_POLICY_MSG";
@@ -169,5 +175,60 @@ describe("humanizeTaskError", () => {
   it("falls back to the generic error label when input is empty", () => {
     expect(humanizeTaskError("", t)).toBe("GENERIC_ERROR");
     expect(humanizeTaskError(null, t)).toBe("GENERIC_ERROR");
+  });
+});
+
+describe("gateway_model_error", () => {
+  const body = {
+    ok: false as const,
+    error: "gateway rejected model gpt-4.1-mini",
+    code: "gateway_model_error",
+    model: "gpt-4.1-mini",
+    gatewayStatus: 404,
+    gatewayMessage: "model_not_found",
+  };
+
+  it("names the model and gateway message from a parsed error response", () => {
+    expect(backendErrorResponseToastMessage(body, t)).toBe(
+      "MODEL_REJECTED:gpt-4.1-mini:model_not_found",
+    );
+    // The real zh copy pins the locale key.
+    expect(backendErrorResponseToastMessage(body, zhT)).toBe(
+      "模型 gpt-4.1-mini 被网关拒绝：model_not_found",
+    );
+  });
+
+  it("classifies a 502 gateway body into GatewayModelError", () => {
+    const error = errorFromBackendBody(502, body, "Bad Gateway");
+    expect(error).toBeInstanceOf(GatewayModelError);
+    const gatewayError = error as GatewayModelError;
+    expect(gatewayError.model).toBe("gpt-4.1-mini");
+    expect(gatewayError.gatewayMessage).toBe("model_not_found");
+    expect(gatewayError.gatewayStatus).toBe(404);
+    expect(backendErrorToastMessage(error, t)).toBe(
+      "MODEL_REJECTED:gpt-4.1-mini:model_not_found",
+    );
+  });
+
+  it("surfaces the rejection when the 502 body is embedded in a task error", () => {
+    const raw =
+      "freezone video generation failed: HTTP 502: " +
+      'body={"ok":false,"error":"gateway rejected model gpt-4.1-mini","code":"gateway_model_error","model":"gpt-4.1-mini","gatewayStatus":404,"gatewayMessage":"model_not_found"}';
+    expect(humanizeTaskError(raw, t)).toBe(
+      "MODEL_REJECTED:gpt-4.1-mini:model_not_found",
+    );
+  });
+
+  it("falls back to the error text when the gateway gives no message", () => {
+    expect(
+      backendErrorResponseToastMessage(
+        {
+          error: "gateway unreachable",
+          code: "gateway_model_error",
+          model: "gpt-x",
+        },
+        t,
+      ),
+    ).toBe("MODEL_REJECTED:gpt-x:gateway unreachable");
   });
 });

@@ -82,6 +82,7 @@ import {
   useClearComfyUIConfig,
   useSaveMediaRelayConfig,
   useSyncProviderChannel,
+  isOfficialRelayBaseUrl,
   type GatewayMode,
   type AgentLlmMode,
   type CustomLlmMode,
@@ -89,6 +90,7 @@ import {
   type CustomChannelInput,
   type NewApiDatabaseConfigInput,
   type NewApiChannelType,
+  type OfficialGatewayTest,
   type SavedEmbeddingModelConfig,
   type SavedMediaModelConfig,
   type SavedProviderChannelConfig,
@@ -970,6 +972,31 @@ function OfficialGatewayPanel({
       );
     }
   }, [savedBaseUrl]);
+  // 已保存的文本模型：取当前生效的 LLM 模型（仅官方/混合模式下有意义）；
+  // 官方中继固定用 brainclaw，不展示该字段。
+  const savedTextModel =
+    config?.mode !== "custom" &&
+    config?.llmEffective.model &&
+    config.llmEffective.model !== "brainclaw"
+      ? config.llmEffective.model
+      : "";
+  const [textModel, setTextModel] = useState(savedTextModel);
+  const [gatewayTest, setGatewayTest] = useState<OfficialGatewayTest | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (savedTextModel) {
+      setTextModel((current) =>
+        current === savedTextModel ? current : savedTextModel,
+      );
+    }
+  }, [savedTextModel]);
+  // 文本模型字段只在第三方网关下出现；地址为空时默认按第三方处理（重构后
+  // 不再预填官方地址），地址为官方中继时固定 brainclaw、无需选择。
+  const showTextModel = !isOfficialRelayBaseUrl(
+    baseUrl.trim() ? baseUrl : savedBaseUrl,
+  );
   const mediaCatalog = mediaCatalogQuery.data?.data;
 
   const runMediaCatalogCheck = async (manual: boolean) => {
@@ -1048,6 +1075,8 @@ function OfficialGatewayPanel({
       ""
     ).trim();
     const trimmedBaseUrl = baseUrl.trim();
+    const trimmedTextModel = textModel.trim();
+    setGatewayTest(null);
     try {
       if (!trimmedApiKey) {
         if (!official?.configured) {
@@ -1076,6 +1105,9 @@ function OfficialGatewayPanel({
         ...(trimmedBaseUrl
           ? { newApiBaseUrl: trimmedBaseUrl }
           : {}),
+        ...(showTextModel && trimmedTextModel
+          ? { textModel: trimmedTextModel }
+          : {}),
       });
       if (!response.ok) {
         toast.error(
@@ -1086,6 +1118,9 @@ function OfficialGatewayPanel({
         );
         return;
       }
+      // 保存时后端对网关做了实时校验：成功显示选中的文本模型，失败也已保存
+      // 配置、此处只提示原因。
+      setGatewayTest(response.data.test ?? null);
       if (activateHybrid && config?.custom?.configured) {
         const hybridResponse = await enableHybrid.mutateAsync();
         if (!hybridResponse.ok) {
@@ -1258,7 +1293,67 @@ function OfficialGatewayPanel({
             ) : null}
           </div>
         </div>
+        {showTextModel ? (
+          <div className="grid grid-cols-[120px_1fr] items-start gap-3">
+            <Label
+              htmlFor="official-text-model"
+              className="justify-start pt-2 text-[11px] font-normal tracking-wide text-muted-foreground uppercase"
+            >
+              {t("settings.modelConfig.fields.textModel")}
+            </Label>
+            <div>
+              <Input
+                id="official-text-model"
+                name="official-text-model"
+                value={textModel}
+                onChange={(e) => setTextModel(e.target.value)}
+                placeholder={t(
+                  "settings.modelConfig.official.textModelPlaceholder",
+                )}
+                autoCapitalize="none"
+                spellCheck={false}
+                className="h-9 rounded-md border-input/80 focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/30"
+              />
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                {t("settings.modelConfig.official.textModelHint")}
+              </p>
+            </div>
+          </div>
+        ) : null}
       </div>
+
+      {gatewayTest ? (
+        gatewayTest.ok ? (
+          <div className="flex gap-2 rounded-md border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-100">
+            <Check
+              className="mt-0.5 size-3.5 shrink-0 text-emerald-300"
+              aria-hidden
+            />
+            <p>
+              {t("settings.modelConfig.official.textModelTestOk", {
+                model: gatewayTest.model ?? "",
+              })}
+              {gatewayTest.modelCount != null
+                ? ` ${t("settings.modelConfig.official.textModelTestCount", {
+                    count: gatewayTest.modelCount,
+                  })}`
+                : ""}
+            </p>
+          </div>
+        ) : (
+          <div className="flex gap-2 rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-100">
+            <AlertTriangle
+              className="mt-0.5 size-3.5 shrink-0 text-amber-300"
+              aria-hidden
+            />
+            <p>
+              {t("settings.modelConfig.official.textModelTestFailed", {
+                error: gatewayTest.error ?? "",
+              })}
+            </p>
+          </div>
+        )
+      ) : null}
 
       <div className="flex justify-end">
         <Button

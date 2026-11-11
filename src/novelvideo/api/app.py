@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from novelvideo.api import OPENAPI_TAGS, api_router, register_verification_routes
 from novelvideo.api.auth import get_api_user
 from novelvideo.api.routes.files import preview_project_media_file
+from novelvideo.gateway_errors import GatewayModelError
 from novelvideo.ports.authz import AuthzError, authz_error_payload
 from novelvideo.shared.billing_errors import (
     BILLING_RULE_NOT_CONFIGURED_MESSAGE,
@@ -317,6 +318,36 @@ def create_app() -> FastAPI:
                 "ok": False,
                 "error": exc.user_message,
                 "data": authz_error_payload(exc),
+            },
+        )
+
+    @application.exception_handler(GatewayModelError)
+    async def _gateway_model_error(
+        request: Request,
+        exc: GatewayModelError,
+    ) -> JSONResponse:
+        # Without this handler a gateway refusal (unknown model, bad key,
+        # unreachable host) escaped to Starlette's ServerErrorMiddleware,
+        # which answers a bare text/plain 500 — the user saw only
+        # "Internal Server Error" while the real cause sat in the server
+        # log. The structured body names the model and the gateway's own
+        # message so the UI can show a useful Toast.
+        logger.warning(
+            "model gateway error: model=%s gateway_status=%s method=%s path=%s",
+            exc.model,
+            exc.gateway_status,
+            request.method,
+            request.url.path,
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "ok": False,
+                "error": str(exc),
+                "code": "gateway_model_error",
+                "model": exc.model,
+                "gatewayStatus": exc.gateway_status,
+                "gatewayMessage": exc.gateway_message,
             },
         )
 

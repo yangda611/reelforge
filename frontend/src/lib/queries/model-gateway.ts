@@ -11,6 +11,18 @@ export type GatewayMode = "official" | "custom" | "hybrid";
 export type CustomLlmMode = "relayclaw_brainclaw" | "advanced";
 export type AgentLlmMode = "inherit" | "third_party";
 
+/** 官方中继地址；指向它时文本模型固定为 brainclaw，无需用户选择。 */
+export const OFFICIAL_RELAY_BASE_URL = "https://relayclaw.cdnfg.com/v1";
+
+/** 归一化网关地址后判断是否为官方中继（忽略大小写与末尾斜杠）。 */
+export function isOfficialRelayBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) return false;
+  return (
+    baseUrl.trim().replace(/\/+$/, "").toLowerCase() ===
+    OFFICIAL_RELAY_BASE_URL.toLowerCase()
+  );
+}
+
 /** 通用的「端点预览」：服务端只回 key 预览，绝不回完整 key。 */
 export interface GatewayEndpointPreview {
   baseUrl: string;
@@ -166,7 +178,22 @@ export interface OfficialMediaCatalogStatus {
 export interface SaveOfficialConfigInput {
   newApiApiKey: string;
   newApiBaseUrl?: string;
+  /** 第三方网关的文本模型；不填则保存时后端自动选择。官方中继固定用 brainclaw。 */
+  textModel?: string;
 }
+
+/** 保存官方配置时后端对网关的实时校验结果。 */
+export interface OfficialGatewayTest {
+  ok: boolean;
+  model: string | null;
+  brainclaw: boolean;
+  modelCount: number | null;
+  error: string | null;
+}
+
+export type SaveOfficialConfigResponse =
+  | OkResponse<ModelGatewayConfig & { test?: OfficialGatewayTest }>
+  | ErrorResponse;
 
 export interface SaveBrainClawConfigInput {
   newApiBaseUrl: string;
@@ -463,7 +490,7 @@ export function useSaveOfficialConfig() {
     mutationFn: (input: SaveOfficialConfigInput) =>
       api
         .post("api/v1/model-gateway/official/config", { json: input })
-        .json<OkResponse<ModelGatewayConfig> | ErrorResponse>(),
+        .json<SaveOfficialConfigResponse>(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
     },
