@@ -2449,6 +2449,8 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         cls,
         payload: dict[str, object],
         metadata: dict[str, object],
+        *,
+        promote_reference_media: bool = False,
     ) -> None:
         """Translate legacy channel-shaped fields into the generic NewAPI contract.
 
@@ -2531,6 +2533,26 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             references = metadata.get("reference_videos")
             existing = list(references) if isinstance(references, list) else []
             metadata["reference_videos"] = [legacy_video.strip(), *existing]
+
+        if promote_reference_media:
+            reference_images = metadata.pop("reference_images", None)
+            if isinstance(reference_images, list):
+                image_values = [
+                    str(value).strip()
+                    for value in reference_images
+                    if isinstance(value, str) and str(value).strip()
+                ]
+                if image_values:
+                    payload.setdefault("images", image_values)
+            reference_audios = metadata.pop("reference_audios", None)
+            if isinstance(reference_audios, list):
+                audio_values = [
+                    str(value).strip()
+                    for value in reference_audios
+                    if isinstance(value, str) and str(value).strip()
+                ]
+                if audio_values:
+                    payload["audios"] = audio_values
 
         if first_frame:
             payload["image"] = first_frame
@@ -3413,7 +3435,15 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 enforce_newapi_video_mode_contract,
             )
 
-            self._canonicalize_video_payload(payload, metadata)
+            self._canonicalize_video_payload(
+                payload,
+                metadata,
+                promote_reference_media=not (
+                    is_seedance2_model
+                    or self.model.strip().lower().startswith("happyhorse-")
+                    or self._is_grok_video_channel_model()
+                ),
+            )
             payload = apply_media_request_schema(
                 payload, self.request_schema, self.model_params
             )

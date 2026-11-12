@@ -68,6 +68,46 @@ def test_video_enhance_quote_carries_trusted_frame_rate_inputs() -> None:
     assert billing["pricing_stages"][1]["slowdown"] == "5x"
 
 
+def test_canonicalize_video_payload_promotes_reference_media_to_top_level() -> None:
+    from novelvideo.generators.video_generator import NewApiVideoGenerator
+
+    metadata = {
+        "resolution": "720p",
+        "ratio": "16:9",
+        "reference_images": ["https://relay.example/reference.png"],
+        "reference_audios": ["https://relay.example/reference.wav"],
+    }
+    payload = {"model": "ntt-720p", "metadata": metadata}
+
+    NewApiVideoGenerator._canonicalize_video_payload(
+        payload, metadata, promote_reference_media=True
+    )
+
+    assert payload["images"] == ["https://relay.example/reference.png"]
+    assert payload["audios"] == ["https://relay.example/reference.wav"]
+    assert "reference_images" not in payload["metadata"]
+    assert "reference_audios" not in payload["metadata"]
+
+
+def test_canonicalize_video_payload_keeps_first_frame_and_separate_references() -> None:
+    from novelvideo.generators.video_generator import NewApiVideoGenerator
+
+    metadata = {
+        "resolution": "720p",
+        "ratio": "16:9",
+        "image_url": "https://relay.example/first.png",
+        "reference_images": ["https://relay.example/reference.png"],
+    }
+    payload = {"model": "ntt-720p", "metadata": metadata}
+
+    NewApiVideoGenerator._canonicalize_video_payload(
+        payload, metadata, promote_reference_media=True
+    )
+
+    assert payload["image"] == "https://relay.example/first.png"
+    assert payload["images"] == ["https://relay.example/reference.png"]
+
+
 @pytest.mark.asyncio
 async def test_newapi_video_processing_request_uses_canonical_metadata(
     tmp_path: Path,
