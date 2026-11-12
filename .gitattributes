@@ -1,0 +1,9 @@
+# Shell scripts and Dockerfiles must keep LF endings.
+# CRLF breaks /bin/sh: `then\r` is not the `then` keyword, so the nginx
+# entrypoint fails with "syntax error: unexpected end of file (expecting
+# "then")" and the web container restart-loops. Windows checkouts with
+# core.autocrlf=true produce CRLF unless forced here (2026-11-12).
+*.sh text eol=lf
+*.envsh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
