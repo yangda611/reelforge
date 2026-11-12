@@ -999,6 +999,15 @@ def build_channel_payload(
         "other": "",
         "remark": f"created by DramaClaw CE provisioner for {provider_label}",
     }
+    if not channel["base_url"]:
+        raise ValueError(
+            f"base URL is required for provider '{provider_key}' "
+            f"({provider_label}). Please configure the provider's base URL "
+            "in Settings → Model Gateway (for example, "
+            "https://zeroshell.top/v1 for a ZeroShell-backed Custom "
+            "provider). A channel without a base URL cannot forward "
+            "requests and fails with an HTML error from the gateway."
+        )
     if not channel["key"] and provider_key != "comfyui":
         raise ValueError("upstreamKey is required")
     return {"mode": "single", "channel": channel}

@@ -1299,6 +1299,36 @@ def infer_image_generation_selection(
     )
 
 
+def _configured_character_image_model() -> str:
+    """Return the first enabled NewAPI image model, if one is configured.
+
+    The portrait/character image flow used to default to a hardcoded
+    vendor model name. Resolve from the user's saved media mappings
+    instead so the configured upstream model is used; return "" when
+    nothing is configured so callers fall back to the default.
+    """
+    try:
+        from novelvideo.model_gateway_settings import get_newapi_media_model_mappings
+
+        mappings = get_newapi_media_model_mappings()
+    except (ImportError, RuntimeError, ValueError):
+        return ""
+    configured = sorted(
+        (
+            (name, item)
+            for name, item in mappings.items()
+            if item.get("mediaType") == "image"
+            and item.get("provider") == "newapi"
+            and item.get("enabled") is not False
+        ),
+        key=lambda pair: (int(pair[1].get("sortOrder") or 100), pair[0]),
+    )
+    if not configured:
+        return ""
+    name, item = configured[0]
+    return str(item.get("upstreamModel") or name).strip()
+
+
 def _image_provider_config(
     provider: str,
     *,
@@ -1342,7 +1372,9 @@ def _image_provider_config(
         return {
             "provider": provider,
             "api_key": gateway.api_key,
-            "model": model or NEWAPI_IMAGE_MODEL,
+            "model": model
+            or _configured_character_image_model()
+            or NEWAPI_IMAGE_MODEL,
             "base_url": gateway.base_url,
         }
 
