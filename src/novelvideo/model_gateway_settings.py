@@ -1456,6 +1456,11 @@ def fetch_gateway_text_models(
         raise ValueError(f"连接网关超时（{base}），请检查地址是否可达") from exc
     except httpx.HTTPError as exc:
         raise ValueError(f"连接网关失败（{base}）：{exc}") from exc
+    except Exception as exc:
+        # e.g. httpx.InvalidURL from a malformed proxy env at Client
+        # construction: still a "cannot reach the gateway" failure, and the
+        # save-time probe is best-effort, so report it instead of raising.
+        raise ValueError(f"连接网关失败（{base}）：{exc}") from exc
     if response.status_code == 401:
         raise ValueError("网关拒绝了该密钥（401），请检查密钥是否正确")
     if response.status_code == 403:
@@ -1496,6 +1501,234 @@ def pick_gateway_text_model(models: list[str]) -> str:
         if not any(hint in low for hint in _NON_TEXT_MODEL_HINTS):
             return model
     return models[0]
+
+
+# P0-1: app-startup / settings-open connection self-check. Auth-only probe:
+# GET /v1/models with the saved key, never a generation. Short timeout so
+# the UI never waits on a dead gateway.
+GATEWAY_PROBE_TIMEOUT_SECONDS = 4.0
+
+
+def probe_model_gateway(
+    base_url: str,
+    api_key: str,
+    *,
+    model: str = "",
+    timeout_seconds: float = GATEWAY_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Probe a saved gateway with a cheap auth-only call.
+
+    Returns ``{"status", "model", "message"}`` where status is ``ok``,
+    ``auth_invalid`` (upstream 401/403), ``unreachable`` (network, timeout
+    or any other failure) or ``unconfigured`` (no base URL / key). Never
+    raises: every failure mode maps to a status, so the settings UI can
+    always render a banner instead of waiting for a generation to fail.
+    """
+    import httpx
+
+    base = normalize_relay_base_url(base_url)
+    if not base or not normalize_api_key(api_key):
+        return {
+            "status": "unconfigured",
+            "model": None,
+            "message": "未配置模型网关，请先在设置中配置网关",
+        }
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.TimeoutException:
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": f"连接网关超时（{base}），请检查网络与地址",
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": f"无法连接网关（{base}）：{exc}",
+        }
+    except Exception as exc:
+        # Client construction itself can fail (e.g. httpx.InvalidURL from a
+        # malformed proxy env). The probe never raises: any such failure is
+        # "unreachable" with the reason attached.
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": f"无法连接网关（{base}）：{exc}",
+        }
+    if response.status_code in (401, 403):
+        return {
+            "status": "auth_invalid",
+            "model": None,
+            "message": f"网关 Key 已失效（{response.status_code}），请在设置中更换 Key",
+        }
+    if response.status_code >= 400:
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": f"网关返回错误（{response.status_code}），请检查地址与密钥",
+        }
+    try:
+        payload = response.json()
+    except ValueError:
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": "网关返回的不是有效的模型列表",
+        }
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return {
+            "status": "unreachable",
+            "model": None,
+            "message": "网关返回的不是有效的模型列表",
+        }
+    models = [
+        str(item.get("id", "")).strip()
+        for item in data
+        if isinstance(item, dict) and str(item.get("id", "")).strip()
+    ]
+    resolved = str(model or "").strip() or pick_gateway_text_model(models)
+    if not resolved:
+        return {
+            "status": "ok",
+            "model": None,
+            "message": "网关连接正常，但该网关没有可用的文字模型",
+        }
+    return {
+        "status": "ok",
+        "model": resolved,
+        "message": f"网关连接正常，文本模型为 {resolved}",
+    }
+
+
+# P1-7: media-type hints for classifying a third-party gateway's /v1/models
+# ids. Anything without a media hint is a text (or unknown) model and stays
+# out of the media catalog.
+_MEDIA_MODEL_IMAGE_HINTS = (
+    "image",
+    "img",
+    "gpt-image",
+    "seedream",
+    "nano-banana",
+    "banana",
+    "flux",
+    "dall",
+    "midjourney",
+    "imagen",
+    "qwen-image",
+    "doubao-image",
+    "kolors",
+    "stable-diffusion",
+    "picture",
+    "draw",
+    "lingshan-g",
+    "lingshan-nb",
+    "gemini-image",
+)
+_MEDIA_MODEL_VIDEO_HINTS = (
+    "video",
+    "seedance",
+    "veo",
+    "sora",
+    "kling",
+    "runway",
+    "pika",
+    "minimax",
+    "hailuo",
+    "wan",
+    "ltx",
+    "cogvideo",
+    "luma",
+    "dreamina",
+    "jimeng",
+    "i2v",
+    "t2v",
+    "v2v",
+    "r2v",
+)
+_MEDIA_MODEL_AUDIO_HINTS = (
+    "audio",
+    "tts",
+    "whisper",
+    "music",
+    "index-tts",
+    "lingshan-mu",
+    "speech",
+    "voice",
+)
+
+
+def classify_gateway_media_model(model_id: str) -> str | None:
+    """Return the media type for a gateway model id, or None if not media."""
+    lowered = str(model_id or "").strip().lower()
+    if not lowered:
+        return None
+    if any(hint in lowered for hint in _MEDIA_MODEL_IMAGE_HINTS):
+        return "image"
+    if any(hint in lowered for hint in _MEDIA_MODEL_VIDEO_HINTS):
+        return "video"
+    if any(hint in lowered for hint in _MEDIA_MODEL_AUDIO_HINTS):
+        return "audio"
+    return None
+
+
+def build_gateway_media_catalog(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Fetch a third-party gateway's /v1/models as the media catalog.
+
+    Returns ``(entries, error)``: on any probe failure ``entries`` is empty
+    and ``error`` carries the plain-language reason, so the caller can fall
+    back to the bundled catalog and flag it. Never triggers a generation.
+    """
+    try:
+        model_ids = fetch_gateway_text_models(
+            base_url, api_key, timeout_seconds=timeout_seconds
+        )
+    except Exception as exc:
+        return [], str(exc)
+    entries: list[dict[str, Any]] = []
+    for model_id in model_ids:
+        media_type = classify_gateway_media_model(model_id)
+        if media_type is None:
+            continue
+        entries.append(
+            {
+                "id": model_id,
+                "label": model_id,
+                "mediaType": media_type,
+                "provider": "newapi",
+                "upstreamModel": model_id,
+                "source": "gateway",
+            }
+        )
+    return entries, None
+
+
+def get_bundled_media_catalog_entries() -> list[dict[str, Any]]:
+    """Bundled official media catalog as frontend-facing entries."""
+    entries: list[dict[str, Any]] = []
+    for model, item in get_official_media_model_mappings().items():
+        entries.append(
+            {
+                "id": model,
+                "label": str(item.get("label") or model),
+                "mediaType": str(item.get("mediaType") or ""),
+                "provider": "newapi",
+                "upstreamModel": str(item.get("upstreamModel") or model),
+                "source": "bundled",
+                "sortOrder": int(item.get("sortOrder") or 100),
+            }
+        )
+    return sorted(entries, key=lambda entry: (entry["sortOrder"], entry["id"]))
 
 
 def test_official_gateway(

@@ -82,6 +82,30 @@ const CANVAS_ADD_MENU_ENTRIES = [
   ...CANVAS_ADD_TRAILING_NODE_TYPES.flatMap(nodeMenuEntry),
 ];
 
+// P1-6 / P2-8：每个添加节点入口一句话副标题（「逐帧拉片 — 逐帧分析参考视频」
+// 这类黑话不再让新用户猜）。按 menuLabelKey 查，两个菜单（主菜单 / 引用生成）共用。
+export const NODE_MENU_SUBTITLE_BY_LABEL: Record<string, string> = {
+  "node.menu.image": "node.menuDesc.image",
+  "node.menu.video": "node.menuDesc.video",
+  "node.menu.textAnnotation": "node.menuDesc.textAnnotation",
+  "node.menu.videoCompose": "node.menuDesc.videoCompose",
+  "node.menu.videoBreakdown": "node.menuDesc.videoBreakdown",
+  "node.menu.previz": "node.menuDesc.previz",
+  "node.menu.audio": "node.menuDesc.audio",
+  "node.menu.uploadImage": "node.menuDesc.upload",
+  "node.menu.beatContext": "node.menuDesc.beatContext",
+  "node.menu.script": "node.menuDesc.script",
+  "node.menu.pano360Viewer": "node.menuDesc.pano360Viewer",
+  "node.menu.threeDWorld": "node.menuDesc.threeDWorld",
+  "node.menu.htmlArtifact": "node.menuDesc.htmlArtifact",
+  "node.menu.interactiveStory": "node.menuDesc.interactiveStory",
+  "node.menu.interactiveAd": "node.menuDesc.interactiveAd",
+};
+
+export function getNodeMenuSubtitleKey(menuLabelKey: string): string | null {
+  return NODE_MENU_SUBTITLE_BY_LABEL[menuLabelKey] ?? null;
+}
+
 export const CANVAS_MENU_ICON_CELL_CLASS =
   "flex min-w-[58px] max-w-[96px] flex-col items-center gap-1.5 rounded-xl px-2.5 py-2 text-center transition-colors";
 
@@ -121,11 +145,13 @@ export function CanvasAddNodeGrid({
     <div className="grid grid-cols-5 justify-items-center gap-x-3 gap-y-5">
       {CANVAS_ADD_MENU_ENTRIES.map((definition) => {
         const Icon = canvasMenuIconMap[definition.menuIcon] ?? Image;
+        const subtitleKey = getNodeMenuSubtitleKey(definition.menuLabelKey);
         return (
           <button
             key={definition.id}
             type="button"
             onMouseEnter={onItemPointerEnter}
+            title={subtitleKey ? t(subtitleKey) : undefined}
             className="flex w-full min-w-0 flex-col items-center gap-1.5 rounded-xl py-2 text-center transition-colors hover:bg-white/[0.075]"
             onClick={(event) => {
               if (definition.entryType === "node") {
@@ -143,6 +169,11 @@ export function CanvasAddNodeGrid({
             <span className="line-clamp-2 w-full break-words text-[13px] leading-5 text-white/82">
               {t(definition.menuLabelKey)}
             </span>
+            {subtitleKey ? (
+              <span aria-hidden="true" className="line-clamp-2 w-full break-words text-[12px] leading-4 text-white/40">
+                {t(subtitleKey)}
+              </span>
+            ) : null}
           </button>
         );
       })}

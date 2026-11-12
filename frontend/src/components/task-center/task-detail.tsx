@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { currentTaskText, displayLabel } from "@/task-center/derivations";
 import { taskErrorMessage } from "@/task-center/task-errors";
+import { GatewayErrorBox } from "@/components/gateway/gateway-error-box";
 import { taskIoLabel } from "@/lib/task-io-label";
 import type { TaskState } from "@/task-center/types";
 
@@ -16,7 +17,11 @@ export function formatLocalTaskTime(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
+  // 明确用浏览器本地时区渲染，并标出「本地时间」—— 后端给的是 UTC 时间戳，
+  // 直接回显会让用户读到比本地晚 8 小时的时间。
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const formatted = new Intl.DateTimeFormat(undefined, {
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -25,12 +30,7 @@ export function formatLocalTaskTime(value?: string | null): string {
     second: "2-digit",
     hour12: false,
   }).format(date);
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absOffset = Math.abs(offsetMinutes);
-  const hours = String(Math.floor(absOffset / 60)).padStart(2, "0");
-  const minutes = String(absOffset % 60).padStart(2, "0");
-  return `${formatted} UTC${sign}${hours}:${minutes}`;
+  return `${formatted}（本地时间）`;
 }
 
 function stringField(value: unknown, key: string): string {
@@ -229,7 +229,9 @@ export function TaskDetail() {
           {task.error && (
             <div className="mt-3 rounded bg-destructive/10 p-2 text-destructive">
               <div className="font-medium">{t("taskCenter.detail.error.label")}</div>
-              <div className="mt-1">{taskErrorMessage(task, t)}</div>
+              <div className="mt-1">
+                <GatewayErrorBox raw={task.error} human={taskErrorMessage(task, t)} />
+              </div>
             </div>
           )}
           {displayResult ? (

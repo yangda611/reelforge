@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { cloneElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,6 +82,8 @@ vi.mock("react-i18next", () => ({
         "app.logoHomeTooltip": "Home",
         "header.settings": "Feature Settings",
         "header.account.open": "Open account",
+        "header.pikoHub.section": "Community",
+        "header.pikoHub.world": "Piko Town",
         "header.notifications": "Announcement Center",
         "header.account.changeAvatar": "Change avatar",
         "header.account.changePassword": "Change password",
@@ -157,35 +159,52 @@ describe("Header runtime gating", () => {
     securityState.data = undefined;
   });
 
-  it("keeps the Piko reminder on hover, then dismisses and persists it on entry click", async () => {
+  // P2-10：Piko 社区入口已从主顶栏移进头像菜单的「社区」分区——先开头像菜单再找它。
+  async function openPikoRow(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "Open account" }));
+    const entry = await screen.findByRole("button", { name: /Piko Town/ });
+    return entry;
+  }
+
+  it("keeps the Piko reminder, then dismisses and persists it on entry click", async () => {
     const user = userEvent.setup();
     const view = renderHeader();
-    const entry = screen.getByRole("button", { name: "Piko Piko" });
+    const entry = await openPikoRow(user);
     const dot = () => entry.querySelector('[data-slot="notification-dot"]');
     expect(dot()).not.toBeNull();
-
-    await user.hover(entry);
-    expect(await screen.findByText("New")).toBeInTheDocument();
-    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
-    expect(dot()).not.toBeNull();
+    expect(screen.getByText("Community")).toBeInTheDocument();
 
     await user.click(entry);
-    expect(dot()).toBeNull();
+    // 点开社区入口会先关掉头像菜单（entry 随之卸载），所以小红点是否消失
+    // 要到重新打开的菜单里看，而不是查已卸载的旧节点。
     expect(localStorage.getItem(featureEntrySeenKey("piko-hub-v1", "local"))).toBe("seen");
+
+    const reopened = await openPikoRow(user);
+    expect(reopened.querySelector('[data-slot="notification-dot"]')).toBeNull();
 
     view.unmount();
     renderHeader();
-    expect(screen.getByRole("button", { name: "Piko Piko" }).querySelector('[data-slot="notification-dot"]')).toBeNull();
+    const reopenedAgain = await openPikoRow(user);
+    expect(reopenedAgain.querySelector('[data-slot="notification-dot"]')).toBeNull();
   });
 
-  it.each(["{Enter}", " ", "{ArrowDown}"])("dismisses the Piko reminder on keyboard activation (%s)", async (key) => {
+  it.each(["{Enter}", " "])("dismisses the Piko reminder on keyboard activation (%s)", async (key) => {
     const user = userEvent.setup();
     renderHeader();
-    const entry = screen.getByRole("button", { name: "Piko Piko" });
+    const entry = await openPikoRow(user);
     entry.focus();
     await user.keyboard(key);
-    expect(await screen.findByText("New")).toBeInTheDocument();
-    expect(entry.querySelector('[data-slot="notification-dot"]')).toBeNull();
+    expect(localStorage.getItem(featureEntrySeenKey("piko-hub-v1", "local"))).toBe("seen");
+    const reopened = await openPikoRow(user);
+    expect(reopened.querySelector('[data-slot="notification-dot"]')).toBeNull();
+  });
+
+  it("does not show Piko entries in the main top bar", async () => {
+    const user = userEvent.setup();
+    renderHeader();
+    expect(screen.queryByRole("button", { name: /Piko Town/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open account" }));
+    expect(await screen.findByRole("button", { name: /Piko Town/ })).toBeInTheDocument();
   });
 
   it("reads branding only for an authenticated EE session and renders it in the home link", () => {
@@ -215,17 +234,30 @@ describe("Header runtime gating", () => {
     expect(brandingState.enabled).toBe(false);
   });
 
-  it("keeps settings available in the avatar menu in EE runtime", async () => {
+  // P2-2：顶栏有了齿轮「设置」直达入口，头像菜单里仍保留设置行——两者都开设置。
+  it("keeps settings available in the top bar and in the avatar menu in EE runtime", async () => {
     runtimeState.isCe = false;
 
     renderHeader();
 
-    expect(screen.queryByRole("button", { name: "Feature Settings" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Open account"));
-    fireEvent.click(await screen.findByRole("button", { name: "Feature Settings" }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Feature Settings" }));
 
     expect(screen.getByRole("dialog")).toHaveTextContent("Settings dialog");
     expect(screen.queryByText("Change avatar")).not.toBeInTheDocument();
+  });
+
+  it("keeps the settings row inside the avatar menu", async () => {
+    runtimeState.isCe = false;
+
+    renderHeader();
+
+    await userEvent.setup().click(screen.getByLabelText("Open account"));
+    const panel = document.getElementById("header-account-panel");
+    expect(panel).not.toBeNull();
+    expect(
+      within(panel!).getByRole("button", { name: "Feature Settings" }),
+    ).toBeInTheDocument();
   });
 
   it("renders logout in the account panel when runtime requires auth", async () => {
@@ -319,7 +351,12 @@ describe("Header runtime gating", () => {
     await user.keyboard("{Enter}");
 
     // 面板 portal 到 body 末尾，Tab 走不进去，所以打开时必须主动把焦点送进第一项。
-    expect(await screen.findByRole("button", { name: "Feature Settings" })).toHaveFocus();
+    // 顶栏齿轮与面板内的设置行同名，查焦点时限定在面板内。
+    await waitFor(() => {
+      const panel = document.getElementById("header-account-panel");
+      expect(panel).not.toBeNull();
+      expect(within(panel!).getByRole("button", { name: "Feature Settings" })).toHaveFocus();
+    });
 
     await user.keyboard("{Escape}");
 

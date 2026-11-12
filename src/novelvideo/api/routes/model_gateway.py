@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -19,14 +20,18 @@ from novelvideo.model_gateway_settings import (
     CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW,
     MODE_OFFICIAL,
     MODE_HYBRID,
+    build_gateway_media_catalog,
     build_media_relay_status,
     build_model_gateway_status,
+    get_bundled_media_catalog_entries,
+    get_effective_llm_config,
     get_model_gateway_settings,
     get_effective_media_relay_config,
     get_official_media_catalog_update_status,
     normalize_relay_base_url,
     normalize_api_key,
     parse_comfyui_channel_workflows,
+    probe_model_gateway,
     save_media_relay_config,
     save_agent_llm_config,
     save_official_media_catalog_auto_update,
@@ -560,6 +565,37 @@ async def get_model_gateway_config() -> dict[str, Any]:
     }
 
 
+@router.get("/probe")
+async def probe_saved_model_gateway() -> dict[str, Any]:
+    """Connection self-check for the saved gateway (P0-1).
+
+    Called by the frontend on app startup and when settings open. Probes
+    the saved gateway with a cheap auth-only GET /v1/models — never a
+    generation — so a dead key is surfaced before the user waits on a
+    failed generation. Response shape is the frontend contract; do not
+    change it: ``{"ok": true, "data": {"status", "model", "message"}}``
+    with status ``ok`` | ``auth_invalid`` | ``unreachable`` |
+    ``unconfigured``.
+    """
+    llm = get_effective_llm_config()
+    if not llm.base_url or not llm.api_key:
+        return {
+            "ok": True,
+            "data": {
+                "status": "unconfigured",
+                "model": None,
+                "message": "未配置模型网关，请先在设置中配置网关",
+            },
+        }
+    result = await asyncio.to_thread(
+        probe_model_gateway,
+        llm.base_url,
+        llm.api_key,
+        model=llm.model,
+    )
+    return {"ok": True, "data": result}
+
+
 def _require_ce_media_catalog_management() -> None:
     if not is_ce_effective():
         raise PermissionError("official media catalog management is only available in CE")
@@ -571,7 +607,65 @@ async def get_official_media_catalog_status() -> dict[str, Any]:
         _require_ce_media_catalog_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
-    return {"ok": True, "data": get_official_media_catalog_update_status()}
+    status = get_official_media_catalog_update_status()
+    # ``source`` in the update status is the bundled-vs-remote origin of the
+    # official catalog content; the selector contract instead distinguishes
+    # the gateway's own models ("gateway") from the official catalog
+    # ("bundled"), so the origin moves to ``catalogOrigin``.
+    catalog_origin = str(status.get("source") or "bundled")
+    bundled_entries = get_bundled_media_catalog_entries()
+    bundled_label = "官方中继内置目录（与当前网关无关）"
+    llm = get_effective_llm_config()
+    if not llm.base_url or not llm.api_key or llm.is_brainclaw:
+        # Official relay or nothing configured: the bundled catalog is the
+        # only honest list.
+        return {
+            "ok": True,
+            "data": {
+                **status,
+                "source": "bundled",
+                "catalogOrigin": catalog_origin,
+                "catalogLabel": bundled_label,
+                "models": bundled_entries,
+                "modelCount": len(bundled_entries),
+                "fallback": False,
+                "fallbackReason": "",
+            },
+        }
+    host = urlparse(llm.base_url).hostname or llm.base_url
+    entries, error = await asyncio.to_thread(
+        build_gateway_media_catalog, llm.base_url, llm.api_key
+    )
+    if error is not None:
+        # Gateway probe failed: fall back to the bundled catalog and say so,
+        # instead of showing an empty or stale list as if it were live.
+        return {
+            "ok": True,
+            "data": {
+                **status,
+                "source": "bundled",
+                "catalogOrigin": catalog_origin,
+                "catalogLabel": bundled_label,
+                "models": bundled_entries,
+                "modelCount": len(bundled_entries),
+                "fallback": True,
+                "fallbackReason": error,
+            },
+        }
+    return {
+        "ok": True,
+        "data": {
+            **status,
+            "source": "gateway",
+            "catalogOrigin": catalog_origin,
+            "catalogLabel": f"当前网关模型（来自 {host}）",
+            "models": entries,
+            "modelCount": len(entries),
+            "fallback": False,
+            "fallbackReason": "",
+            "gatewayBaseUrl": llm.base_url,
+        },
+    }
 
 
 @router.post("/official/media-catalog/preferences")

@@ -766,8 +766,11 @@ MEDIA_RELAY_PROVIDER = (
 )
 MEDIA_RELAY_TTL_SECONDS = int(os.environ.get("MEDIA_RELAY_TTL_SECONDS", "1800"))
 
-OSS_RELAY_ENDPOINT = os.environ.get("OSS_RELAY_ENDPOINT", "oss-cn-chengdu.aliyuncs.com")
-OSS_RELAY_BUCKET = os.environ.get("OSS_RELAY_BUCKET", "claymore-llm-relay")
+# No pre-filled bucket/endpoint: a fresh install must show empty media
+# storage fields, never the upstream author's bucket. Operators fill in
+# their own values (or set the env vars); empty means unconfigured.
+OSS_RELAY_ENDPOINT = os.environ.get("OSS_RELAY_ENDPOINT", "")
+OSS_RELAY_BUCKET = os.environ.get("OSS_RELAY_BUCKET", "")
 OSS_RELAY_AK = os.environ.get("OSS_RELAY_AK", "")
 OSS_RELAY_SK = os.environ.get("OSS_RELAY_SK", "")
 

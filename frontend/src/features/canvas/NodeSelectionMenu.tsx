@@ -31,6 +31,7 @@ import {
   CanvasMenuSectionHeader,
   CANVAS_MENU_ICON_CELL_CLASS,
   CANVAS_MENU_ROW_CLASS,
+  getNodeMenuSubtitleKey,
 } from '@/features/canvas/ui/canvas-node-menu-shared';
 
 interface NodeSelectionMenuProps {
@@ -53,6 +54,7 @@ const SKILL_PANEL_GAP = 8;
 interface ReferenceGenerateAction {
   key: string;
   label: string;
+  labelKey: string;
   Icon: typeof Image;
   type?: CanvasNodeType;
   disabled?: boolean;
@@ -92,6 +94,7 @@ export function NodeSelectionMenu({
       {
         key: 'text',
         label: t('node.menu.textAnnotation'),
+        labelKey: 'node.menu.textAnnotation',
         Icon: Type,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.textAnnotation)
           ? CANVAS_NODE_TYPES.textAnnotation
@@ -101,6 +104,7 @@ export function NodeSelectionMenu({
       {
         key: 'image',
         label: t('node.menu.image'),
+        labelKey: 'node.menu.image',
         Icon: Image,
         // 创建顺序：imageGen（默认生成节点） → imageEdit（编辑节点） →
         // upload（纯上传节点，目标端创建参考图时用）。
@@ -119,6 +123,7 @@ export function NodeSelectionMenu({
       {
         key: 'video',
         label: t('node.menu.video'),
+        labelKey: 'node.menu.video',
         Icon: Video,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.video)
           ? CANVAS_NODE_TYPES.video
@@ -131,6 +136,7 @@ export function NodeSelectionMenu({
         // 漏掉 —— 用户从视频右侧拖线出来只看到「文本 / 视频 / 脚本」。
         key: 'videoBreakdown',
         label: t('node.menu.videoBreakdown'),
+        labelKey: 'node.menu.videoBreakdown',
         Icon: ScanSearch,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.videoBreakdown)
           ? CANVAS_NODE_TYPES.videoBreakdown
@@ -140,6 +146,7 @@ export function NodeSelectionMenu({
       {
         key: 'audio',
         label: t('node.menu.audio'),
+        labelKey: 'node.menu.audio',
         Icon: Music,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.audio)
           ? CANVAS_NODE_TYPES.audio
@@ -149,6 +156,7 @@ export function NodeSelectionMenu({
       {
         key: 'script',
         label: t('node.menu.script'),
+        labelKey: 'node.menu.script',
         Icon: FileText,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.script)
           ? CANVAS_NODE_TYPES.script
@@ -158,6 +166,7 @@ export function NodeSelectionMenu({
       {
         key: 'pano360',
         label: t('node.menu.pano360Viewer'),
+        labelKey: 'node.menu.pano360Viewer',
         Icon: Globe,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.pano360Viewer)
           ? CANVAS_NODE_TYPES.pano360Viewer
@@ -167,6 +176,7 @@ export function NodeSelectionMenu({
       {
         key: 'threeDWorld',
         label: t('node.displayName.threeDWorldNode'),
+        labelKey: 'node.menu.threeDWorld',
         Icon: Orbit,
         type: allowedTypeSet.has(CANVAS_NODE_TYPES.threeDWorld)
           ? CANVAS_NODE_TYPES.threeDWorld
@@ -363,11 +373,13 @@ export function NodeSelectionMenu({
             <div className="grid grid-cols-4 justify-items-center gap-x-2 gap-y-5">
               {referenceGenerateItems.map((item) => {
                 const Icon = item.Icon;
+                const subtitleKey = getNodeMenuSubtitleKey(item.labelKey);
                 return (
                   <button
                     key={item.key}
                     disabled={item.disabled}
                     onMouseEnter={scheduleSkillPanelClose}
+                    title={subtitleKey ? t(subtitleKey) : undefined}
                     className={`${CANVAS_MENU_ICON_CELL_CLASS} ${item.disabled
                         ? 'cursor-not-allowed opacity-35'
                         : 'hover:bg-white/[0.075]'
@@ -386,6 +398,9 @@ export function NodeSelectionMenu({
                       <Icon className="h-4 w-4 text-cyan-200" />
                     </div>
                     <span className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[13px] leading-5 text-white/82">{item.label}</span>
+                    {subtitleKey ? (
+                      <span aria-hidden="true" className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-4 text-white/40">{t(subtitleKey)}</span>
+                    ) : null}
                   </button>
                 );
               })}

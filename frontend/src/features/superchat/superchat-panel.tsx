@@ -27,6 +27,7 @@ import {
   Mic,
   MicOff,
   Package,
+  Paperclip,
   Plus,
   Play,
   Pin,
@@ -77,6 +78,10 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { openSettingsDialog } from "@/components/settings/settings-dialog-events";
+import {
+  isRuntimeMissingText,
+  translateRuntimeMissingMessageText,
+} from "@/lib/chat-runtime-status";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -347,7 +352,12 @@ type QueuedSendItem = {
   createdAt: number;
 };
 
-const ENABLE_SUPERCHAT_FILE_UPLOAD = false;
+// P1（2026-11-12 用户现场反馈）：虾导聊天输入框必须提供剧本文件上传入口。
+// 之前这里是 false，附件按钮、拖拽上传、拖拽提示全部不渲染，但助手又会
+// 告诉用户“在对话输入框用附件按钮选择剧本文件”——承诺了一个不存在的控件，
+// 导致“上传剧本 → 规划分集”主流程走不通。改为 true 后按钮、拖拽、
+// 导入目录上传链路全部启用（addFiles → ingest/upload → 已上传文件上下文）。
+const ENABLE_SUPERCHAT_FILE_UPLOAD = true;
 
 function isToolMessage(message: ChatMessage): boolean {
   if (message.role === "tool") return true;
@@ -647,7 +657,9 @@ function freezoneToolMeta(message: ChatMessage): string[] {
 }
 
 function normalizeMessageText(text: string): string {
-  return text.trim().replace(/\n{3}/g, "\n\n");
+  // P1-5：后端「本地助手运行时不可用：请重启应用……」是误导文案（重启解决不了
+  // 「没装」），渲染前换成真因。所有消息文本渲染都走这里，一处改全覆盖。
+  return translateRuntimeMissingMessageText(text).trim().replace(/\n{3}/g, "\n\n");
 }
 
 // 这两个必须是模块级常量：react-markdown 会把 components 里的函数当组件类型用，
@@ -9612,8 +9624,10 @@ function ControlBar({
       : chat.connecting || chat.busy
         ? "reconnecting"
         : "disconnected";
-  const transportLabel =
-    transportStatus === "connected"
+  // P1-5：运行环境缺失时绝不显示「已连接」——连上的是传输层，不是能干活的助手。
+  const transportLabel = chat.runtimeMissing
+    ? t("aiAssistant.runtimeMissingShort", { defaultValue: "助手运行环境缺失" })
+    : transportStatus === "connected"
       ? t("aiAssistant.connected")
       : transportStatus === "reconnecting"
         ? t("aiAssistant.reconnecting")
@@ -13274,7 +13288,7 @@ export function SuperChatPanel({
   );
   const hasSendableContent =
     draft.trim().length > 0 || attachments.length > 0 || hasSelectedFreezoneNodeContext;
-  const canSend = hasSendableContent && chat.connected && !preparingSend;
+  const canSend = hasSendableContent && chat.connected && !chat.runtimeMissing && !preparingSend;
   const composerWaiting = chat.busy && (!hasSendableContent || !chat.connected || preparingSend);
   const selectedFreezoneNodePreviews = useMemo(
     () => selectedFreezoneNodes.map((node) => canvasNodeToReferencePreview(node, t)),
@@ -16318,23 +16332,31 @@ export function SuperChatPanel({
             className="flex min-h-9 shrink-0 items-center gap-2 border-b border-white/[0.06] bg-black/[0.16] px-3 py-1 backdrop-blur-xl"
           >
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <div className="truncate text-sm font-medium text-foreground">
-                {t("freezone.chat.title")}
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {t("freezone.chat.title")}
+                </div>
+                {/* P2-8：虾导 — AI 助手 */}
+                <span className="shrink-0 text-[11px] text-muted-foreground">AI 助手</span>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span
                   className={cn(
                     "size-1.5 rounded-full",
-                    chat.connected ? "bg-emerald-400" : chat.connecting ? "bg-amber-300" : "bg-muted-foreground",
+                    chat.runtimeMissing
+                      ? "bg-destructive"
+                      : chat.connected ? "bg-emerald-400" : chat.connecting ? "bg-amber-300" : "bg-muted-foreground",
                   )}
                   aria-hidden="true"
                 />
                 <span className="truncate">
-                  {chat.connected
-                    ? t("aiAssistant.connected")
-                    : chat.connecting || chat.busy
-                      ? t("aiAssistant.reconnecting")
-                      : t("aiAssistant.disconnected")}
+                  {chat.runtimeMissing
+                    ? t("aiAssistant.runtimeMissingShort", { defaultValue: "助手运行环境缺失" })
+                    : chat.connected
+                      ? t("aiAssistant.connected")
+                      : chat.connecting || chat.busy
+                        ? t("aiAssistant.reconnecting")
+                        : t("aiAssistant.disconnected")}
                 </span>
               </div>
             </div>
@@ -16373,7 +16395,25 @@ export function SuperChatPanel({
         )}
         {chat.error && (
           <div className="border-b border-destructive/20 bg-destructive/8 px-3 py-2 text-xs text-destructive">
-            {chat.error}
+            {chat.runtimeMissing || isRuntimeMissingText(chat.error) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 flex-1">
+                  {t("aiAssistant.runtimeMissing", {
+                    defaultValue: "未检测到本地助手运行环境（Codex），请在设置中下载/安装",
+                  })}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openSettingsDialog("models")}
+                >
+                  {t("aiAssistant.runtimeMissingAction", { defaultValue: "去设置安装" })}
+                </Button>
+              </div>
+            ) : (
+              chat.error
+            )}
           </div>
         )}
 
@@ -17122,7 +17162,7 @@ export function SuperChatPanel({
                         aria-label={t("aiAssistant.attach")}
                         title={t("aiAssistant.attach")}
                       >
-                        <Plus className="size-4" />
+                        <Paperclip className="size-4" />
                       </Button>
                     )}
                   </div>

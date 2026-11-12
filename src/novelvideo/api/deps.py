@@ -141,13 +141,19 @@ def may_run_asset_repair(ctx: ProjectContext | None) -> bool:
 
 
 def validate_project_name(name: str):
-    """验证项目名称格式。"""
+    """验证项目名称格式。
+
+    显示名允许 Unicode（中文等）：``\w`` 在 str 上按 Unicode 匹配中文
+    字母/数字/下划线。项目名同时是磁盘目录段——Linux 文件系统可直接用
+    UTF-8 名称建目录，且目录归属校验只禁路径分隔符，所以后端不需要再
+    派生 ASCII slug，也不再把限制暴露给用户。空格、连字符、斜杠仍拒绝。
+    """
     if len(name) > 64:
         raise HTTPException(
             status_code=400,
             detail="Project name must be at most 64 characters long",
         )
-    if not name or not re.match(r"^[a-zA-Z0-9_]+$", name):
+    if not name or not re.match(r"^\w+$", name):
         raise HTTPException(
             status_code=400,
             detail="Project name must contain only letters, digits, and underscores",

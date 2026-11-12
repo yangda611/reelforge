@@ -91,7 +91,8 @@ describe("TaskDetail", () => {
     const formatted = formatLocalTaskTime("2026-06-04T08:01:57Z");
 
     expect(formatted).toContain("2026");
-    expect(formatted).toContain("UTC");
+    expect(formatted).toContain("本地时间");
+    expect(formatted).not.toContain("UTC");
   });
 
   it("keeps empty and invalid task timestamps stable", () => {

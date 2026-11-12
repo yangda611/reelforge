@@ -15,13 +15,13 @@ import {
   Users,
   LogOut,
   KeyRound,
+  Settings,
   X,
 } from "lucide-react";
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { capturePikoTaskEntry } from "@/features/piko-world/piko-task-entry";
 import { enterPikoWorld } from "@/features/piko-world/piko-entry-transition";
 import { playPikoUiSound } from "@/features/piko-world/piko-audio";
-import { Button } from "@/components/ui/button";
 import { NotificationDot } from "@/components/ui/notification-dot";
 import { useFeatureEntrySeen } from "@/lib/feature-entry-state";
 import { PhoneBindingDialog } from "@/components/account/phone-binding-dialog";
@@ -37,6 +37,7 @@ import { NotificationDrawer } from "@/components/notifications/notification-draw
 import { SettingsDialog, type SettingsPage } from "@/components/settings/settings-dialog";
 import {
   OPEN_SETTINGS_DIALOG_EVENT,
+  openSettingsDialog,
   type OpenSettingsDialogDetail,
 } from "@/components/settings/settings-dialog-events";
 import {
@@ -152,12 +153,23 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
   const hasUnreadNotification =
     shouldShowUpgradeNudge(releaseFeed) || announcementUnreadCount(announcementIds) > 0;
   const gatewayConfig = modelGatewayConfig.data?.data;
-  const hasSettingsWarning = Boolean(
-    ceRuntime &&
-      gatewayConfig &&
-      (gatewayConfig.effective.configured === false ||
-        gatewayConfig.mediaRelay?.configured === false),
-  );
+  // P1-2：黄标要说明缺了什么、点开去哪补。逐项列出未配置项，点击去第一项，
+  // 悬停用 tooltip 说清每一项（媒体存储那项还点明会坏什么功能）。
+  const missingSettingsItems = useMemo(() => {
+    if (!ceRuntime || !gatewayConfig) return [];
+    const items: { key: "gateway" | "mediaStorage"; page: SettingsPage }[] = [];
+    if (gatewayConfig.effective.configured === false) {
+      items.push({ key: "gateway", page: "models" });
+    }
+    if (gatewayConfig.mediaRelay?.configured === false) {
+      items.push({ key: "mediaStorage", page: "storage" });
+    }
+    return items;
+  }, [ceRuntime, gatewayConfig]);
+  const hasSettingsWarning = missingSettingsItems.length > 0;
+  const settingsWarningTooltip = missingSettingsItems
+    .map((item) => t(`header.settingsWarningTooltip.${item.key}`))
+    .join("；");
   const settingsWarningBubble = useFloatingBubblePosition(
     accountAnchorRef,
     hasSettingsWarning && !settingsOpen && !accountPanelOpen && !settingsWarningBubbleDismissed,
@@ -370,42 +382,21 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
 
         {/* Actions */}
         <div className="flex min-w-0 flex-1 shrink-0 items-center justify-end gap-1">
-          <DropdownMenu modal={false} onOpenChange={(open, details) => {
-            if (open && (details.reason === "trigger-press" || details.reason === "list-navigation")) {
-              markPikoEntrySeen();
-            }
-          }}>
-            <DropdownMenuTrigger openOnHover delay={100} closeDelay={180} onClick={markPikoEntrySeen}
-              render={<Button id="piko-hub-entry" variant="ghost" size="sm" className={`${entryStyles.trigger} ${entryStyles.pikoTrigger} gap-1.5 px-2 text-xs font-medium`} />}>
-              <span className={entryStyles.pikoCapsule} aria-hidden="true">
-                <img
-                  src="/piko/entry/companion-capsule.png"
-                  alt=""
-                  draggable={false}
-                  className={entryStyles.pikoCapsuleIcon}
-                />
-              </span>
-              <span className={entryStyles.pikoLabel}>
-                Piko Piko
-                {!pikoEntrySeen ? <NotificationDot className={entryStyles.pikoDot} /> : null}
-              </span>
-            </DropdownMenuTrigger>
-            <HeaderMenuPanel dropdown>
-              <HeaderMenuRow menuItem
-                icon={<Map className="size-3.5" />}
-                label={t("header.pikoHub.world")}
-                badge="New"
-                onClick={() => { markPikoEntrySeen(); capturePikoTaskEntry(username, window.location.href); playPikoUiSound("open"); void enterPikoWorld(() => navigate({ to: "/piko-world" })); }} />
-              <HeaderMenuRow menuItem id="mybuddy-companion-entry"
-                icon={<Users className="size-3.5" />}
-                label={t("header.pikoHub.companion")}
-                onClick={() => { markPikoEntrySeen(); setCompanionOpen(true); }} />
-              <HeaderMenuRow menuItem
-                icon={<Gamepad2 className="size-3.5" />}
-                label={t("header.pikoHub.play")}
-                onClick={() => { markPikoEntrySeen(); window.dispatchEvent(new Event("piko-open-station")); }} />
-            </HeaderMenuPanel>
-          </DropdownMenu>
+          {/* P2-2：顶栏直达设置。Piko 社区入口已移到头像菜单的「社区」分区（P2-10）。 */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className={`${entryStyles.trigger} relative size-[28px]`}
+            aria-label={t("header.settings")}
+            title={t("header.settings")}
+            onClick={() => {
+              setSettingsInitialPage(undefined);
+              setSettingsOpen(true);
+            }}
+          >
+            <Settings className="size-4" aria-hidden />
+          </Button>
           <CreditBalanceBadge />
           <div
             id="superchat-header-controls"
@@ -453,6 +444,24 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
               displayName={displayName}
               hasUnreadNotification={hasUnreadNotification}
               hasSettingsWarning={hasSettingsWarning}
+              pikoEntrySeen={pikoEntrySeen}
+              onOpenPikoWorld={() => {
+                closeAccountPanelNow();
+                markPikoEntrySeen();
+                capturePikoTaskEntry(username, window.location.href);
+                playPikoUiSound("open");
+                void enterPikoWorld(() => navigate({ to: "/piko-world" }));
+              }}
+              onOpenCompanion={() => {
+                closeAccountPanelNow();
+                markPikoEntrySeen();
+                setCompanionOpen(true);
+              }}
+              onOpenPikoStation={() => {
+                closeAccountPanelNow();
+                markPikoEntrySeen();
+                window.dispatchEvent(new Event("piko-open-station"));
+              }}
               onSettings={() => {
                 closeAccountPanelNow();
                 setSettingsInitialPage(undefined);
@@ -510,9 +519,22 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
       {settingsWarningBubble
         ? createPortal(
             <div
-              className="fixed z-[9999] w-[112px] rounded-md border border-amber-400/45 bg-amber-400 py-1 pl-2 pr-6 text-[11px] font-medium leading-none text-black shadow-[0_8px_22px_rgba(0,0,0,0.36),0_0_12px_rgba(251,191,36,0.28)]"
+              className="fixed z-[9999] w-[112px] cursor-pointer rounded-md border border-amber-400/45 bg-amber-400 py-1 pl-2 pr-6 text-[11px] font-medium leading-none text-black shadow-[0_8px_22px_rgba(0,0,0,0.36),0_0_12px_rgba(251,191,36,0.28)]"
               style={{ left: settingsWarningBubble.left, top: settingsWarningBubble.top }}
-              role="status"
+              role="button"
+              tabIndex={0}
+              title={settingsWarningTooltip}
+              aria-label={settingsWarningTooltip}
+              onClick={() => {
+                const first = missingSettingsItems[0];
+                if (first) openSettingsDialog(first.page);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                const first = missingSettingsItems[0];
+                if (first) openSettingsDialog(first.page);
+              }}
             >
               <span
                 className="absolute -top-[4px] size-2 rotate-45 border-l border-t border-amber-400/45 bg-amber-400"
@@ -524,7 +546,10 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
                 type="button"
                 className="absolute right-1 top-1/2 flex size-4 -translate-y-1/2 items-center justify-center rounded-full text-black/70 transition-colors hover:bg-black/10 hover:text-black"
                 aria-label={t("header.dismissSettingsWarningBubble")}
-                onClick={() => setSettingsWarningBubbleDismissed(true)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSettingsWarningBubbleDismissed(true);
+                }}
               >
                 <X className="size-3" strokeWidth={3} />
               </button>
@@ -588,6 +613,10 @@ function AccountPanel({
   displayName,
   hasUnreadNotification,
   hasSettingsWarning,
+  pikoEntrySeen,
+  onOpenPikoWorld,
+  onOpenCompanion,
+  onOpenPikoStation,
   onSettings,
   onBindPhone,
   onNotifications,
@@ -604,6 +633,10 @@ function AccountPanel({
   displayName: string;
   hasUnreadNotification: boolean;
   hasSettingsWarning: boolean;
+  pikoEntrySeen: boolean;
+  onOpenPikoWorld: () => void;
+  onOpenCompanion: () => void;
+  onOpenPikoStation: () => void;
   onSettings: () => void;
   onBindPhone?: () => void;
   onNotifications: () => void;
@@ -665,25 +698,46 @@ function AccountPanel({
             />
           ) : null}
         </div>
+        {/* P2-10：社区功能不占主顶栏，收进头像菜单的「社区」分区，与做视频的工具入口分开。 */}
+        <div className="mt-2.5 border-t border-white/10 pt-2.5">
+          <div className="px-2 pb-1 text-[11px] text-white/40">
+            {t("header.pikoHub.section")}
+          </div>
+          <div className="space-y-0.5">
+            <HeaderMenuRow
+              id="piko-hub-entry"
+              icon={<Map className="size-3.5" />}
+              label={t("header.pikoHub.world")}
+              badge="New"
+              unread={!pikoEntrySeen}
+              onClick={onOpenPikoWorld}
+            />
+            <HeaderMenuRow
+              id="mybuddy-companion-entry"
+              icon={<Users className="size-3.5" />}
+              label={t("header.pikoHub.companion")}
+              onClick={onOpenCompanion}
+            />
+            <HeaderMenuRow
+              icon={<Gamepad2 className="size-3.5" />}
+              label={t("header.pikoHub.play")}
+              onClick={onOpenPikoStation}
+            />
+          </div>
+        </div>
       </HeaderMenuPanel>
     </div>
   );
 }
 
-function HeaderMenuPanel({ children, dropdown = false }: {
+function HeaderMenuPanel({ children }: {
   children: ReactNode;
-  dropdown?: boolean;
 }) {
   const className = `${entryStyles.panel} ${entryStyles.menuPanel}`;
-  return dropdown ? (
-    <DropdownMenuContent align="end" sideOffset={8} className={className}>
-      {children}
-    </DropdownMenuContent>
-  ) : <div className={className}>{children}</div>;
+  return <div className={className}>{children}</div>;
 }
 
 function HeaderMenuRow({
-  menuItem = false,
   id,
   icon,
   label,
@@ -691,7 +745,6 @@ function HeaderMenuRow({
   unread = false,
   onClick,
 }: {
-  menuItem?: boolean;
   id?: string;
   icon: ReactNode;
   label: string;
@@ -717,9 +770,6 @@ function HeaderMenuRow({
     </>
   );
   const className = entryStyles.menuRow;
-  if (menuItem) {
-    return <DropdownMenuItem id={id} className={className} onClick={onClick}>{content}</DropdownMenuItem>;
-  }
   return (
     <button id={id} type="button" className={className} onClick={onClick}>
       {content}

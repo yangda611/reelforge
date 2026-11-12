@@ -49,6 +49,12 @@ import {
 import { CANVAS_NODE_REFERENCE_ATTACHMENT_TYPE } from "@/features/freezone/chatNodeReferences";
 import { api } from "@/lib/api";
 import {
+  clearRuntimeMissing,
+  isRuntimeMissingText,
+  markRuntimeMissing,
+  readRuntimeMissing,
+} from "@/lib/chat-runtime-status";
+import {
   isStaleByTtl,
   pruneLocalStorageByPrefix,
   registerStorageReclaimer,
@@ -1993,6 +1999,23 @@ export function useSuperChat({
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // P1-5：本地助手运行环境缺失是「连接上了、但发消息必失败」的状态，必须和
+  // websocket 的 connected 分开记，否则面板先显示「已连接」再失败。
+  // 初值读 localStorage：上次命中过就直接展示缺失态，不用等再失败一次。
+  const [runtimeMissing, setRuntimeMissing] = useState<boolean>(() => readRuntimeMissing());
+  const runtimeMissingRef = useRef(runtimeMissing);
+  const noteRuntimeMissing = useCallback(() => {
+    if (runtimeMissingRef.current) return;
+    runtimeMissingRef.current = true;
+    markRuntimeMissing();
+    setRuntimeMissing(true);
+  }, []);
+  const clearRuntimeMissingState = useCallback(() => {
+    if (!runtimeMissingRef.current) return;
+    runtimeMissingRef.current = false;
+    clearRuntimeMissing();
+    setRuntimeMissing(false);
+  }, []);
   const [messages, setHistoryMessages] = useState<ChatMessage[]>(() => initialScopeSnapshot.cachedMessages);
   const desiredScopeRef = useRef(desiredScope);
   // Only live updates and user edits create a persistence intent. Hydration bypasses this.
@@ -2400,7 +2423,10 @@ export function useSuperChat({
           break;
         }
         const message = typeof frame.message === "string" ? frame.message : null;
-        if (message) setError(message);
+        if (message) {
+          setError(message);
+          if (isRuntimeMissingText(message)) noteRuntimeMissing();
+        }
         const turnId =
           activeTurnIdRef.current
           ?? pendingClientTurnIdRef.current
@@ -2495,6 +2521,8 @@ export function useSuperChat({
         if (turnId && streamTextRef.current.trim()) {
           closeActiveThoughtPart(turnId);
           markTurnActive(turnId);
+          // 助手真的回了内容：运行环境活着，清除缺失记忆。
+          clearRuntimeMissingState();
           setMessages((current) => {
             const displayText = streamTextRef.current;
             if (!displayText.trim()) return current;
@@ -2520,6 +2548,8 @@ export function useSuperChat({
         }
         const incomingTurnId = typeof frame.turn_id === "string" ? frame.turn_id : undefined;
         if (incomingTurnId) closeActiveThoughtPart(incomingTurnId);
+        // 助手真的回了内容：运行环境活着，清除缺失记忆。
+        clearRuntimeMissingState();
         setMessages((current) => {
           const turnId = incomingTurnId;
           const next = upsertServerAssistantMessage(
@@ -2869,6 +2899,7 @@ export function useSuperChat({
             ? frame.message.trim()
             : "Unknown chat error";
           setError(errorMessage);
+          if (isRuntimeMissingText(errorMessage)) noteRuntimeMissing();
           // 比对的是后端报错原文，不是界面文案。
           // i18n-exempt-start
           if (errorMessage.includes("当前用户已有 AI 对话正在处理中")) {
@@ -2908,9 +2939,11 @@ export function useSuperChat({
     }
   }, [
     clearAbortGrace,
+    clearRuntimeMissingState,
     finalizeStream,
     markTurnActive,
     markTurnInactive,
+    noteRuntimeMissing,
     requestHistory,
     scopeKey,
     settings.showToolEvents,
@@ -3392,6 +3425,7 @@ export function useSuperChat({
     connected,
     connecting,
     error,
+    runtimeMissing,
     activeModel,
     appendNotification,
     clearConversation,

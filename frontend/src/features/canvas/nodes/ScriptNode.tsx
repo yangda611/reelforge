@@ -40,6 +40,7 @@ import {
   type ScriptGenAction,
   type ScriptNodeData,
 } from '@/features/canvas/domain/canvasNodes';
+import { requestFitToNewNodes } from '@/features/canvas/canvasTemplate';
 import { isRenderableImageSrc, resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
 import { localizeNodeDisplayName } from '@/features/canvas/domain/nodeDisplay';
 import {
@@ -86,6 +87,7 @@ import {
   backendErrorToastMessage,
 } from '@/lib/api-errors';
 import { CreditCostPill } from '@/components/credits/credit-visual';
+import { GatewayErrorBox } from '@/components/gateway/gateway-error-box';
 import { useGenerationCreditCost } from '@/lib/queries/generation-credit-cost';
 import {
   NODE_CREDIT_PILL_FLAT_CLASS,
@@ -584,6 +586,7 @@ export const ScriptNode = memo(({ id, data, selected, width, height }: ScriptNod
         state.autoGroupSpawn(id, [newId], {
           label: t('node.scriptNode.actionGroup', { action: t(action.labelKey) }),
         });
+        requestFitToNewNodes([id, newId]);
       } else if (action.key === 'fromVideoRef') {
         // 上游 video 节点只用作素材引用：referenceOnly 关掉底部生成操作面板，
         // 顶部 toolbar（剪辑/高清/解析/智能去字幕/...）保持可用。
@@ -593,6 +596,7 @@ export const ScriptNode = memo(({ id, data, selected, width, height }: ScriptNod
         state.autoGroupSpawn(id, [newId], {
           label: t('node.scriptNode.actionGroup', { action: t(action.labelKey) }),
         });
+        requestFitToNewNodes([id, newId]);
       } else if (action.key === 'fromCharacter') {
         const newIds = spawnStacked(
           CANVAS_NODE_TYPES.upload,
@@ -606,6 +610,7 @@ export const ScriptNode = memo(({ id, data, selected, width, height }: ScriptNod
         state.autoGroupSpawn(id, newIds, {
           label: t('node.scriptNode.actionGroup', { action: t(action.labelKey) }),
         });
+        requestFitToNewNodes([id, ...newIds]);
       }
 
       updateNodeData(id, { lastAction: action.key });
@@ -664,14 +669,11 @@ export const ScriptNode = memo(({ id, data, selected, width, height }: ScriptNod
             {/* 已有结果时重新生成失败：表格上方横幅提示 + 重试，
                 否则失败只写进 data.generationError、界面毫无反应。 */}
             {data.generationError && !isGenerating && (
-              <div className="flex items-center gap-2 border-b border-red-500/25 bg-red-500/10 px-3 py-2">
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-300" />
-                <span
-                  className="min-w-0 flex-1 truncate text-[12px] leading-5 text-red-200/90"
-                  title={data.generationError}
-                >
-                  {data.generationError}
-                </span>
+              <div className="flex items-start gap-2 border-b border-red-500/25 bg-red-500/10 px-3 py-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
+                <div className="min-w-0 flex-1 text-[12px] leading-5 text-red-200/90">
+                  <GatewayErrorBox raw={data.generationError} />
+                </div>
                 <RegenerateButton label={t('node.scriptNode.retry')} onClick={() => void submit()} />
               </div>
             )}
@@ -714,9 +716,9 @@ export const ScriptNode = memo(({ id, data, selected, width, height }: ScriptNod
               {data.generationError && !isGenerating && (
                 <div className="flex flex-col items-center gap-2 text-red-300">
                   <AlertCircle className="h-6 w-6 opacity-90" />
-                  <span className="max-h-[72px] overflow-y-auto break-words text-center text-[12px] leading-5 text-red-200/90">
-                    {data.generationError}
-                  </span>
+                  <div className="max-h-[120px] overflow-y-auto break-words text-center text-[12px] leading-5 text-red-200/90">
+                    <GatewayErrorBox raw={data.generationError} />
+                  </div>
                   <RegenerateButton
                     label={t('node.scriptNode.retry')}
                     onClick={() => void submit()}
@@ -1230,7 +1232,9 @@ function ScriptOperationsPanel({
       </div>
 
       {data.generationError && !isGenerating && (
-        <div className="px-3 pb-1 text-[11px] text-red-400 break-words [overflow-wrap:anywhere]">{data.generationError}</div>
+        <div className="px-3 pb-1 text-[11px] text-red-400 break-words [overflow-wrap:anywhere]">
+          <GatewayErrorBox raw={data.generationError} />
+        </div>
       )}
 
       <div className="flex shrink-0 items-center justify-end gap-2 px-3 pb-3 pt-1">

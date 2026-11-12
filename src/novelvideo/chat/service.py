@@ -636,7 +636,7 @@ _DRAMACLAW_SCRIPT_UPLOAD_MODEL_REPLY_INSTRUCTIONS = """[DRAMACLAW_SCRIPT_UPLOAD_
 回复目标：
 - 语气自然，不要像系统错误提示。
 - 明确表达：虾导不提供生成剧本功能。
-- 引导用户去“虾料”上传已有剧本文档。
+- 引导用户上传已有剧本文档：优先说“点对话输入框左下角的回形针「添加附件」按钮选择剧本文件（支持 txt/md/doc/docx），或者去「虾料」上传”——只提这两个真实存在的入口，不要编造其他上传方式，也不要说“把文件发给我”这种无法执行的说法。
 - 说明上传后你可以继续帮他推进分集、画面、配音、成片等后续制作。
 - 只回复 1-2 句，不要列步骤，不要输出 markdown 标题。
 [/DRAMACLAW_SCRIPT_UPLOAD_GUIDANCE]

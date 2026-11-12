@@ -162,7 +162,7 @@ export interface ModelGatewayConfig {
 
 export interface OfficialMediaCatalogStatus {
   autoUpdate: boolean;
-  source: "bundled" | "remote";
+  source: "bundled" | "remote" | "gateway";
   schemaVersion: number;
   catalogVersion: string;
   modelCount: number;
@@ -173,6 +173,16 @@ export interface OfficialMediaCatalogStatus {
   remoteUrl: string;
   lastError: string;
   updated?: boolean;
+  /**
+   * 后端给的展示标签（第三方网关时如「当前网关模型（来自 zeroshell.top）」）。
+   * 没有时前端按 source 拼默认标题。
+   */
+  catalogLabel?: string;
+  /**
+   * 第三方网关时后端从该网关拉取到的模型列表（契约未定死 shape，前端只做
+   * 防御性渲染：取 id/name/label 中第一个非空字符串）。
+   */
+  models?: Array<{ id?: string; name?: string; label?: string }>;
 }
 
 export interface SaveOfficialConfigInput {

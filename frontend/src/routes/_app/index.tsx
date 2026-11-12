@@ -66,6 +66,7 @@ import {
   useUnarchiveProject,
 } from "@/lib/queries/projects";
 import { useModelGatewayConfig } from "@/lib/queries/model-gateway";
+import { GatewayProbeBanner } from "@/components/gateway/gateway-probe-banner";
 import { openSettingsDialog } from "@/components/settings/settings-dialog-events";
 import { isCeRuntime } from "@/lib/runtime-config";
 import { ProjectFolder } from "@/components/projects/project-folder";
@@ -106,12 +107,15 @@ const SORT_OPTIONS: { value: SortKey; labelKey: string }[] = [
   { value: "name-desc", labelKey: "project.sort.nameDesc" },
 ];
 
-const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9_]+$/;
 export const PROJECT_NAME_MAX_LENGTH = 64;
+
+// 项目名是显示名，允许中文及 Unicode：只拦长度和控制字符，不再要求 ASCII。
+// （后端如需 ASCII slug 由后端自行派生，不把限制暴露给用户。）
+const PROJECT_NAME_FORBIDDEN_PATTERN = /[\u0000-\u001F\u007F]/;
 
 export function getProjectNameValidationKey(name: string): string | null {
   if (name.length > PROJECT_NAME_MAX_LENGTH) return "project.nameTooLong";
-  return !PROJECT_NAME_PATTERN.test(name) ? "project.nameInvalid" : null;
+  return PROJECT_NAME_FORBIDDEN_PATTERN.test(name) ? "project.nameInvalid" : null;
 }
 
 const PROJECT_CARD_MIN_HEIGHT_CLASS = "min-h-[12.75rem]";
@@ -1461,6 +1465,8 @@ function ProjectDashboard() {
       </div>
 
       {gatewayNotConfigured ? <GatewayNotConfiguredBanner /> : null}
+      {/* P0-1：应用启动时探测已保存的网关，Key 失效时首页顶部红条提醒。 */}
+      <GatewayProbeBanner />
 
       {/* Tab strip + sort */}
       <div className="mb-10 flex flex-wrap items-center gap-x-3 gap-y-2">

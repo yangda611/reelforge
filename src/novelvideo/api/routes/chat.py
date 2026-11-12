@@ -89,6 +89,8 @@ logger = logging.getLogger(__name__)
 
 AI_ASSISTANT_CHAT_FEATURE_KEY = "assistant.chat"
 EMPTY_AGENT_REPLY_MESSAGE = "这轮操作没有收到虾导的有效回复，请稍后重试。"
+# Machine-readable signal for a missing local assistant runtime (P1-5).
+RUNTIME_MISSING_ERROR_CODE = "runtime_missing"
 
 # 出网台账里这条链路的 capability 口径。取自
 # `chat/hermes_egress.py:131` 的 `capability="agent.hermes.text"`，与 EG-07 对齐；
@@ -101,14 +103,32 @@ _REASONING_REQUIRED_ERROR_MESSAGE = (
 )
 
 
+def _chat_error_code(exc: BaseException) -> str | None:
+    """Return the machine-readable error code for an exception, if any.
+
+    A missing local assistant runtime is ``runtime_missing`` (P1-5): the
+    frontend keys install guidance off this code, and the message must
+    state the runtime is missing — never "please restart the app", which
+    cannot fix a runtime that was never installed.
+    """
+    from novelvideo.chat.codex_app_server import CodexRuntimeError
+    from novelvideo.chat.hermes_fork_requirement import HermesForkMissing
+
+    if isinstance(exc, (CodexRuntimeError, HermesForkMissing)):
+        return RUNTIME_MISSING_ERROR_CODE
+    return None
+
+
 def _user_facing_chat_error(exc: BaseException) -> str:
     """Turn provider/runtime failures into stable, safe chat copy."""
 
     from novelvideo.chat.codex_app_server import CodexRuntimeError
     from novelvideo.chat.hermes_fork_requirement import HermesForkMissing
 
-    if isinstance(exc, (CodexRuntimeError, HermesForkMissing)):
-        return "本地助手运行时不可用：请重启应用；若仍失败，请更新应用并导出诊断日志。"
+    if isinstance(exc, CodexRuntimeError):
+        return "未检测到本地助手运行环境（Codex），请在设置中安装后再使用。"
+    if isinstance(exc, HermesForkMissing):
+        return "未检测到本地助手运行环境（Hermes），请在设置中安装后再使用。"
 
     raw = safe_exception_message(exc).strip()
     lowered = raw.lower()
@@ -4706,10 +4726,15 @@ async def chat_ws(websocket: WebSocket) -> None:
                             "message": persisted_error,
                         },
                     )
-                await _send_json_best_effort(
-                    websocket,
-                    {"type": "error", "turn_id": turn_id, "message": user_message},
-                )
+                error_event: dict[str, Any] = {
+                    "type": "error",
+                    "turn_id": turn_id,
+                    "message": user_message,
+                }
+                error_code = _chat_error_code(exc)
+                if error_code is not None:
+                    error_event["code"] = error_code
+                await _send_json_best_effort(websocket, error_event)
     except WebSocketDisconnect:
         logger.info("chat websocket disconnected username=%s", username)
         pass

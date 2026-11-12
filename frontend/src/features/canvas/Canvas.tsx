@@ -32,7 +32,7 @@ import {
 } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { MousePointerClick } from 'lucide-react';
+import { MousePointerClick, X } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -41,6 +41,13 @@ import { CreditDisplayHiddenProvider } from '@/components/credits/credit-visual'
 import { isCeRuntime } from '@/lib/runtime-config';
 import { resolveAbsolutePosition, useCanvasStore } from '@/stores/canvasStore';
 import { useAppStore } from '@/stores/app-store';
+import {
+  FIT_NEW_NODES_EVENT,
+  applyCanvasTemplate,
+  markTemplatePickerDismissed,
+  readTemplatePickerDismissed,
+  type CanvasTemplateKind,
+} from '@/features/canvas/canvasTemplate';
 import { getSkillRegistry } from '@/api/skills';
 import { SKILL_SCHEMA_VERSION, type SkillDefinition } from '@/features/freezone/context/skillRoles';
 import { translateSkillName } from '@/features/freezone/context/skillI18n';
@@ -1463,6 +1470,94 @@ export function Canvas({
     [reactFlowInstance, requestFocusNode],
   );
 
+  // P2-6：新节点/组落点后，若新内容不在当前视口内，自动 fit 到新内容上
+  // （等价于手动 Alt+Shift+F「整理/定位画布」）。已在视口内的不折腾，
+  // 连续放多个节点时不抢视图。
+  const fitToNewNodesIfOffscreen = useCallback(
+    (nodeIds: string[]) => {
+      const container = wrapperRef.current;
+      if (!container || nodeIds.length === 0) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const state = useCanvasStore.getState();
+      const vp = reactFlowInstance.getViewport();
+      const viewMinX = -vp.x / vp.zoom;
+      const viewMaxX = (rect.width - vp.x) / vp.zoom;
+      const viewMinY = -vp.y / vp.zoom;
+      const viewMaxY = (rect.height - vp.y) / vp.zoom;
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const id of nodeIds) {
+        const node = state.nodes.find((candidate) => candidate.id === id);
+        if (!node) continue;
+        const width =
+          node.measured?.width ??
+          (typeof node.width === "number" ? node.width : DEFAULT_NODE_WIDTH);
+        const height =
+          node.measured?.height ??
+          (typeof node.height === "number" ? node.height : 200);
+        minX = Math.min(minX, node.position.x);
+        minY = Math.min(minY, node.position.y);
+        maxX = Math.max(maxX, node.position.x + width);
+        maxY = Math.max(maxY, node.position.y + height);
+      }
+      if (!Number.isFinite(minX)) return;
+      const fullyVisible =
+        minX >= viewMinX && maxX <= viewMaxX && minY >= viewMinY && maxY <= viewMaxY;
+      if (fullyVisible) return;
+      // 节点刚挂上 store、还没量好尺寸时先等一帧再 fit，避免按默认值算错框。
+      window.requestAnimationFrame(() => {
+        reactFlowInstance.fitView({
+          nodes: nodeIds.map((id) => ({ id })),
+          padding: 0.25,
+          duration: 240,
+          maxZoom: 1,
+        });
+      });
+    },
+    [reactFlowInstance],
+  );
+
+  // 画布内其它位置（如剧本节点的「生成分镜脚本」动作）摆好组后也会发事件请画布适配。
+  useEffect(() => {
+    const handleFitRequest = (event: Event) => {
+      const nodeIds = (event as CustomEvent<{ nodeIds?: unknown }>).detail?.nodeIds;
+      if (!Array.isArray(nodeIds)) return;
+      fitToNewNodesIfOffscreen(nodeIds.filter((id): id is string => typeof id === "string"));
+    };
+    window.addEventListener(FIT_NEW_NODES_EVENT, handleFitRequest);
+    return () => window.removeEventListener(FIT_NEW_NODES_EVENT, handleFitRequest);
+  }, [fitToNewNodesIfOffscreen]);
+
+  // P1-6：空画布首次打开时给「从模板开始」。选过一次（或选空白）后按画布记住，
+  // 不再打扰；删空节点也不会再弹。
+  const [templatePickerDismissed, setTemplatePickerDismissed] = useState<boolean>(() =>
+    readTemplatePickerDismissed(canvasId),
+  );
+  const dismissTemplatePicker = useCallback(() => {
+    markTemplatePickerDismissed(canvasId);
+    setTemplatePickerDismissed(true);
+  }, [canvasId]);
+  const applyTemplate = useCallback(
+    (kind: CanvasTemplateKind) => {
+      dismissTemplatePicker();
+      if (kind === "blank") return;
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const center = rect
+        ? reactFlowInstance.screenToFlowPosition({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          })
+        : { x: 0, y: 0 };
+      const newNodeIds = applyCanvasTemplate(kind, center);
+      scheduleCanvasPersist(0);
+      fitToNewNodesIfOffscreen(newNodeIds);
+    },
+    [dismissTemplatePicker, fitToNewNodesIfOffscreen, reactFlowInstance, scheduleCanvasPersist],
+  );
+
   useEffect(() => {
     const sleep = (delayMs: number) =>
       new Promise<void>((resolve) => {
@@ -2282,6 +2377,7 @@ export function Canvas({
       );
       selectNodeExclusively(newNodeId);
       focusNewNodeIfLowZoom(newNodeId);
+      fitToNewNodesIfOffscreen([newNodeId]);
       if (pendingNodePlacement.skill) {
         bindSingleBeatContextInput(newNodeId, pendingNodePlacement.skill);
       }
@@ -2295,6 +2391,7 @@ export function Canvas({
     [
       addNode,
       bindSingleBeatContextInput,
+      fitToNewNodesIfOffscreen,
       focusNewNodeIfLowZoom,
       pendingNodePlacement,
       reactFlowInstance,
@@ -3307,6 +3404,7 @@ export function Canvas({
       }
 
       focusNewNodeIfLowZoom(newNodeId);
+      fitToNewNodesIfOffscreen([newNodeId]);
       scheduleCanvasPersist(0);
       setShowNodeMenu(false);
       setMenuAllowedTypes(undefined);
@@ -3316,6 +3414,7 @@ export function Canvas({
     },
     [
       connectGraphNodes,
+      fitToNewNodesIfOffscreen,
       focusNewNodeIfLowZoom,
       pendingBatchConnectIds,
       pendingConnectStart,
@@ -4969,6 +5068,53 @@ export function Canvas({
       </div>
     );
   }, [t]);
+
+  // P1-6：空画布首次打开时的「从模板开始」。三个选项都在这里，不用再猜从哪个节点起手。
+  const templatePicker = useMemo(() => {
+    const templates: { kind: CanvasTemplateKind; titleKey: string; descKey: string }[] = [
+      { kind: 'novel', titleKey: 'canvas.templatePicker.novel', descKey: 'canvas.templatePicker.novelDesc' },
+      { kind: 'original', titleKey: 'canvas.templatePicker.original', descKey: 'canvas.templatePicker.originalDesc' },
+      { kind: 'blank', titleKey: 'canvas.templatePicker.blank', descKey: 'canvas.templatePicker.blankDesc' },
+    ];
+    return (
+      <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+        <div className="pointer-events-auto w-[min(560px,calc(100%-32px))] rounded-2xl border border-white/[0.10] bg-[#101217]/90 p-5 backdrop-blur-2xl">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[16px] font-semibold text-white/90">{t('canvas.templatePicker.title')}</h2>
+              <p className="mt-1 text-[13px] leading-5 text-white/55">{t('canvas.templatePicker.subtitle')}</p>
+            </div>
+            <button
+              type="button"
+              aria-label={t('common.close')}
+              onClick={dismissTemplatePicker}
+              className="flex size-7 shrink-0 items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <X className="size-4" aria-hidden />
+            </button>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {templates.map((template) => (
+              <button
+                key={template.kind}
+                type="button"
+                onClick={() => applyTemplate(template.kind)}
+                className="rounded-xl border border-white/[0.10] bg-white/[0.04] p-3 text-left transition-colors hover:border-white/25 hover:bg-white/[0.08]"
+              >
+                <div className="text-[14px] font-medium text-white/85">{t(template.titleKey)}</div>
+                <div className="mt-1 text-[12px] leading-5 text-white/45">{t(template.descKey)}</div>
+              </button>
+            ))}
+          </div>
+          <p className="mt-4 text-center text-[12px] text-white/35">
+            {t('canvas.emptyHintBeforeTab')}
+            <span className="text-primary">Tab</span>
+            {t('canvas.emptyHintAfterTab')}
+          </p>
+        </div>
+      </div>
+    );
+  }, [applyTemplate, dismissTemplatePicker, t]);
   const marqueeSelectionRect = useMemo(() => {
     if (!marqueeSelection) {
       return null;
@@ -5282,7 +5428,12 @@ export function Canvas({
         />
       )}
 
-      {nodes.length === 0 && emptyHint}
+      {/* P1-6：空画布首次打开时给「从模板开始」。注意不要用 nodesInitialized
+          做门：@xyflow/system 的 adoptUserNodes 里 nodesInitialized 起始值就是
+          `nodes.length > 0`，空画布上它恒为 false，模板选择器永远弹不出来。
+          Canvas 本来就在加载门后面挂载（store 已水合），nodes.length === 0
+          时就是真的空画布，不需要再等测量。 */}
+      {nodes.length === 0 && (!templatePickerDismissed ? templatePicker : emptyHint)}
 
       <CanvasFileDropOverlay isVisible={isFileDropActive} />
 

@@ -3,6 +3,7 @@
 import type { TFunction } from "i18next";
 import { HTTPError } from "ky";
 import type { ErrorResponse } from "@/types/api";
+import { gatewayErrorHumanMessage as translateGatewayStatusError } from "@/lib/gateway-error";
 
 export const NOVEL_IMPORT_REQUIRED_CODE = "NOVEL_IMPORT_REQUIRED";
 
@@ -611,8 +612,16 @@ export function humanizeTaskError(
     case "rate_limit":
       return t("common.generationRateLimited", { defaultValue: fallback });
     default:
-      return providerErrorMessage(raw) ?? fallback;
+      break;
   }
+  // 网关把上游失败包成 `status_code: 401, model_name: ..., body: {'...'}` 这样的
+  // Python-dict 文本（单引号，JSON 解析不到）：按状态码翻成一句人话 + 动作，
+  // 别把原始 dump 甩给用户（P1-1）。注意放这里：上面更具体的分类
+  // （channel_policy、内容审核、429 限流）优先——一个 429 的 channel_policy
+  // 报错不能被误读成普通限流。
+  const gatewayHumanMessage = translateGatewayStatusError(raw, t);
+  if (gatewayHumanMessage) return gatewayHumanMessage;
+  return providerErrorMessage(raw) ?? fallback;
 }
 
 export function backendErrorToastMessage(error: unknown, t: TFunction): string {

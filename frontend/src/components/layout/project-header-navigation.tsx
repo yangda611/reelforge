@@ -100,15 +100,16 @@ export function ProjectXiahuaMenu() {
 }
 
 const xiajiMenuItems = [
-  { labelKey: "nav.ingest", to: PROJECT_SECTION_ROUTES.ingest },
-  { labelKey: "nav.assets", to: PROJECT_SECTION_ROUTES.characters },
+  { labelKey: "nav.ingest", subtitleKey: "nav.ingestHint", to: PROJECT_SECTION_ROUTES.ingest },
+  { labelKey: "nav.assets", subtitleKey: "nav.assetsHint", to: PROJECT_SECTION_ROUTES.characters },
   {
     labelKey: "nav.episodes",
+    subtitleKey: "nav.episodesHint",
     to: PROJECT_SECTION_ROUTES.episodes,
     rememberKey: "episodes",
   },
-  { labelKey: "nav.aiAssistant", to: PROJECT_SECTION_ROUTES.assistant },
-  { labelKey: "nav.styles", to: PROJECT_SECTION_ROUTES.styles },
+  { labelKey: "nav.aiAssistant", subtitleKey: "nav.aiAssistantHint", to: PROJECT_SECTION_ROUTES.assistant },
+  { labelKey: "nav.styles", subtitleKey: "nav.stylesHint", to: PROJECT_SECTION_ROUTES.styles },
 ] as const;
 
 function ProjectAvatar({ name }: { name: string }) {
@@ -274,6 +275,7 @@ export function ProjectXiajiMenu({ project }: { project: string }) {
               key={item.labelKey}
               to={target}
               params={{ project }}
+              title={t(item.subtitleKey)}
               className={cn(
                 PROJECT_SUBMENU_ITEM_CLASS,
                 active ? "text-foreground" : "text-muted-foreground hover:text-foreground",

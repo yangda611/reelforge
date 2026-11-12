@@ -95,6 +95,7 @@ import {
   type SavedMediaModelConfig,
   type SavedProviderChannelConfig,
 } from "@/lib/queries/model-gateway";
+import { useGatewayProbe } from "@/lib/queries/gateway-probe";
 import {
   useSettingsStore,
   FEATURE_MODEL_PROVIDERS,
@@ -173,6 +174,8 @@ export function SettingsDialog({ open, onOpenChange, initialPage, account }: Set
   );
   const statusQuery = useModelGatewayConfig(open && ceRuntime);
   const settingsStatus = statusQuery.data?.data;
+  // P0-1：设置页打开时也探测一次已保存的网关，刷新首页横幅的缓存状态。
+  useGatewayProbe(open && ceRuntime);
   const modelConfigured = Boolean(settingsStatus?.effective.configured);
   const mediaStorageConfigured = Boolean(
     settingsStatus?.mediaRelay?.configured,
@@ -441,6 +444,12 @@ function ModelConfigSection({ open }: { open: boolean }) {
 
   const [mode, setMode] = useState<GatewayMode>("official");
   const modeChosenByUser = useRef(false);
+  // P1-3：「官方」槽位填的是第三方网关地址时，页签改叫「自定义网关（官方槽位）」，
+  // 别让用户以为自己接的是官方中继。地址为空（未配置）时不改名，首跑引导会接手。
+  const officialSlotIsThirdParty = Boolean(
+    config?.official?.baseUrl?.trim() &&
+      !isOfficialRelayBaseUrl(config.official.baseUrl),
+  );
   const [customLlmMode, setCustomLlmMode] =
     useState<CustomLlmMode>("relayclaw_brainclaw");
   const updateCustomLlmMode = useSetCustomLlmMode();
@@ -607,7 +616,11 @@ function ModelConfigSection({ open }: { open: boolean }) {
           <TabsList>
             {GATEWAY_MODES.map((m) => (
               <TabsTrigger key={m} value={m}>
-                {t(`settings.modelConfig.modes.${m}`)}
+                {m === "official" && officialSlotIsThirdParty
+                  ? t("settings.modelConfig.modes.officialCustom", {
+                      defaultValue: "自定义网关（官方槽位）",
+                    })
+                  : t(`settings.modelConfig.modes.${m}`)}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -1151,12 +1164,26 @@ function OfficialGatewayPanel({
       <p className="text-xs leading-relaxed text-muted-foreground">
         {t("settings.modelConfig.official.description")}
       </p>
+      {/* P1-3：官方槽位填的是第三方地址时，按实际状态描述，别再写「官方中继」。 */}
+      {savedBaseUrl.trim() && !isOfficialRelayBaseUrl(savedBaseUrl) ? (
+        <p className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+          {t("settings.modelConfig.official.thirdPartyNote", {
+            defaultValue: "当前地址不是官方中继，文本模型使用下方填写的模型。",
+          })}
+        </p>
+      ) : null}
 
       <div className="rounded-md border border-border/70 px-3 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-medium text-foreground">
-              {t("settings.modelConfig.official.mediaCatalogTitle")}
+              {/* P1-7：第三方网关时以后端给的 catalogLabel 为准；内置目录则点明与当前网关无关。 */}
+              {mediaCatalog?.catalogLabel ??
+                (mediaCatalog?.source === "bundled"
+                  ? t("settings.modelConfig.official.mediaCatalogBundledNote", {
+                      defaultValue: "官方中继内置目录（与当前网关无关）",
+                    })
+                  : t("settings.modelConfig.official.mediaCatalogTitle"))}
             </p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               {mediaCatalog
@@ -1169,6 +1196,21 @@ function OfficialGatewayPanel({
                   })
                 : t("settings.modelConfig.loading")}
             </p>
+            {/* P1-7：第三方网关时列出该网关的模型；后端没给列表时只显示标签 + 数量。 */}
+            {mediaCatalog?.source === "gateway" &&
+            Array.isArray(mediaCatalog.models) &&
+            mediaCatalog.models.length > 0 ? (
+              <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto font-mono text-[11px] leading-relaxed text-muted-foreground">
+                {mediaCatalog.models.map((model, index) => {
+                  const label =
+                    [model.label, model.name, model.id].find(
+                      (value) => typeof value === "string" && value.trim(),
+                    ) ?? "";
+                  if (!label) return null;
+                  return <li key={`${label}-${index}`} className="truncate">{label}</li>;
+                })}
+              </ul>
+            ) : null}
           </div>
           <Button
             type="button"

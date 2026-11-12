@@ -866,12 +866,15 @@ function IngestStartButton({
   isBusy,
   costDisplay,
   promotion,
+  disabledHint,
   onClick,
 }: {
   disabled: boolean;
   isBusy: boolean;
   costDisplay?: string | null;
   promotion?: CreditPromotionDisplay | null;
+  /** 无输入时置灰的原因，悬停提示用。 */
+  disabledHint?: string;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
@@ -880,6 +883,7 @@ function IngestStartButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={disabled && disabledHint ? disabledHint : undefined}
       className="h-auto min-h-8 min-w-[124px] rounded-[8px] bg-primary px-3 py-1 text-xs font-normal text-primary-foreground shadow-none transition-colors hover:bg-primary/85 active:bg-primary/75"
     >
       <span className="grid w-full grid-cols-[12px_52px_auto] items-center justify-center gap-1.5">
@@ -1920,8 +1924,15 @@ export function IngestPageContent({ project }: { project: string }) {
                     isBusy={isStarting || ingestStarted}
                     costDisplay={ingestFeatureCostDisplay}
                     promotion={ingestFeatureCostData?.promotion}
+                    disabledHint={t("ingest.startHint")}
                   />
                 </div>
+                {/* P2-9：没传文件/没粘贴文本时按钮置灰，并明说缺什么。 */}
+                {!canStartFromCurrentInput && !isStarting && !ingestStarted ? (
+                  <p className="col-span-2 mt-1 w-full text-right text-xs text-muted-foreground">
+                    {t("ingest.startHint")}
+                  </p>
+                ) : null}
               </div>
             </motion.section>
           ) : (

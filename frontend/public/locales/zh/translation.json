@@ -70,7 +70,13 @@
     "versionUpdate": {
       "title": "🎉 新功能已上线",
       "confirm": "我知道了",
-      "empty": "当前版本暂无更新说明"
+      "empty": "当前版本暂无更新说明",
+      "introTitle": "欢迎使用 ReelForge",
+      "introBody": "把小说或想法变成短剧：先在虾集导入素材，再到虾画生成剧本和分镜，最后合成导出。",
+      "introStep1": "虾料：上传小说或粘贴文本",
+      "introStep2": "虾画：从模板开始，生成剧本和分镜",
+      "introStep3": "合成：导出成片",
+      "introStart": "开始创作"
     },
     "logoHomeTooltip": "点击返回项目管理中心"
   },
@@ -477,6 +483,10 @@
     "settings": "功能设置",
     "settingsWithWarning": "功能设置，有未配置项",
     "settingsWarningBubble": "有未配置项",
+    "settingsWarningTooltip": {
+      "gateway": "模型与渠道未配置",
+      "mediaStorage": "媒体存储未配置：角色参考图、图生图等功能将失败"
+    },
     "dismissSettingsWarningBubble": "关闭未配置提醒",
     "notifications": "公告中心",
     "account": {
@@ -536,7 +546,8 @@
     "pikoHub": {
       "play": "Piko 一下",
       "companion": "我的搭子",
-      "world": "Piko 小镇"
+      "world": "Piko 小镇",
+      "section": "社区"
     }
   },
   "organization": {
@@ -836,6 +847,9 @@
     },
     "connected": "已连接",
     "connecting": "连接中",
+    "runtimeMissing": "未检测到本地助手运行环境（Codex），请在设置中下载/安装",
+    "runtimeMissingShort": "助手运行环境缺失",
+    "runtimeMissingAction": "去设置安装",
     "reconnecting": "重新连接中",
     "disconnected": "未连接",
     "backendTransport": "OpenClaw / relay",
@@ -2042,7 +2056,12 @@
     "tasks": "虾条",
     "taskCenter": "任务中心",
     "aiAssistant": "虾导",
-    "freezone": "虾画"
+    "freezone": "虾画",
+    "ingestHint": "虾料 — 导入素材",
+    "assetsHint": "虾塘 — 素材库",
+    "episodesHint": "虾镜 — 镜头/分镜",
+    "aiAssistantHint": "虾导 — AI 助手",
+    "stylesHint": "虾格 — 风格设定"
   },
   "characters": {
     "title": "角色",
@@ -2551,6 +2570,9 @@
     "gatewayNotConfiguredTitle": "模型网关未配置",
     "gatewayNotConfiguredDescription": "生成内容需要先配置模型网关：配置官方渠道，或初始化本地 NewAPI。",
     "gatewayNotConfiguredAction": "去配置网关",
+    "gatewayProbeAuthInvalid": "网关 Key 已失效，请前往 设置 → 模型与渠道 更换",
+    "gatewayProbeAuthInvalidAction": "去设置更换",
+    "gatewayProbeUnreachable": "网关暂时无法连接，请检查网络后重试。",
     "gatewayNotConfiguredToast": "请先配置模型网关",
     "pikoWorldEntry": "进入 Piko Piko 世界",
     "pikoWorldEntryDragHint": "点击进入 Piko Piko 世界，按住可拖动",
@@ -2942,6 +2964,13 @@
     "generationContentPolicyBlocked": "错误类型：内容安全审核未通过。模型拒绝了本次生成请求，请调整提示词或更换输入素材后重试。",
     "generationRateLimited": "模型服务暂时限流（HTTP 429），请稍后重试。",
     "gatewayModelRejected": "模型 {{model}} 被网关拒绝：{{gatewayMessage}}",
+    "gatewayErrors": {
+      "authInvalid": "网关返回 401：API Key 无效，请在 设置 → 模型与渠道 中检查或更换 Key。",
+      "timeout": "网关超时，请稍后重试或更换模型。",
+      "modelNotFound": "网关没有该模型，请在设置中更换文本模型。",
+      "viewDetails": "查看详情",
+      "goToSettings": "去设置"
+    },
     "refreshed": "内容已刷新",
     "save": "保存",
     "cancel": "取消",
@@ -3006,6 +3035,7 @@
     },
     "pastePlaceholder": "在这里粘贴小说文本，最多 1000 字",
     "startIngest": "开始导入",
+    "startHint": "请先上传文件或粘贴文本",
     "saveSettings": "保存设置",
     "settingsSaved": "项目设置已保存",
     "settingsSaveFailed": "项目设置保存失败",
@@ -3513,7 +3543,8 @@
     },
     "statusBar": {
       "idle": "空闲",
-      "connecting": "连接中…",
+      "connecting": "正在连接…",
+      "connectingSlow": "首次连接可能需要几秒，请稍候",
       "connected": "已连接",
       "reconnecting": "重新连接中…",
       "polling": "轮询中…",
@@ -4935,6 +4966,17 @@
     "analyzing": "解析中",
     "emptyHintDescription": "双击打开节点面板，按住左键框选节点",
     "emptyHintBeforeTab": "点按",
+    "templatePicker": {
+      "title": "从模板开始",
+      "subtitle": "选一个起点，剧本和脚本生成器已经帮你摆好了",
+      "novel": "小说改编短剧",
+      "novelDesc": "从小说导入，先定剧本再生成分镜",
+      "original": "原创剧本短剧",
+      "originalDesc": "从空白剧本开始写，再生成分镜",
+      "blank": "空白画布",
+      "blankDesc": "什么都没有，自己慢慢搭",
+      "groupLabel": "剧本 → 脚本生成器"
+    },
     "emptyHintAfterTab": "键或双击鼠标新建节点",
     "nodePlacement": {
       "previewHint": "移动鼠标选择落点",
@@ -6621,6 +6663,23 @@
       "videoBreakdown": "逐帧拉片",
       "htmlArtifact": "网页"
     },
+    "menuDesc": {
+      "image": "AI 生成图片，或以图生图",
+      "video": "生成或编辑视频片段",
+      "textAnnotation": "写一段文字、备注或提示词",
+      "videoCompose": "把多个视频拼接成片",
+      "videoBreakdown": "逐帧分析参考视频",
+      "previz": "预演镜头走位",
+      "audio": "生成配音、音乐或音效",
+      "upload": "上传图片或视频做素材",
+      "beatContext": "给镜头补充剧情上下文",
+      "script": "写剧本/分镜文本",
+      "pano360Viewer": "查看 360° 全景画面",
+      "threeDWorld": "导演视角场景",
+      "htmlArtifact": "做一个可交互的网页小工具",
+      "interactiveStory": "和虾导一起做互动影游",
+      "interactiveAd": "和虾导一起做互动广告"
+    },
     "imageNode": {
       "title": "图片节点",
       "prompt": "提示词",
@@ -8223,6 +8282,7 @@
       "gatewayNotConfiguredImpact": "当前生效的模型网关未配置。文本、图片、视频、音频等模型调用会失败；请配置官方渠道或初始化本地 NewAPI 后再生成内容。",
       "modes": {
         "official": "官方",
+        "officialCustom": "自定义网关（官方槽位）",
         "custom": "自定义",
         "hybrid": "本地 + 官方混合"
       },
@@ -8242,15 +8302,18 @@
         "saved": "已保存并切换为官方渠道。",
         "enabled": "已切换为官方渠道。",
         "missingFields": "请填写 API Key。",
-        "textModelHint": "第三方网关使用的文本模型；留空则保存时自动选择。官方中继地址下固定使用 brainclaw，无需填写。",
+        "textModelHint": "第三方网关使用的文本模型；留空则保存时自动选择。当前地址不是官方中继，文本模型使用下方填写的模型。",
+        "thirdPartyNote": "当前地址不是官方中继，文本模型使用下方填写的模型。",
         "textModelPlaceholder": "留空自动选择",
         "textModelTestOk": "网关连通，文本模型：{{model}}",
         "textModelTestCount": "（网关共 {{count}} 个模型）",
         "textModelTestFailed": "网关校验未通过：{{error}}",
         "mediaCatalogTitle": "官方媒体模型列表",
+        "mediaCatalogBundledNote": "官方中继内置目录（与当前网关无关）",
         "mediaCatalogStatus": "版本 {{version}} · {{count}} 个模型 · {{source}}",
         "mediaCatalogSources": {
           "bundled": "应用内置",
+          "gateway": "当前网关",
           "remote": "在线更新"
         },
         "mediaCatalogAutoUpdate": "自动更新官方模型列表",

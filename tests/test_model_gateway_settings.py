@@ -2003,7 +2003,10 @@ def test_official_media_catalog_preferences_and_remote_update(monkeypatch, tmp_p
     assert enabled.json()["data"]["autoUpdate"] is True
     assert checked.status_code == 200, checked.text
     assert checked.json()["data"]["updated"] is True
-    assert current.json()["data"]["source"] == "remote"
+    assert current.json()["data"]["source"] == "bundled"
+    # The remote-install origin moved to catalogOrigin: `source` now answers
+    # the selector question (gateway vs bundled), not the catalog provenance.
+    assert current.json()["data"]["catalogOrigin"] == "remote"
     assert current.json()["data"]["catalogVersion"] == remote_version
     assert current.json()["data"]["modelCount"] == 1
 

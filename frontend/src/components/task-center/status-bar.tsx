@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { useMemo, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronUp, Zap, Circle } from "lucide-react";
+import { ChevronUp, Zap, Circle, Loader2 } from "lucide-react";
 import {
   useTaskCenterStore,
   selectRunningTasks,
@@ -66,6 +66,16 @@ export function TaskStatusBar({ onOpenPikoStation }: TaskStatusBarProps) {
   );
   const health = useTaskCenterStore((s) => s.streamHealth);
   const panelOpen = useAppStore((s) => s.taskPanelOpen);
+  // P2-7：握手超过 3 秒仍在「连接中」时，别让它看着像故障——补一句安抚文案。
+  const [slowConnect, setSlowConnect] = useState(false);
+  useEffect(() => {
+    if (health !== "connecting") {
+      setSlowConnect(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowConnect(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [health]);
   const setOpen = useAppStore((s) => s.setTaskPanelOpen);
   const setSelected = useTaskCenterStore((s) => s.setSelected);
 
@@ -201,11 +211,20 @@ export function TaskStatusBar({ onOpenPikoStation }: TaskStatusBarProps) {
       </div>
       <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
         <span className="ml-1.5 flex items-center gap-1">
-          <Circle className={cn("size-1 fill-current", HEALTH_COLOR[health])} />
+          {health === "connecting" || health === "reconnecting" ? (
+            <Loader2 className="size-3 animate-spin text-muted-foreground" aria-hidden />
+          ) : (
+            <Circle className={cn("size-1 fill-current", HEALTH_COLOR[health])} />
+          )}
           <span className="sr-only" aria-live="polite">
             {t(`taskCenter.statusBar.${health}`)}
           </span>
           <span aria-hidden="true">{t(`taskCenter.statusBar.${health}`)}</span>
+          {health === "connecting" && slowConnect ? (
+            <span className="text-muted-foreground/70">
+              · {t("taskCenter.statusBar.connectingSlow")}
+            </span>
+          ) : null}
         </span>
         <span
           className="shrink-0 font-normal tabular-nums text-muted-foreground"

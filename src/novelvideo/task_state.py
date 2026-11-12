@@ -17,6 +17,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -26,7 +27,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from novelvideo.i18n_message import (
     MessageLike,
@@ -86,6 +87,59 @@ def _queue_kind_from_metadata(metadata: dict | None, fallback: str | None = None
     if metadata:
         raw = metadata.get("queue_kind")
     return normalize_queue_kind(str(raw) if raw is not None else fallback)
+
+
+# P2-5: gateway errors arrive as a structured string,
+# ``status_code: 401, model_name: gpt-6-astra, body: {...}``. Extract the
+# status code and model so a failed task record carries them for the
+# frontend to translate, instead of only a raw dump in ``error``.
+_GATEWAY_STATUS_CODE_RE = re.compile(r"status_code:\s*(\d{3})")
+_GATEWAY_MODEL_RE = re.compile(r"model_name:\s*([A-Za-z0-9_.\-+]+)")
+
+
+def extract_gateway_failure_info(
+    error: str | None, metadata: dict | None
+) -> dict[str, Any]:
+    """Pull gateway status code / model out of an error string or metadata."""
+    info: dict[str, Any] = {}
+    meta = metadata if isinstance(metadata, dict) else {}
+    code = meta.get("gateway_status_code", meta.get("status_code"))
+    code_int: int | None = None
+    try:
+        code_int = int(code) if code is not None else None
+    except (TypeError, ValueError):
+        code_int = None
+    if code_int is None and error:
+        match = _GATEWAY_STATUS_CODE_RE.search(str(error))
+        if match:
+            code_int = int(match.group(1))
+    if code_int is not None:
+        info["gateway_status_code"] = code_int
+    model = meta.get("gateway_model", meta.get("model_name", meta.get("model")))
+    if not model and error:
+        match = _GATEWAY_MODEL_RE.search(str(error))
+        if match:
+            model = match.group(1)
+    if model:
+        info["gateway_model"] = str(model)
+    return info
+
+
+def failure_status_text(error: str | None, metadata: dict | None) -> str:
+    """One-line terminal failure text for ``current_task``.
+
+    A failed task must not keep its starting progress copy ("开始生成故事
+    脚本... 10%"): the terminal state overwrites it, e.g. with the gateway
+    status code the frontend translates ("生成失败：网关 401").
+    """
+    info = extract_gateway_failure_info(error, metadata)
+    code = info.get("gateway_status_code")
+    if code is not None:
+        return f"生成失败：网关 {code}"
+    text = (str(error or "").strip().splitlines() or [""])[0].strip()
+    if text:
+        return f"生成失败：{text[:80]}"
+    return "生成失败"
 
 
 def _env_int(name: str, default: int, *, fallback_name: str | None = None) -> int:
@@ -1276,8 +1330,23 @@ class TaskStateManager:
         if progress is not None:
             state.progress = progress
         self._apply_progress_message(state, current_task, logs)
-        if metadata is not None:
-            state.metadata = self._merge_task_metadata(state.metadata, metadata)
+        failure_info = extract_gateway_failure_info(error, metadata)
+        effective_metadata = (
+            self._merge_task_metadata(metadata, failure_info)
+            if failure_info
+            else metadata
+        )
+        if current_task is None:
+            # Terminal state replaces the starting progress copy ("开始生成
+            # 故事脚本... 10%") with the translated failure line, and clears
+            # any stale i18n code so the frontend does not translate the
+            # new Chinese text with the old code.
+            state.current_task = failure_status_text(error, effective_metadata)
+            state.metadata = self._merge_task_metadata(
+                state.metadata, {"current_task_message": None}
+            )
+        if effective_metadata is not None:
+            state.metadata = self._merge_task_metadata(state.metadata, effective_metadata)
             state.result = self._merge_metadata_into_result(state.result, state.metadata)
         state.completed_at = utc_now_iso()
         state.updated_at = utc_now_iso()
@@ -1346,8 +1415,23 @@ class TaskStateManager:
         if progress is not None:
             state.progress = progress
         self._apply_progress_message(state, current_task, logs)
-        if metadata is not None:
-            state.metadata = self._merge_task_metadata(state.metadata, metadata)
+        failure_info = extract_gateway_failure_info(error, metadata)
+        effective_metadata = (
+            self._merge_task_metadata(metadata, failure_info)
+            if failure_info
+            else metadata
+        )
+        if current_task is None:
+            # Terminal state replaces the starting progress copy ("开始生成
+            # 故事脚本... 10%") with the translated failure line, and clears
+            # any stale i18n code so the frontend does not translate the
+            # new Chinese text with the old code.
+            state.current_task = failure_status_text(error, effective_metadata)
+            state.metadata = self._merge_task_metadata(
+                state.metadata, {"current_task_message": None}
+            )
+        if effective_metadata is not None:
+            state.metadata = self._merge_task_metadata(state.metadata, effective_metadata)
             state.result = self._merge_metadata_into_result(state.result, state.metadata)
         state.completed_at = utc_now_iso()
         state.updated_at = utc_now_iso()

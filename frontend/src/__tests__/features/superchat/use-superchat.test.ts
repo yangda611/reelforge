@@ -5353,10 +5353,10 @@ describe("Freezone chat scope", () => {
       canvasId: "canvas-a",
     });
     expect(scopeSessionKeyForTest(canvasA)).toBe(
-      "supertale:project:project-a:freezone:canvas-a:agent:main",
+      "reelforge:project:project-a:freezone:canvas-a:agent:main",
     );
     expect(scopeSessionKeyForTest(canvasB)).toBe(
-      "supertale:project:project-a:freezone:canvas-b:agent:main",
+      "reelforge:project:project-a:freezone:canvas-b:agent:main",
     );
   });
 
@@ -5372,10 +5372,10 @@ describe("Freezone chat scope", () => {
       agentId: "main",
     });
     expect(scopeSessionKeyForTest(agentA)).toBe(
-      "supertale:project:project-a:freezone:canvas-a:agent:main",
+      "reelforge:project:project-a:freezone:canvas-a:agent:main",
     );
     expect(scopeSessionKeyForTest(agentB)).toBe(
-      "supertale:project:project-a:freezone:canvas-a:agent:agent-2",
+      "reelforge:project:project-a:freezone:canvas-a:agent:agent-2",
     );
   });
 
@@ -5388,7 +5388,7 @@ describe("Freezone chat scope", () => {
       surface: "director",
       canvasId: null,
     });
-    expect(scopeSessionKeyForTest(director)).toBe("supertale:project:project-a:director");
+    expect(scopeSessionKeyForTest(director)).toBe("reelforge:project:project-a:director");
   });
 });
 

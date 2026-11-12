@@ -42,6 +42,7 @@ except Exception:
 
 from novelvideo.api.routes import (  # noqa: E402
     assets,
+    assistant,
     auth,
     characters,
     chat,
@@ -113,6 +114,7 @@ api_router.include_router(openfilm.router)
 api_router.include_router(diagnostics.router, tags=["diagnostics"])
 api_router.include_router(product_surfaces.router, tags=["product-surfaces"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(piko.router, tags=["piko"])
 api_router.include_router(projects.router, tags=["projects"])
 api_router.include_router(ingest.router, tags=["ingest"])
