@@ -562,6 +562,21 @@ def build_freezone_character_story_script_task(
     return "\n\n".join(parts)
 
 
+async def _run_story_script_stream(agent: Agent, user_prompt: Any) -> Any:
+    """流式跑结构化故事脚本生成，返回校验后的输出。
+
+    必须走 ``run_stream``：非流式 ``.run()`` 要等完整输出才返回，故事脚本
+    一次生成常超过 Cloudflare 120 秒 Proxy Read Timeout，连接会被掐成 524
+    （freezone 画布「生成故事脚本」4/4 失败的根因）。流式让 token 持续回流，
+    每块数据都会重置 Cloudflare 的 120 秒窗口。
+
+    结构化约束不变：``output_type`` / ``output_retries`` 都在 agent 上，
+    ``get_output()`` 返回的仍是校验后的 ``FreezoneStoryScriptGenerateData``。
+    """
+    async with agent.run_stream(user_prompt) as result:
+        return await result.get_output()
+
+
 async def generate_freezone_story_script(
     *,
     source_text: str,
@@ -582,8 +597,9 @@ async def generate_freezone_story_script(
     from novelvideo.model_gateway_runtime import model_gateway_request_scope
 
     with model_gateway_request_scope(egress_context):
-        response = await get_freezone_story_script_agent(model).run(task)
-    return response.output
+        return await _run_story_script_stream(
+            get_freezone_story_script_agent(model), task
+        )
 
 
 def create_freezone_video_story_script_agent() -> Agent:
@@ -681,10 +697,9 @@ async def generate_freezone_story_script_with_vision(
     from novelvideo.model_gateway_runtime import model_gateway_request_scope
 
     with model_gateway_request_scope(egress_context):
-        response = await get_freezone_video_story_script_agent().run(
-            [task, *attachments]
+        return await _run_story_script_stream(
+            get_freezone_video_story_script_agent(), [task, *attachments]
         )
-    return response.output
 
 
 def bind_story_script_assets(

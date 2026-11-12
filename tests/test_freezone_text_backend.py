@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import io
 import json
 from pathlib import Path
@@ -533,12 +534,17 @@ async def test_generate_story_script_with_vision_attaches_frames(
 
     class FakeAgent:
         async def run(self, messages):
+            raise AssertionError("故事脚本生成已改走流式 run_stream")
+
+        @asynccontextmanager
+        async def run_stream(self, messages):
             captured["messages"] = messages
 
-            class Response:
-                output = FreezoneStoryScriptGenerateData(title="", rows=[])
+            class _StreamResult:
+                async def get_output(self):
+                    return FreezoneStoryScriptGenerateData(title="", rows=[])
 
-            return Response()
+            yield _StreamResult()
 
     monkeypatch.setattr(
         "novelvideo.freezone.text_node.get_freezone_video_story_script_agent",
@@ -592,12 +598,17 @@ async def test_generate_story_script_with_vision_accepts_character_images_only(
 
     class FakeAgent:
         async def run(self, messages):
+            raise AssertionError("故事脚本生成已改走流式 run_stream")
+
+        @asynccontextmanager
+        async def run_stream(self, messages):
             captured["messages"] = messages
 
-            class Response:
-                output = FreezoneStoryScriptGenerateData(title="", rows=[])
+            class _StreamResult:
+                async def get_output(self):
+                    return FreezoneStoryScriptGenerateData(title="", rows=[])
 
-            return Response()
+            yield _StreamResult()
 
     monkeypatch.setattr(
         "novelvideo.freezone.text_node.get_freezone_video_story_script_agent",

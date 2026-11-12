@@ -401,7 +401,10 @@ function ScriptTabContent() {
         return;
       }
       if (identityIds.length === 0) {
+        // 身份未规划是前置拦截：只弹 4 秒 toast 用户根本注意不到（R5 实测死点击）。
+        // 除了 toast，再直接打开身份选择器：弹窗常驻，可当场选身份或 AI 规划。
         toast.error(t("episode.script.identityRequired"));
+        setPickerOpen(true);
         return;
       }
       const res = await generateScript.mutateAsync({});

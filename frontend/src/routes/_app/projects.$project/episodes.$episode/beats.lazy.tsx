@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { createLazyFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   useCallback,
   useEffect,
@@ -119,6 +119,7 @@ export function BeatsTabContent() {
   // Route params
   const { project, episode } = Route.useParams();
   const epNum = parseInt(episode, 10);
+  const navigate = useNavigate();
   const actionsSlot = useEpisodeActionsSlot();
   useEpisodeImageTaskInvalidation(project, epNum);
 
@@ -528,7 +529,9 @@ export function BeatsTabContent() {
   });
   const handleGenerate = async () => {
     if (!identityPlanReady) {
-      toast.error(t("episode.script.identityRequired"));
+      // 身份未规划是前置拦截：只弹 4 秒 toast 用户根本注意不到（R5 实测死点击）。
+      // 改成常驻弹窗，点「规划身份」直接跳到脚本页的资产规划。
+      setIdentityRequiredOpen(true);
       return;
     }
     try {
@@ -561,6 +564,15 @@ export function BeatsTabContent() {
 
   // Confirm dialog state for empty-state generate
   const [genBeatsConfirm, setGenBeatsConfirm] = useState(false);
+  // 身份未规划拦截弹窗：常驻提示 + 跳转去规划，替代一闪而过的 toast。
+  const [identityRequiredOpen, setIdentityRequiredOpen] = useState(false);
+  const goPlanIdentities = () => {
+    setIdentityRequiredOpen(false);
+    void navigate({
+      to: "/projects/$project/episodes/$episode/script",
+      params: { project, episode: String(epNum) },
+    });
+  };
   const [gridGalleryOpen, setGridGalleryOpen] = useState(false);
   const [renderGridGalleryOpen, setRenderGridGalleryOpen] = useState(false);
 
@@ -587,10 +599,16 @@ export function BeatsTabContent() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setGenBeatsConfirm(true)}
-          disabled={
-            !identityPlanReady || generateScript.isPending || scriptTask.started
-          }
+          onClick={() => {
+            // 身份未规划时按钮不再直接禁用（禁用态点按零反馈，像死点击）。
+            // 改成可点：点后弹常驻提示，引导去脚本页规划身份。
+            if (!identityPlanReady) {
+              setIdentityRequiredOpen(true);
+              return;
+            }
+            setGenBeatsConfirm(true);
+          }}
+          disabled={generateScript.isPending || scriptTask.started}
           className={cn(EMPTY_STATE_ACTION_BUTTON_CLASS, "[&_svg]:size-3.5")}
           title={
             identityPlanReady
@@ -626,6 +644,27 @@ export function BeatsTabContent() {
                 }}
               >
                 {t("common.confirmExecute")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog
+          open={identityRequiredOpen}
+          onOpenChange={setIdentityRequiredOpen}
+        >
+          <AlertDialogContent className={GLASS_ALERT_DIALOG_CONTENT_CLASS}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {t("episode.script.noIdentities")}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("episode.script.identityRequired")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={goPlanIdentities}>
+                {t("episode.script.planIdentities")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
