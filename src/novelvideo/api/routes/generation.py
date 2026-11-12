@@ -1019,8 +1019,8 @@ async def _prepare_happyhorse_api_beat(
     prop_menu: list[Any] | None = None,
 ) -> dict[str, Any]:
     from novelvideo.seedance2_i2v.assets import (
-        append_seedance2_user_reference_assets,
         build_seedance2_project_assets,
+        resolve_beat_video_references,
         selected_reference_paths,
     )
     from novelvideo.seedance2_i2v.models import (
@@ -1061,11 +1061,11 @@ async def _prepare_happyhorse_api_beat(
             next_beat=next_beat,
             prop_menu=prop_menu,
         )
-        append_seedance2_user_reference_assets(
-            assets,
-            reference_image_paths=list(config.reference_image_paths),
-            reference_audio_paths=[],
+        resolved_user_references, _declared, missing = resolve_beat_video_references(
+            list(config.reference_image_paths), [], assets=assets
         )
+        if missing:
+            raise ValueError("视频参考素材缺失或校验失败：" + "；".join(missing))
         image_paths = selected_reference_paths(assets, "reference_images")
         config.reference_image_paths = list(dict.fromkeys(image_paths))[:9]
         config.reference_audio_paths = []
@@ -1101,8 +1101,8 @@ async def _prepare_grok_video_api_beat(
     prop_menu: list[Any] | None = None,
 ) -> dict[str, Any]:
     from novelvideo.seedance2_i2v.assets import (
-        append_seedance2_user_reference_assets,
         build_seedance2_project_assets,
+        resolve_beat_video_references,
         selected_reference_paths,
     )
     from novelvideo.seedance2_i2v.models import (
@@ -1143,11 +1143,11 @@ async def _prepare_grok_video_api_beat(
             next_beat=next_beat,
             prop_menu=prop_menu,
         )
-        append_seedance2_user_reference_assets(
-            assets,
-            reference_image_paths=list(config.reference_image_paths),
-            reference_audio_paths=[],
+        resolved_user_references, _declared, missing = resolve_beat_video_references(
+            list(config.reference_image_paths), [], assets=assets
         )
+        if missing:
+            raise ValueError("视频参考素材缺失或校验失败：" + "；".join(missing))
         image_paths = selected_reference_paths(assets, "reference_images")
         config.reference_image_paths = list(dict.fromkeys(image_paths))[:7]
         config.reference_audio_paths = []
@@ -4821,6 +4821,7 @@ async def generate_single_video(
     happyhorse_ratio: str | None = None
     grok_video_references: list[dict[str, str]] = []
     grok_video_ratio: str | None = None
+    resolved_video_references: list[dict[str, str]] = []
     if is_seedance2:
         try:
             request_config_json = _merge_seedance2_request_config(
@@ -4957,8 +4958,46 @@ async def generate_single_video(
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
     else:
+        try:
+            request_config_json = _merge_seedance2_request_config(
+                beat,
+                seedance2_config_json=body.seedance2_config_json,
+                config_overrides=_seedance2_request_config_overrides(body),
+            )
+            if request_config_json and hasattr(store, "update_beat_asset"):
+                await store.update_beat_asset(
+                    episode_number=episode_num,
+                    beat_number=beat_num,
+                    seedance2_config_json=request_config_json,
+                )
+            from novelvideo.seedance2_i2v.models import parse_seedance2_config
+            from novelvideo.seedance2_i2v.assets import resolve_beat_video_references
+
+            merged_config = parse_seedance2_config(beat.get("seedance2_config_json"))
+            resolved_assets, declared_count, missing = resolve_beat_video_references(
+                list(merged_config.reference_image_paths),
+                list(merged_config.reference_audio_paths),
+            )
+            if missing:
+                condition = "全部丢失" if len(missing) == declared_count else "部分丢失"
+                return {
+                    "ok": False,
+                    "error": f"视频参考素材{condition}（声明 {declared_count} 项，可用 {declared_count - len(missing)} 项）：" + "；".join(missing),
+                }
+            resolved_video_references = [
+                {
+                    "type": asset.media_type,
+                    "path": str(asset.path),
+                    "role": asset.reference_label,
+                }
+                for asset in resolved_assets
+                if asset.selected
+            ]
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if not prompt.strip():
             return {"ok": False, "error": _missing_video_prompt_error(beat_num)}
+
         # 非 seedance2 后端（含 seedance-1.5-pro）：透传用户选择的时长/清晰度，
         # 并保证视频时长不短于音频（与 1.0 的 duration_floor 行为一致；
         # 生成器侧再按模型上限 4-12 夹紧并向上取整）。
@@ -5006,6 +5045,8 @@ async def generate_single_video(
     if is_grok_video:
         config["ratio"] = _grok_video_ratio_for_backend(grok_video_ratio)
         config["references"] = grok_video_references
+    elif resolved_video_references:
+        config["references"] = resolved_video_references
 
     billing_resolution = single_video_resolution or _seedance2_resolution_for_backend(
         body.video_backend,

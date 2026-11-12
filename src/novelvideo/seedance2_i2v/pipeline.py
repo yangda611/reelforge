@@ -13,7 +13,7 @@ from novelvideo.seedance2_i2v.character_voice_storage import probe_voice_sample_
 from novelvideo.seedance2_i2v.assets import (
     Seedance2ResolvedAsset,
     apply_prompt_audio_selection,
-    append_seedance2_user_reference_assets,
+    resolve_beat_video_references,
     build_seedance2_project_assets,
     selected_reference_paths,
 )
@@ -205,11 +205,26 @@ def collect_seedance2_video_prereq_errors(
             prop_menu=prop_menu,
         )
         final_prompt = str(config.final_prompt or "").strip()
-        append_seedance2_user_reference_assets(
-            assets,
-            reference_image_paths=list(config.reference_image_paths),
-            reference_audio_paths=list(config.reference_audio_paths),
+        resolved_user_references, _declared_count, missing_user_references = (
+            resolve_beat_video_references(
+                list(config.reference_image_paths),
+                list(config.reference_audio_paths),
+                assets=assets,
+            )
         )
+        if missing_user_references:
+            errors.extend(
+                Seedance2VideoPrereqError(
+                    beat_number=int(beat.get("beat_number") or index + 1),
+                    key=asset.key,
+                    label=f"{asset.label}（{asset.validation_error or '文件不存在'}）",
+                    media_type=asset.media_type,
+                    path=str(asset.path),
+                    reason="reference_missing_or_invalid",
+                )
+                for asset in resolved_user_references
+                if not asset.selected
+            )
         assets = apply_prompt_audio_selection(
             assets, final_prompt, generate_audio=config.generate_audio
         )
@@ -277,11 +292,18 @@ async def prepare_seedance2_generation_inputs(
         characters=characters,
         prop_menu=prop_menu,
     )
-    append_seedance2_user_reference_assets(
-        assets,
-        reference_image_paths=list(config.reference_image_paths),
-        reference_audio_paths=list(config.reference_audio_paths),
+    resolved_user_references, _declared_count, missing_user_references = (
+        resolve_beat_video_references(
+            list(config.reference_image_paths),
+            list(config.reference_audio_paths),
+            assets=assets,
+        )
     )
+    if missing_user_references:
+        raise ValueError(
+            "Seedance 2.0 参考素材缺失或校验失败："
+            + "；".join(missing_user_references)
+        )
 
     target_duration = int(config.duration or duration or 0)
     config.duration = target_duration

@@ -68,6 +68,75 @@ def test_video_enhance_quote_carries_trusted_frame_rate_inputs() -> None:
     assert billing["pricing_stages"][1]["slowdown"] == "5x"
 
 
+def test_resolve_beat_video_references_returns_images_audio_and_missing(
+    tmp_path: Path,
+) -> None:
+    from novelvideo.seedance2_i2v.assets import resolve_beat_video_references
+
+    image_a = tmp_path / "a.png"
+    image_b = tmp_path / "b.png"
+    audio = tmp_path / "voice.wav"
+    for path in (image_a, image_b, audio):
+        path.write_bytes(b"media")
+
+    references, declared, missing = resolve_beat_video_references(
+        [str(image_a), str(image_b)], [str(audio)]
+    )
+    assert declared == 3
+    assert missing == []
+    assert [(item.media_type, item.reference_label) for item in references] == [
+        ("image", "图片1"),
+        ("image", "图片2"),
+        ("audio", "音频1"),
+    ]
+
+    _references, declared, missing = resolve_beat_video_references(
+        [str(tmp_path / "gone-a.png"), str(tmp_path / "gone-b.png")], []
+    )
+    assert declared == 2
+    assert len(missing) == 2
+
+
+@pytest.mark.asyncio
+async def test_all_reference_mode_keeps_first_frame_and_reference_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from novelvideo.generators.video_generator import NewApiVideoGenerator
+
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example/v1",
+        model="ntt-720p",
+        resolution="720p",
+        generate_audio=False,
+    )
+    relayed: list[str] = []
+
+    async def fake_relay(path: str, **_kwargs: object) -> str:
+        relayed.append(path)
+        return f"https://relay.example/{Path(path).name}"
+
+    monkeypatch.setattr(generator, "_relay_frame_input", fake_relay)
+    metadata: dict[str, object] = {}
+    await generator._apply_huimeng_protocol_media_inputs(
+        metadata,
+        mode="all_reference",
+        image_path="/tmp/first.png",
+        last_frame_path=None,
+        references=[
+            type("Reference", (), {"type": "image", "path": "/tmp/ref.png", "role": "图片1"})()
+        ],
+        log=lambda _message: None,
+    )
+    payload: dict[str, object] = {"model": "ntt-720p", "metadata": metadata}
+    NewApiVideoGenerator._canonicalize_video_payload(
+        payload, metadata, promote_reference_media=True
+    )
+    assert payload["image"] == "https://relay.example/first.png"
+    assert payload["images"] == ["https://relay.example/ref.png"]
+    assert relayed == ["/tmp/first.png", "/tmp/ref.png"]
+
+
 def test_canonicalize_video_payload_promotes_reference_media_to_top_level() -> None:
     from novelvideo.generators.video_generator import NewApiVideoGenerator
 

@@ -1189,6 +1189,31 @@ def append_seedance2_user_reference_assets(
         )
 
 
+def resolve_beat_video_references(
+    reference_image_paths: list[str],
+    reference_audio_paths: list[str],
+    *,
+    assets: list[Seedance2ResolvedAsset] | None = None,
+) -> tuple[list[Seedance2ResolvedAsset], int, list[str]]:
+    """Resolve declared user references and report missing or invalid files."""
+    result = assets if assets is not None else []
+    initial_length = len(result)
+    declared = sum(bool(str(path or "").strip()) for path in reference_image_paths)
+    declared += sum(bool(str(path or "").strip()) for path in reference_audio_paths)
+    append_seedance2_user_reference_assets(
+        result,
+        reference_image_paths=reference_image_paths,
+        reference_audio_paths=reference_audio_paths,
+    )
+    resolved = result[initial_length:]
+    missing = [
+        f"{asset.path} ({asset.validation_error or '文件不存在'})"
+        for asset in resolved
+        if not asset.selected
+    ]
+    return resolved, declared, missing
+
+
 def apply_prompt_audio_selection(
     assets: list[Seedance2ResolvedAsset],
     final_prompt: str,

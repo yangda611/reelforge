@@ -2281,6 +2281,8 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             return
 
         raw_items: list[tuple[str, str, str]] = []
+        if normalized_mode == "all_reference" and image_path:
+            metadata["image_url"] = await self._relay_frame_input(image_path)
         for ref in references if isinstance(references, list) else []:
             media_type = str(getattr(ref, "type", "") or "image").strip().lower()
             path = str(getattr(ref, "path", "") or "").strip()
@@ -3343,6 +3345,14 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             from novelvideo.seedance2_i2v.request import build_seedance2_huimeng_params
 
             has_references = any(reference_params.values())
+            declared_reference_paths = (
+                list(seedance2_config.get("reference_image_paths") or [])
+                + list(seedance2_config.get("reference_audio_paths") or [])
+            )
+            if declared_reference_paths and not has_references:
+                return await fail_before_submit(
+                    "Seedance 2.0 references were declared but none could be relayed"
+                )
             if last_frame:
                 mode = Seedance2I2VMode.FIRST_LAST_FRAME
             elif has_references:
@@ -3403,11 +3413,11 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         "first_last_frame"
                         if last_frame_path
                         else (
-                            "first_frame"
-                            if image_path
+                            "all_reference"
+                            if kwargs.get("references")
                             else (
-                                "all_reference"
-                                if kwargs.get("references")
+                                "first_frame"
+                                if image_path
                                 else "text_to_video"
                             )
                         )
