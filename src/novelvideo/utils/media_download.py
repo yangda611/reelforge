@@ -2,18 +2,88 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
+import ipaddress
 import os
+import socket
 import tempfile
 from pathlib import Path
+from typing import Mapping
+from urllib.parse import urljoin
 
 import aiohttp
+from yarl import URL
 
 from novelvideo.ports.video_delivery import VideoDeliveryError, VideoDeliveryReceipt
 
 _CHUNK_SIZE = 1024 * 1024
+
+
+class _PublicResolver(aiohttp.abc.AbstractResolver):
+    """Resolve public destinations and pin those addresses for the request."""
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        try:
+            results = await asyncio.get_running_loop().getaddrinfo(
+                host,
+                port,
+                type=socket.SOCK_STREAM,
+                family=socket.AF_UNSPEC,
+            )
+            addresses = [ipaddress.ip_address(item[4][0]) for item in results]
+        except ValueError as exc:
+            raise VideoDeliveryError(
+                "VIDEO_DOWNLOAD_URL_INVALID", retryable=False
+            ) from exc
+        if not addresses or any(not address.is_global for address in addresses):
+            raise VideoDeliveryError("VIDEO_DOWNLOAD_URL_INVALID", retryable=False)
+        return [
+            {
+                "hostname": host,
+                "host": item[4][0],
+                "port": port,
+                "family": item[0],
+                "proto": item[2],
+                "flags": 0,
+            }
+            for item in results
+        ]
+
+    async def close(self):
+        pass
+
+
+def _validate_public_http_url(url: str) -> None:
+    try:
+        # Match aiohttp's canonical host, including IDNA-normalized IP literals.
+        parsed = URL(url)
+        parsed.port
+    except ValueError as exc:
+        raise VideoDeliveryError("VIDEO_DOWNLOAD_URL_INVALID", retryable=False) from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.raw_host
+        or parsed.user is not None
+        or parsed.password is not None
+    ):
+        raise VideoDeliveryError("VIDEO_DOWNLOAD_URL_INVALID", retryable=False)
+    try:
+        address = ipaddress.ip_address(parsed.raw_host)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise VideoDeliveryError("VIDEO_DOWNLOAD_URL_INVALID", retryable=False)
+
+
+async def _validate_public_redirect(session, context, params) -> None:
+    location = params.response.headers.get("Location") or params.response.headers.get(
+        "URI"
+    )
+    if location:
+        _validate_public_http_url(urljoin(str(params.response.url), location))
 
 
 async def download_to_path(
@@ -22,8 +92,13 @@ async def download_to_path(
     *,
     expected_size: int | None = None,
     expected_sha256: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    public_only: bool = False,
 ) -> VideoDeliveryReceipt:
     """Stream media into a sibling temp file and atomically publish it."""
+
+    if public_only:
+        _validate_public_http_url(url)
 
     destination = Path(output_path)
     try:
@@ -52,8 +127,17 @@ async def download_to_path(
                 size = len(chunk)
             else:
                 timeout = aiohttp.ClientTimeout(total=600)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
+                session_options = {"timeout": timeout}
+                if public_only:
+                    trace = aiohttp.TraceConfig()
+                    trace.on_request_redirect.append(_validate_public_redirect)
+                    session_options["trace_configs"] = [trace]
+                    session_options["connector"] = aiohttp.TCPConnector(
+                        resolver=_PublicResolver(), use_dns_cache=False
+                    )
+                async with aiohttp.ClientSession(**session_options) as session:
+                    request_options = {"headers": headers} if headers else {}
+                    async with session.get(url, **request_options) as response:
                         if response.status < 200 or response.status >= 300:
                             raise VideoDeliveryError(
                                 f"VIDEO_DOWNLOAD_HTTP_{response.status}", retryable=True

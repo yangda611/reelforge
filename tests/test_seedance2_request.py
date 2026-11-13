@@ -942,6 +942,33 @@ def test_newapi_video_result_url_prefers_normalized_task_result():
     )
 
 
+def test_newapi_video_result_url_prefers_provider_url_over_local_content_proxy():
+    from novelvideo.generators.video_generator import NewApiVideoGenerator
+
+    task = NewApiVideoGenerator._task_response_data(
+        {
+            "code": "success",
+            "data": {
+                "task_id": "task-wrapped",
+                "status": "SUCCESS",
+                "result_url": "http://localhost:3000/v1/videos/task-wrapped/content",
+                "data": {
+                    "metadata": {"url": "https://cdn.example/video.mp4?sig=abc"}
+                },
+            },
+        }
+    )
+
+    assert (
+        NewApiVideoGenerator._extract_video_url(task)
+        == "https://cdn.example/video.mp4?sig=abc"
+    )
+    assert NewApiVideoGenerator._extract_video_url_and_policy(task) == (
+        "https://cdn.example/video.mp4?sig=abc",
+        True,
+    )
+
+
 @pytest.mark.parametrize(
     ("task", "expected"),
     [
