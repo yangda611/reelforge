@@ -2108,10 +2108,36 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         f"DramaClawAPI task query returned invalid JSON: {text}"
                     ) from exc
 
-    async def _download_video(self, url: str, output_path: str) -> VideoDeliveryReceipt:
+    async def _download_video(
+        self,
+        url: str,
+        output_path: str,
+        *,
+        public_only: bool = False,
+    ) -> VideoDeliveryReceipt:
         from novelvideo.utils.media_download import download_to_path
 
-        return await download_to_path(url, output_path)
+        result = urllib.parse.urlsplit(url)
+        gateway = urllib.parse.urlsplit(self.base_url)
+        headers = None
+        if self.api_key and result.scheme in {"http", "https"}:
+            result_origin = (
+                result.scheme,
+                result.hostname,
+                result.port or (443 if result.scheme == "https" else 80),
+            )
+            gateway_origin = (
+                gateway.scheme,
+                gateway.hostname,
+                gateway.port or (443 if gateway.scheme == "https" else 80),
+            )
+            if result_origin == gateway_origin:
+                # Gateway content endpoints require the same token as polling.
+                # Never send that token to a provider/CDN result URL.
+                headers = {"Authorization": self.headers["Authorization"]}
+        return await download_to_path(
+            url, output_path, headers=headers, public_only=public_only
+        )
 
     @staticmethod
     def _archive_state(task: dict) -> tuple[str, bool] | None:
@@ -2654,24 +2680,53 @@ class NewApiVideoGenerator(VideoGeneratorBase):
 
     @staticmethod
     def _extract_video_url(task: dict) -> str:
+        return NewApiVideoGenerator._extract_video_url_and_policy(task)[0]
+
+    @staticmethod
+    def _extract_video_url_and_policy(task: dict) -> tuple[str, bool]:
         if not isinstance(task, dict):
-            return ""
+            return "", False
 
         result_url = task.get("result_url")
         if isinstance(result_url, str) and result_url.strip():
-            return result_url.strip()
+            result_url = result_url.strip()
+            parsed_result = urllib.parse.urlsplit(result_url)
+            if (
+                parsed_result.hostname in {"localhost", "127.0.0.1", "::1"}
+                and parsed_result.path.startswith("/v1/videos/")
+                and parsed_result.path.endswith("/content")
+            ):
+                result_data = task.get("data")
+                metadata = (
+                    result_data.get("metadata")
+                    if isinstance(result_data, dict)
+                    else None
+                )
+                if isinstance(metadata, dict):
+                    for key in ("url", "video_url"):
+                        candidate = metadata.get(key)
+                        if not isinstance(candidate, str) or not candidate.strip():
+                            continue
+                        candidate = candidate.strip()
+                        parsed_candidate = urllib.parse.urlsplit(candidate)
+                        if (
+                            parsed_candidate.scheme in {"http", "https"}
+                            and parsed_candidate.hostname
+                        ):
+                            return candidate, True
+            return result_url, False
 
         metadata = task.get("metadata")
         if isinstance(metadata, dict):
             for key in ("url", "video_url"):
                 value = metadata.get(key)
                 if isinstance(value, str) and value.strip():
-                    return value.strip()
+                    return value.strip(), False
         for key in ("url", "video_url"):
             value = task.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
+                return value.strip(), False
+        return "", False
 
     def _resolve_result_url(self, result_url: str) -> str:
         """Make gateway-local result URLs reachable from this process."""
@@ -3654,7 +3709,11 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             )
 
                     progress(0.9)
-                    video_url = self._resolve_result_url(self._extract_video_url(task))
+                    video_url, public_only_result = self._extract_video_url_and_policy(
+                        task
+                    )
+                    if not public_only_result:
+                        video_url = self._resolve_result_url(video_url)
                     archived_source = (
                         self._archived_video_source(task, fallback_url=video_url)
                         if archive_delivery is not None
@@ -3732,11 +3791,17 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                     "视频生成完成，正在下载...",
                                 )
                             )
-                            delivery = await self._download_video(
-                                video_url, output_path
-                            )
+                            if public_only_result:
+                                delivery = await self._download_video(
+                                    video_url, output_path, public_only=True
+                                )
+                            else:
+                                delivery = await self._download_video(
+                                    video_url, output_path
+                                )
                     except VideoDeliveryError as exc:
                         last_delivery_error = exc.code
+                        log(f"[video_delivery] {exc.code}")
                         update_request_status(
                             task_id,
                             "delivery_pending" if exc.retryable else "delivery_failed",
