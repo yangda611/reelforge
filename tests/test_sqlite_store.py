@@ -62,7 +62,9 @@ async def tmp_project(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_build_characters_from_graph_only_adds_missing_characters(tmp_project, monkeypatch):
+async def test_build_characters_from_graph_only_adds_missing_characters(
+    tmp_project, monkeypatch
+):
     from novelvideo.cognee import pipeline
     from novelvideo.models import CharacterIdentity, NovelCharacter
 
@@ -83,7 +85,9 @@ async def test_build_characters_from_graph_only_adds_missing_characters(tmp_proj
         )
     ]
     await tmp_project.add_character(existing)
-    await tmp_project.add_character(NovelCharacter(name="手动角色", description="手工补充"))
+    await tmp_project.add_character(
+        NovelCharacter(name="手动角色", description="手工补充")
+    )
 
     async def fake_extract_characters_from_graph(**_kwargs):
         return [
@@ -116,17 +120,25 @@ async def test_build_characters_from_graph_only_adds_missing_characters(tmp_proj
 
 
 @pytest.mark.asyncio
-async def test_ingest_novel_reuses_graph_based_build_steps(tmp_project, tmp_path, monkeypatch):
+async def test_ingest_novel_reuses_graph_based_build_steps(
+    tmp_project, tmp_path, monkeypatch
+):
     from novelvideo.models import NovelCharacter, NovelEpisode
 
     novel_path = tmp_path / "novel.txt"
     novel_path.write_text("林昭走进钟楼。", encoding="utf-8")
     calls: list[str] = []
 
-    async def fake_ingest_novel_fast(novel_path_arg, rebuild=False, on_progress=None, on_log=None):
+    async def fake_ingest_novel_fast(
+        novel_path_arg, rebuild=False, on_progress=None, on_log=None
+    ):
         calls.append(f"fast:{Path(novel_path_arg).name}:{rebuild}")
         tmp_project.save_novel_content("林昭走进钟楼。")
-        return {"char_count": 7, "dataset": tmp_project.dataset_name, "status": "graph_ready"}
+        return {
+            "char_count": 7,
+            "dataset": tmp_project.dataset_name,
+            "status": "graph_ready",
+        }
 
     async def fake_build_characters_from_graph(on_progress=None, on_log=None):
         calls.append("characters")
@@ -155,7 +167,9 @@ async def test_ingest_novel_reuses_graph_based_build_steps(tmp_project, tmp_path
             ]
 
     monkeypatch.setattr(tmp_project, "ingest_novel_fast", fake_ingest_novel_fast)
-    monkeypatch.setattr(tmp_project, "build_characters_from_graph", fake_build_characters_from_graph)
+    monkeypatch.setattr(
+        tmp_project, "build_characters_from_graph", fake_build_characters_from_graph
+    )
     monkeypatch.setattr(
         "novelvideo.agents.episode_planner.EpisodePlannerAgent",
         FakePlanner,
@@ -177,7 +191,9 @@ async def test_ingest_novel_reuses_graph_based_build_steps(tmp_project, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_build_scenes_from_graph_only_adds_missing_base_scenes(tmp_project, monkeypatch):
+async def test_build_scenes_from_graph_only_adds_missing_base_scenes(
+    tmp_project, monkeypatch
+):
     from novelvideo.cognee import pipeline
     from novelvideo.models import NovelScene
 
@@ -208,10 +224,14 @@ async def test_build_scenes_from_graph_only_adds_missing_base_scenes(tmp_project
                 scene_type="exterior",
                 environment_prompt="图谱新描述不应覆盖",
             ),
-            NovelScene(name="新场景", scene_type="interior", environment_prompt="新增场景"),
+            NovelScene(
+                name="新场景", scene_type="interior", environment_prompt="新增场景"
+            ),
         ]
 
-    monkeypatch.setattr(pipeline, "extract_scenes_from_graph", fake_extract_scenes_from_graph)
+    monkeypatch.setattr(
+        pipeline, "extract_scenes_from_graph", fake_extract_scenes_from_graph
+    )
     tmp_project.save_novel_content("剧本文本")
 
     added = await tmp_project.build_scenes_from_graph()
@@ -577,7 +597,9 @@ async def test_db_creation(tmp_project):
     assert Path(store.db_path).exists()
 
     # 3 张表
-    async with db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name") as cur:
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ) as cur:
         tables = [r[0] for r in await cur.fetchall()]
 
     assert "beats" in tables
@@ -711,15 +733,21 @@ async def test_count_beats_by_episode_groups_in_one_query(tmp_project):
 
     store = tmp_project
     await store._ensure_db()
-    await store.add_episodes([NovelEpisode(number=n, title=f"第{n}集") for n in (1, 2, 3)])
+    await store.add_episodes(
+        [NovelEpisode(number=n, title=f"第{n}集") for n in (1, 2, 3)]
+    )
 
     await store.add_visual_beats(
         [
-            NovelVisualBeat(beat_number=i, episode_number=1, narration="", visual_description="")
+            NovelVisualBeat(
+                beat_number=i, episode_number=1, narration="", visual_description=""
+            )
             for i in range(3)
         ]
         + [
-            NovelVisualBeat(beat_number=i, episode_number=3, narration="", visual_description="")
+            NovelVisualBeat(
+                beat_number=i, episode_number=3, narration="", visual_description=""
+            )
             for i in range(5)
         ]
     )
@@ -761,7 +789,9 @@ async def test_list_beat_asset_refs_returns_reference_columns_in_order(tmp_proje
                 visual_description="[[红酒杯]] 摆在桌上",
                 detected_identities_json='["苏清晏_少女"]',
                 detected_props_json='["红酒杯"]',
-                scene_ref_json=SceneRef(scene_id="书房", variant_id="").model_dump_json(),
+                scene_ref_json=SceneRef(
+                    scene_id="书房", variant_id=""
+                ).model_dump_json(),
             ),
             NovelVisualBeat(
                 beat_number=1,
@@ -789,7 +819,9 @@ async def test_list_beat_asset_refs_returns_reference_columns_in_order(tmp_proje
     assert second.scene_id == "书房"
 
     # 和完整读法逐字段等价——两条路径不能对同一行给出不同答案。
-    full = {(b.episode_number, b.beat_number): b for b in await store.list_visual_beats()}
+    full = {
+        (b.episode_number, b.beat_number): b for b in await store.list_visual_beats()
+    }
     for row in rows:
         beat = full[(row.episode_number, row.beat_number)]
         assert row.visual_description == beat.visual_description
@@ -1143,7 +1175,9 @@ async def test_identity_crud(tmp_project):
     assert len(updated.identities) == 1
 
     # 更新身份
-    await store.update_character_identity("谢铮", "谢铮_皇帝", appearance_details="金色龙袍")
+    await store.update_character_identity(
+        "谢铮", "谢铮_皇帝", appearance_details="金色龙袍"
+    )
     updated = store.get_character("谢铮")
     emperor = updated.get_identity("皇帝")
     assert emperor.appearance_details == "金色龙袍"
@@ -1209,6 +1243,7 @@ async def test_new_beat_columns(tmp_project):
         visual_description="画面",
         time_of_day="夜晚",
         video_prompt="camera slowly pans left",
+        estimated_duration=6.25,
     )
     await store.add_visual_beats([beat])
 
@@ -1216,11 +1251,12 @@ async def test_new_beat_columns(tmp_project):
     assert len(loaded) == 1
     assert loaded[0].time_of_day == "夜晚"
     assert loaded[0].video_prompt == "camera slowly pans left"
+    assert loaded[0].estimated_duration == 6.25
 
     # get_beats_as_dicts 也包含 v2.0 字段
     dicts = await store.get_beats_as_dicts(1)
     assert dicts[0]["time_of_day"] == "夜晚"
-    assert dicts[0]["estimated_duration"] == len("测试") / 4.0
+    assert dicts[0]["estimated_duration"] == 6.25
     assert dicts[0]["video_prompt"] == "camera slowly pans left"
 
 
@@ -1306,6 +1342,7 @@ async def test_persist_narration_script(tmp_project):
         audio_type="narration",
         speaker="",
         speaker_kind="character",
+        estimated_duration=7.25,
         video_mode="first_frame",
         video_prompt=None,
         keyframe_prompt="",
@@ -1318,10 +1355,13 @@ async def test_persist_narration_script(tmp_project):
     assert len(loaded) == 1
     assert loaded[0].narration == "旁白文本"
     assert loaded[0].time_of_day == "黄昏"
+    assert loaded[0].estimated_duration == 7.25
 
 
 @pytest.mark.asyncio
-async def test_persist_narration_script_completes_detected_refs_from_markers(tmp_project):
+async def test_persist_narration_script_completes_detected_refs_from_markers(
+    tmp_project,
+):
     from novelvideo.cognee.pipeline import (
         CharacterIdentity,
         NovelCharacter,
@@ -1346,7 +1386,9 @@ async def test_persist_narration_script_completes_detected_refs_from_markers(tmp
             ],
         )
     )
-    await store.sqlite_store.add_prop(NovelProp(name="羊皮笔记本", marker_color="#a78bfa"))
+    await store.sqlite_store.add_prop(
+        NovelProp(name="羊皮笔记本", marker_color="#a78bfa")
+    )
 
     from types import SimpleNamespace
 

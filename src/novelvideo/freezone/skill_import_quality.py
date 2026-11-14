@@ -22,7 +22,7 @@ from novelvideo.freezone.skill_import_contracts import (
     validate_bundle_review, structural_issues,
 )
 
-MAX_PROMPT_CHARS = 180_000
+MAX_PROMPT_CHARS = 450_000
 MAX_OUTPUT_CHARS = 100_000
 
 logger = logging.getLogger(__name__)

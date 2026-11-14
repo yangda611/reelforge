@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 from novelvideo.brainclaw_contract import BrainClawProfile
 from novelvideo.models import (
     beat_scene_ref,
+    beats_share_scene,
     real_detected_identities,
     real_detected_props,
 )
@@ -70,6 +71,15 @@ Asset order is fixed. Only use existing reference tokens such as 图片1 and 音
 Never add or reorder image/audio reference numbers, and do not output @ symbols.
 Do not force every asset into the prompt; reference only assets that materially help the current shot.
 Duration, resolution, aspect ratio, and human-review controls are API parameters and must not appear in the prompt.
+
+Cinematic Continuity & Smooth Transition Rules:
+- Always start from the visible starting state of the primary image reference (such as 图片1) and evolve strictly forward; never contradict the initial pose or invent backward actions.
+- Keep motion continuous and unidirectional across the full clip rather than stopping early or oscillating back and forth. When the requested clip duration is longer (e.g. 8s or more in request_params_for_context_only), structure a smooth 2-3 stage visual and camera progression instead of static holding (never print duration numbers in the prompt).
+- When adjacent_beats context is present, design smooth transitions without relying on last-frame chaining:
+  1. Entry: preserve compatible screen direction, eyeline polarity, and camera momentum from prev_beat when consistent with the starting image.
+  2. Exit toward next_beat (in the final phase of the shot): when same_scene_with_next is true, bridge smoothly using Action Match (end mid-follow-through toward the next opening motion), Eyeline / Visual Lead (settle gaze or camera push onto the element next_beat reveals), Foreground Occlusion (only with elements already visible in the scene/frame), or Same-Direction Camera Sweep.
+  3. Scene cuts (same_scene_with_next is false): do not force whip pans or invent ungrounded particles/objects; finish cleanly on a stable framing anchor or complementary composition for a crisp cut.
+
 Output the final prompt directly without explaining the generation process."""
 
 
@@ -766,6 +776,47 @@ def compute_seedance2_prompt_inputs_hash(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _extract_beat_prompt_tail(beat: dict[str, Any]) -> str:
+    raw_cfg = beat.get("seedance2_config_json")
+    prompt_text = ""
+    if isinstance(raw_cfg, str) and raw_cfg.strip():
+        try:
+            parsed = json.loads(raw_cfg)
+            if isinstance(parsed, dict):
+                prompt_text = _text(parsed.get("final_prompt"))
+        except (TypeError, ValueError):
+            prompt_text = ""
+    if not prompt_text:
+        prompt_text = _text(beat.get("video_prompt"))
+    if len(prompt_text) > 260:
+        return f"...{prompt_text[-260:]}"
+    return prompt_text
+
+
+def _build_adjacent_beats_context(
+    beat: dict[str, Any],
+    prev_beat: dict[str, Any] | None,
+    next_beat: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    if prev_beat:
+        context["same_scene_with_prev"] = beats_share_scene(prev_beat, beat)
+        context["prev_beat"] = {
+            "beat_number": prev_beat.get("beat_number"),
+            "visual_description": _text(prev_beat.get("visual_description"))[:220],
+            "scene_description": _text(prev_beat.get("scene_description")),
+            "prompt_ending": _extract_beat_prompt_tail(prev_beat),
+        }
+    if next_beat:
+        context["same_scene_with_next"] = beats_share_scene(beat, next_beat)
+        context["next_beat"] = {
+            "beat_number": next_beat.get("beat_number"),
+            "visual_description": _text(next_beat.get("visual_description"))[:220],
+            "scene_description": _text(next_beat.get("scene_description")),
+        }
+    return context
+
+
 def build_seedance2_prompt_composer_task(
     *,
     mode: Seedance2I2VMode | str,
@@ -776,9 +827,11 @@ def build_seedance2_prompt_composer_task(
     draft_prompt: str,
     request_params: dict[str, Any] | None = None,
     manual_prompt_reference: str = "",
+    prev_beat: dict[str, Any] | None = None,
+    next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "mode": Seedance2I2VMode(mode).value,
         "asset_manifest": build_seedance2_asset_manifest(assets),
         "beat": {
@@ -804,6 +857,9 @@ def build_seedance2_prompt_composer_task(
         "request_params_for_context_only": request_params or {},
         "rule_based_draft_prompt": normalize_seedance2_editor_prompt(draft_prompt),
     }
+    adjacent_beats = _build_adjacent_beats_context(beat, prev_beat, next_beat)
+    if adjacent_beats:
+        payload["adjacent_beats"] = adjacent_beats
     language_rule = asset_language_instruction(language)
     if language == "en":
         return (
@@ -816,6 +872,7 @@ def build_seedance2_prompt_composer_task(
             "- Do not describe the request JSON or output @.\n"
             "- Keep duration, resolution, ratio, generate_audio, return_last_frame, and human_review out of the prompt.\n"
             "- Preserve spoken dialogue verbatim while action directions may be rewritten naturally.\n"
+            "- Start strictly forward from the starting image state; when adjacent_beats is present, bridge smoothly from prev_beat (compatible flow/direction) and shape the ending motion/eyeline/framing as a natural lead into next_beat (clean cut if same_scene_with_next is false; never invent ungrounded elements).\n"
             f"- {language_rule}\n"
             "- Output only the final prompt.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
@@ -834,6 +891,7 @@ def build_seedance2_prompt_composer_task(
         "- 如果用户写作要求和资产清单、道具 fallback 冲突，以资产清单和 fallback 为准。\n"
         "- dialogue 或 narration_segment 属于对白时，请根据语义区分动作说明和实际说出的台词；"
         "动作可自然改写，但实际台词必须逐字完整保留，不能删减或概括。\n"
+        "- 必须严格从首帧参考图的起始状态向后演进；若存在 adjacent_beats，在不违背当前首帧的前提下承接 prev_beat 的运动/视线方向，并在结尾设计自然过渡落点（同场景优先动作延续、视线引导、已有前景遮挡或同向扫镜；跨场次保持构图呼应或干净收束，严禁凭空编造画面外物体）。\n"
         "- 只输出最终 prompt，不要解释。\n\n"
         f"输出语言：{language_rule}\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
@@ -870,6 +928,8 @@ async def compose_seedance2_prompt_with_agent(
     draft_prompt: str,
     request_params: dict[str, Any] | None = None,
     manual_prompt_reference: str = "",
+    prev_beat: dict[str, Any] | None = None,
+    next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
 ) -> str:
     agent = create_seedance2_prompt_composer_agent(language)
@@ -883,6 +943,8 @@ async def compose_seedance2_prompt_with_agent(
             draft_prompt=draft_prompt,
             request_params=request_params,
             manual_prompt_reference=manual_prompt_reference,
+            prev_beat=prev_beat,
+            next_beat=next_beat,
             language=language,
         )
     )
@@ -903,6 +965,8 @@ async def generate_seedance2_prompt(
     request_params: dict[str, Any] | None = None,
     manual_prompt_reference: str = "",
     composer: Seedance2PromptComposer | None = None,
+    prev_beat: dict[str, Any] | None = None,
+    next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
 ) -> Seedance2PromptGeneration:
     """Generate a Seedance 2.0 prompt, preferring AI and falling back to rules."""
@@ -921,17 +985,22 @@ async def generate_seedance2_prompt(
     )
     try:
         compose = composer or compose_seedance2_prompt_with_agent
-        prompt = await compose(
-            mode=mode,
-            beat=beat,
-            assets=assets,
-            text_overlay=text_overlay,
-            prompt_guidance=localized_guidance,
-            draft_prompt=draft_prompt,
-            request_params=request_params or {},
-            manual_prompt_reference=manual_prompt_reference,
-            language=language,
-        )
+        compose_kwargs: dict[str, Any] = {
+            "mode": mode,
+            "beat": beat,
+            "assets": assets,
+            "text_overlay": text_overlay,
+            "prompt_guidance": localized_guidance,
+            "draft_prompt": draft_prompt,
+            "request_params": request_params or {},
+            "manual_prompt_reference": manual_prompt_reference,
+            "language": language,
+        }
+        if prev_beat is not None:
+            compose_kwargs["prev_beat"] = prev_beat
+        if next_beat is not None:
+            compose_kwargs["next_beat"] = next_beat
+        prompt = await compose(**compose_kwargs)
         prompt = normalize_seedance2_editor_prompt(prompt)
         if not prompt:
             raise ValueError("AI composer returned an empty prompt")

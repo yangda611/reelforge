@@ -94,7 +94,6 @@ def _path_repair_lock(key: tuple[str, str]) -> asyncio.Lock:
     return lock
 
 
-
 _PATH_UNSAFE_REPAIR_TABLES = {
     "scene": "scenes",
     "character": "characters",
@@ -231,6 +230,7 @@ CREATE TABLE IF NOT EXISTS beats (
     speaker                TEXT DEFAULT '',
     speaker_kind           TEXT DEFAULT 'character',
     time_of_day            TEXT DEFAULT '',
+    estimated_duration     REAL NOT NULL DEFAULT 0.0,
     video_mode             TEXT DEFAULT 'first_frame',
     video_prompt           TEXT DEFAULT '',
     keyframe_prompt        TEXT DEFAULT '',
@@ -399,7 +399,7 @@ _PROJECT_STORE_SCHEMA_COMPONENT = "project_store"
 # MIGRATION CONTRACT: increment this whenever SQLITE_SCHEMA_SQL or any
 # _ensure_*_columns migration above changes. Existing databases skip the
 # initializer after this version has been recorded.
-_PROJECT_STORE_SCHEMA_VERSION = 5
+_PROJECT_STORE_SCHEMA_VERSION = 6
 
 
 def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
@@ -615,6 +615,9 @@ class SQLiteStore:
 
     def _ensure_beat_current_columns(self, db: sqlite3.Connection) -> None:
         """Add beat columns required by the current script/render pipeline."""
+        estimated_duration_missing = "estimated_duration" not in _table_columns(
+            db, "beats"
+        )
         columns = {
             "source_text_sha256": "TEXT DEFAULT ''",
             "detected_identities_json": "TEXT DEFAULT '[]'",
@@ -624,6 +627,7 @@ class SQLiteStore:
             "speaker": "TEXT DEFAULT ''",
             "speaker_kind": "TEXT DEFAULT 'character'",
             "time_of_day": "TEXT DEFAULT ''",
+            "estimated_duration": "REAL NOT NULL DEFAULT 0.0",
             "video_mode": "TEXT DEFAULT 'first_frame'",
             "video_prompt": "TEXT DEFAULT ''",
             "keyframe_prompt": "TEXT DEFAULT ''",
@@ -633,6 +637,12 @@ class SQLiteStore:
         }
         for name, definition in columns.items():
             _add_column_if_missing(db, "beats", name, definition)
+        if estimated_duration_missing:
+            db.execute(
+                "UPDATE beats SET estimated_duration = length(narration) / 4.0 "
+                "WHERE estimated_duration = 0 AND narration IS NOT NULL "
+                "AND trim(narration) != ''"
+            )
 
     async def initialize(self) -> None:
         await self._ensure_db()
@@ -857,7 +867,9 @@ class SQLiteStore:
         )
         await db.commit()
         self._characters[character.name] = character
-        updated_alias_index = {k: v for k, v in self._alias_index.items() if v != character.name}
+        updated_alias_index = {
+            k: v for k, v in self._alias_index.items() if v != character.name
+        }
         self._alias_index.clear()
         self._alias_index.update(updated_alias_index)
         for alias in character.aliases:
@@ -949,7 +961,9 @@ class SQLiteStore:
         not ``update_character()``, whose object merge contract is cache-backed.
         """
 
-        updated = await self._update_character_field(name, "is_main", 1 if is_main else 0)
+        updated = await self._update_character_field(
+            name, "is_main", 1 if is_main else 0
+        )
         cached = self._characters.get(name)
         if updated and cached is not None:
             cached.is_main = is_main
@@ -1253,7 +1267,11 @@ class SQLiteStore:
         table = _PATH_UNSAFE_REPAIR_TABLES[kind]
         # 角色的身份记录把角色名嵌进了 character_name 和 identity_id，改名后不跟着改，
         # 身份图的落盘路径就指向一个不存在的目录（rename_character 一直在做这件事）。
-        columns = "name, aliases_json, identities_json" if kind == "character" else "name, aliases_json"
+        columns = (
+            "name, aliases_json, identities_json"
+            if kind == "character"
+            else "name, aliases_json"
+        )
         db = await self._ensure_db()
         async with db.execute(f"SELECT {columns} FROM {table}") as cursor:
             rows = await cursor.fetchall()
@@ -1277,7 +1295,10 @@ class SQLiteStore:
                     move_assets(old_name, new_name)
                 except (OSError, ValueError):
                     logger.warning(
-                        "资产目录迁移失败，跳过改名: %s → %s", old_name, new_name, exc_info=True
+                        "资产目录迁移失败，跳过改名: %s → %s",
+                        old_name,
+                        new_name,
+                        exc_info=True,
                     )
                     taken.add(old_name)
                     continue
@@ -1480,14 +1501,23 @@ class SQLiteStore:
             name=row["name"],
             aliases=json.loads(row["aliases_json"] or "[]"),
             scene_type=row["scene_type"] or "interior",
-            base_scene_id=(row["base_scene_id"] if "base_scene_id" in row.keys() else "") or "",
+            base_scene_id=(
+                row["base_scene_id"] if "base_scene_id" in row.keys() else ""
+            )
+            or "",
             variant_id=(row["variant_id"] if "variant_id" in row.keys() else "") or "",
-            time_of_day=(row["time_of_day"] if "time_of_day" in row.keys() else "") or "",
+            time_of_day=(row["time_of_day"] if "time_of_day" in row.keys() else "")
+            or "",
             environment_prompt=row["environment_prompt"] or "",
-            variant_prompt=(row["variant_prompt"] if "variant_prompt" in row.keys() else "") or "",
+            variant_prompt=(
+                row["variant_prompt"] if "variant_prompt" in row.keys() else ""
+            )
+            or "",
             description=row["description"] or "",
             spatial_layout_image=(
-                row["spatial_layout_image"] if "spatial_layout_image" in row.keys() else ""
+                row["spatial_layout_image"]
+                if "spatial_layout_image" in row.keys()
+                else ""
             )
             or "",
             notes=row["notes"] or "",
@@ -1655,10 +1685,16 @@ class SQLiteStore:
         identities = char.identities
         identities.append(identity)
         char.identities = identities
-        await self._update_character_field(char.name, "identities_json", char.identities_json)
-        console.print(f"[green]已为 {char.name} 添加身份: {identity.identity_name}[/green]")
+        await self._update_character_field(
+            char.name, "identities_json", char.identities_json
+        )
+        console.print(
+            f"[green]已为 {char.name} 添加身份: {identity.identity_name}[/green]"
+        )
 
-    async def _cascade_identity_change(self, old_id: str, new_id: str | None = None) -> None:
+    async def _cascade_identity_change(
+        self, old_id: str, new_id: str | None = None
+    ) -> None:
         for ep in self._episodes.values():
             ids = ep.identity_ids
             if old_id in ids:
@@ -1695,7 +1731,9 @@ class SQLiteStore:
             import re
 
             new_iname = updates["identity_name"]
-            old_iname = identity_id.split("_", 1)[-1] if "_" in identity_id else identity_id
+            old_iname = (
+                identity_id.split("_", 1)[-1] if "_" in identity_id else identity_id
+            )
             target_identity.identity_id = f"{char.name}_{new_iname}"
             old_safe = re.sub(r'[/\\:*?"<>|]', "_", old_iname)
             new_safe = re.sub(r'[/\\:*?"<>|]', "_", new_iname)
@@ -1723,10 +1761,16 @@ class SQLiteStore:
             new_id = target_identity.identity_id
             if old_id != new_id:
                 await self._cascade_identity_change(old_id, new_id)
-        await self._update_character_field(char.name, "identities_json", char.identities_json)
-        console.print(f"[green]已更新 {char.name} 的身份: {target_identity.identity_id}[/green]")
+        await self._update_character_field(
+            char.name, "identities_json", char.identities_json
+        )
+        console.print(
+            f"[green]已更新 {char.name} 的身份: {target_identity.identity_id}[/green]"
+        )
 
-    async def delete_character_identity(self, character_name: str, identity_id: str) -> None:
+    async def delete_character_identity(
+        self, character_name: str, identity_id: str
+    ) -> None:
         char = self.get_character(character_name)
         if not char:
             raise ValueError(f"角色 {character_name} 不存在")
@@ -1740,14 +1784,20 @@ class SQLiteStore:
             raise ValueError(f"身份 {identity_id} 不存在")
         char.identities = identities
         await self._cascade_identity_change(identity_id, None)
-        await self._update_character_field(char.name, "identities_json", char.identities_json)
+        await self._update_character_field(
+            char.name, "identities_json", char.identities_json
+        )
         console.print(f"[green]已删除 {char.name} 的身份: {identity_id}[/green]")
 
-    async def delete_identity_image(self, character_name: str, identity_id: str) -> bool:
+    async def delete_identity_image(
+        self, character_name: str, identity_id: str
+    ) -> bool:
         char = self.get_character(character_name)
         if not char:
             raise ValueError(f"角色 {character_name} 不存在")
-        target_identity = next((i for i in char.identities if i.identity_id == identity_id), None)
+        target_identity = next(
+            (i for i in char.identities if i.identity_id == identity_id), None
+        )
         if not target_identity:
             raise ValueError(f"身份 {identity_id} 不存在")
         image_path = compute_identity_path(
@@ -1890,7 +1940,9 @@ class SQLiteStore:
 
             if generate_metadata:
                 log(f"为第 {chapter.number} 章生成元数据...")
-                metadata = await self._generate_episode_metadata(chapter.number, chapter.content)
+                metadata = await self._generate_episode_metadata(
+                    chapter.number, chapter.content
+                )
             else:
                 summary = chapter.content[:200].strip()
                 if len(chapter.content) > 200:
@@ -2109,9 +2161,13 @@ class SQLiteStore:
         empty_predicate = ""
         if _only_if_empty:
             if len(fields) != 1 or not set(fields) <= {"scene_menu", "prop_menu"}:
-                raise ValueError("conditional menu patch requires one scene_menu or prop_menu")
+                raise ValueError(
+                    "conditional menu patch requires one scene_menu or prop_menu"
+                )
             column = self._PATCHABLE_EPISODE_FIELDS[next(iter(fields))][0]
-            empty_predicate = f" AND ({column} IS NULL OR TRIM({column}) IN ('', '[]', 'null'))"
+            empty_predicate = (
+                f" AND ({column} IS NULL OR TRIM({column}) IN ('', '[]', 'null'))"
+            )
 
         for field, value in fields.items():
             spec = self._PATCHABLE_EPISODE_FIELDS.get(field)
@@ -2186,7 +2242,9 @@ class SQLiteStore:
                     canonical_id = candidate.name
                     break
                 aliases = getattr(candidate, "aliases", []) or []
-                if any(self._normalize_alias_lookup(alias) == lookup for alias in aliases):
+                if any(
+                    self._normalize_alias_lookup(alias) == lookup for alias in aliases
+                ):
                     canonical_id = candidate.name
                     break
             canonical_items.append(
@@ -2199,7 +2257,9 @@ class SQLiteStore:
             )
         return build_scene_menu(scene_menu=canonical_items)
 
-    def _normalize_prop_menu_items(self, prop_menu: Iterable[Any] | None) -> list[PropMenuItem]:
+    def _normalize_prop_menu_items(
+        self, prop_menu: Iterable[Any] | None
+    ) -> list[PropMenuItem]:
         """将 episode prop_menu 规范化为资产库标准 prop_id。"""
         normalized_items = build_prop_menu(prop_menu=list(prop_menu or []))
         canonical_items: list[PropMenuItem] = []
@@ -2212,7 +2272,9 @@ class SQLiteStore:
             canonical_items.append(
                 PropMenuItem(
                     prop_id=canonical_id,
-                    prop_type=(getattr(cached, "prop_type", "") if cached else item.prop_type)
+                    prop_type=(
+                        getattr(cached, "prop_type", "") if cached else item.prop_type
+                    )
                     or "object",
                     visual_prompt=(
                         getattr(cached, "visual_prompt", "")
@@ -2224,7 +2286,8 @@ class SQLiteStore:
                         or getattr(cached, "description", "")
                         or item.description
                     ),
-                    owner_identity_id=item.owner_identity_id or getattr(cached, "owner", ""),
+                    owner_identity_id=item.owner_identity_id
+                    or getattr(cached, "owner", ""),
                 )
             )
         return build_prop_menu(prop_menu=canonical_items)
@@ -2242,7 +2305,9 @@ class SQLiteStore:
             console.print(f"[yellow]删除旧剧集失败: {e}[/yellow]")
             return 0
 
-    async def delete_episodes_by_numbers(self, episode_numbers: set[int] | list[int]) -> int:
+    async def delete_episodes_by_numbers(
+        self, episode_numbers: set[int] | list[int]
+    ) -> int:
         """按集数删除剧集。"""
         numbers = sorted({int(num) for num in episode_numbers if int(num) > 0})
         if not numbers:
@@ -2319,17 +2384,23 @@ class SQLiteStore:
                 gender=row["gender"] or "",
                 age_group=row["age_group"] if "age_group" in row.keys() else "youth",
                 body_type=row["body_type"] or "",
-                fish_voice_id=row["fish_voice_id"] if "fish_voice_id" in row.keys() else "",
+                fish_voice_id=row["fish_voice_id"]
+                if "fish_voice_id" in row.keys()
+                else "",
                 description=row["description"] or "",
                 face_prompt=row["face_prompt"] or "",
                 appearance_details=row["appearance_details"] or "",
                 identities_json=row["identities_json"] or "[]",
                 reference_audio_path=(
-                    row["reference_audio_path"] if "reference_audio_path" in row.keys() else ""
+                    row["reference_audio_path"]
+                    if "reference_audio_path" in row.keys()
+                    else ""
                 )
                 or "",
                 reference_audio_sha256=(
-                    row["reference_audio_sha256"] if "reference_audio_sha256" in row.keys() else ""
+                    row["reference_audio_sha256"]
+                    if "reference_audio_sha256" in row.keys()
+                    else ""
                 )
                 or "",
                 reference_audio_updated_at=(
@@ -2370,8 +2441,12 @@ class SQLiteStore:
                 character_names=json.loads(row["character_names"] or "[]"),
                 identity_ids=json.loads(row["identity_ids"] or "[]"),
                 event_ids=json.loads(row["event_ids"] or "[]"),
-                scene_menu_json=row["scene_menu_json"] if "scene_menu_json" in row.keys() else "[]",
-                prop_menu_json=row["prop_menu_json"] if "prop_menu_json" in row.keys() else "[]",
+                scene_menu_json=row["scene_menu_json"]
+                if "scene_menu_json" in row.keys()
+                else "[]",
+                prop_menu_json=row["prop_menu_json"]
+                if "prop_menu_json" in row.keys()
+                else "[]",
                 identity_default_map_json=(
                     row["identity_default_map_json"]
                     if "identity_default_map_json" in row.keys()
@@ -2392,7 +2467,9 @@ class SQLiteStore:
 
     async def get_episode_from_graph(self, number: int) -> Optional[NovelEpisode]:
         db = await self._ensure_db()
-        async with db.execute("SELECT * FROM episodes WHERE number = ?", (number,)) as cursor:
+        async with db.execute(
+            "SELECT * FROM episodes WHERE number = ?", (number,)
+        ) as cursor:
             row = await cursor.fetchone()
             if not row:
                 return None
@@ -2411,8 +2488,12 @@ class SQLiteStore:
                 character_names=json.loads(row["character_names"] or "[]"),
                 identity_ids=json.loads(row["identity_ids"] or "[]"),
                 event_ids=json.loads(row["event_ids"] or "[]"),
-                scene_menu_json=row["scene_menu_json"] if "scene_menu_json" in row.keys() else "[]",
-                prop_menu_json=row["prop_menu_json"] if "prop_menu_json" in row.keys() else "[]",
+                scene_menu_json=row["scene_menu_json"]
+                if "scene_menu_json" in row.keys()
+                else "[]",
+                prop_menu_json=row["prop_menu_json"]
+                if "prop_menu_json" in row.keys()
+                else "[]",
                 identity_default_map_json=(
                     row["identity_default_map_json"]
                     if "identity_default_map_json" in row.keys()
@@ -2451,25 +2532,44 @@ class SQLiteStore:
             episode_number=row["episode_number"],
             narration=row["narration"] or "",
             visual_description=row["visual_description"] or "",
-            source_text_sha256=row["source_text_sha256"] if "source_text_sha256" in row.keys() else "",
+            source_text_sha256=row["source_text_sha256"]
+            if "source_text_sha256" in row.keys()
+            else "",
             detected_identities_json=row["detected_identities_json"] or "[]",
             detected_props_json=(
-                row["detected_props_json"] if "detected_props_json" in row.keys() else "[]"
+                row["detected_props_json"]
+                if "detected_props_json" in row.keys()
+                else "[]"
             )
             or "[]",
-            scene_ref_json=row["scene_ref_json"] if "scene_ref_json" in row.keys() else "",
+            scene_ref_json=row["scene_ref_json"]
+            if "scene_ref_json" in row.keys()
+            else "",
             audio_type=row["audio_type"] or "narration",
             speaker=row["speaker"] or "",
-            speaker_kind=row["speaker_kind"] if "speaker_kind" in row.keys() else "character",
-            video_mode=row["video_mode"] if "video_mode" in row.keys() else "first_frame",
+            speaker_kind=row["speaker_kind"]
+            if "speaker_kind" in row.keys()
+            else "character",
+            estimated_duration=(
+                row["estimated_duration"] if "estimated_duration" in row.keys() else 0.0
+            ),
+            video_mode=row["video_mode"]
+            if "video_mode" in row.keys()
+            else "first_frame",
             video_prompt=row["video_prompt"] if "video_prompt" in row.keys() else "",
-            keyframe_prompt=row["keyframe_prompt"] if "keyframe_prompt" in row.keys() else "",
+            keyframe_prompt=row["keyframe_prompt"]
+            if "keyframe_prompt" in row.keys()
+            else "",
             seedance2_config_json=(
-                row["seedance2_config_json"] if "seedance2_config_json" in row.keys() else "{}"
+                row["seedance2_config_json"]
+                if "seedance2_config_json" in row.keys()
+                else "{}"
             ),
             time_of_day=row["time_of_day"] if "time_of_day" in row.keys() else "",
             shot_order=row["shot_order"] if "shot_order" in row.keys() else None,
-            duration_seconds=row["duration_seconds"] if "duration_seconds" in row.keys() else None,
+            duration_seconds=row["duration_seconds"]
+            if "duration_seconds" in row.keys()
+            else None,
             is_manual_shot=(
                 bool(row["is_manual_shot"])
                 if "is_manual_shot" in row.keys() and row["is_manual_shot"] is not None
@@ -2479,7 +2579,9 @@ class SQLiteStore:
 
     async def list_visual_beats(self) -> List[NovelVisualBeat]:
         db = await self._ensure_db()
-        async with db.execute("SELECT * FROM beats ORDER BY episode_number, beat_number") as cursor:
+        async with db.execute(
+            "SELECT * FROM beats ORDER BY episode_number, beat_number"
+        ) as cursor:
             rows = await cursor.fetchall()
         return [self._row_to_visual_beat(row) for row in rows]
 
@@ -2544,6 +2646,9 @@ class SQLiteStore:
             return (primary, int(b.beat_number))
 
         for b in sorted(beats, key=_order_key):
+            estimated_duration = float(getattr(b, "estimated_duration", 0.0) or 0.0)
+            if estimated_duration <= 0 and b.narration:
+                estimated_duration = len(b.narration) / 4.0
             result.append(
                 {
                     "beat_number": b.beat_number,
@@ -2551,9 +2656,11 @@ class SQLiteStore:
                     "visual_description": b.visual_description,
                     "source_text_sha256": b.source_text_sha256,
                     "scene_ref": (
-                        b.scene_ref.model_dump() if getattr(b, "scene_ref", None) else None
+                        b.scene_ref.model_dump()
+                        if getattr(b, "scene_ref", None)
+                        else None
                     ),
-                    "estimated_duration": len(b.narration or "") / 4.0,
+                    "estimated_duration": estimated_duration,
                     "audio_type": b.audio_type,
                     "speaker": b.speaker,
                     "speaker_kind": getattr(b, "speaker_kind", "character"),
@@ -2694,8 +2801,9 @@ class SQLiteStore:
                    detected_identities_json, detected_props_json, scene_ref_json,
                    audio_type, speaker, speaker_kind, time_of_day,
                    video_mode, video_prompt, keyframe_prompt,
-                   shot_order, duration_seconds, is_manual_shot, source_text_sha256)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   shot_order, duration_seconds, is_manual_shot, source_text_sha256,
+                   estimated_duration)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(episode_number, beat_number) DO UPDATE SET
                    narration=excluded.narration, visual_description=excluded.visual_description,
                    detected_identities_json=excluded.detected_identities_json,
@@ -2711,6 +2819,7 @@ class SQLiteStore:
                    duration_seconds=excluded.duration_seconds,
                    is_manual_shot=excluded.is_manual_shot,
                    source_text_sha256=excluded.source_text_sha256,
+                   estimated_duration=excluded.estimated_duration,
                    updated_at=datetime('now')""",
                 (
                     b.episode_number,
@@ -2731,6 +2840,7 @@ class SQLiteStore:
                     getattr(b, "duration_seconds", None),
                     1 if getattr(b, "is_manual_shot", False) else 0,
                     getattr(b, "source_text_sha256", "") or "",
+                    getattr(b, "estimated_duration", 0.0),
                 ),
             )
         await db.commit()
@@ -2863,7 +2973,9 @@ class SQLiteStore:
         await db.commit()
         return cursor.rowcount or 0
 
-    async def delete_beats_except(self, episode_number: int, keep_numbers: set[int]) -> int:
+    async def delete_beats_except(
+        self, episode_number: int, keep_numbers: set[int]
+    ) -> int:
         """删除指定剧集中不在 keep_numbers 里的 beat。"""
         keep_numbers = {int(num) for num in keep_numbers if int(num) > 0}
         if not keep_numbers:

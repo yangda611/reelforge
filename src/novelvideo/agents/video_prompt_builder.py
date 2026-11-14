@@ -50,9 +50,9 @@ The first frame is video time `t=0`; the model cannot go backward to show action
 ❌ Static primary verbs (freezes, stares, stands, waits, remains, holds still) as the main action — these produce frozen video
 ❌ Reversing or oscillating motion (steps forward then back, leans in then pulls away, nods then shakes head)
 
-## Camera
+## Camera & Smooth Transition
 - Every prompt MUST include a camera direction with displacement or zoom (push-in, dolly, pan, tilt, track, crane, zoom)
-- Describe the camera endpoint: what the frame looks like when camera motion finishes
+- Describe the camera endpoint: what the frame looks like when camera motion finishes, shaping the final 1–1.5s into an intentional transition bridge when adjacent-beat context is available (action follow-through, eyeline lead, passing a visible foreground element, same-direction camera sweep, or clean framing endpoint for a crisp scene cut — without inventing ungrounded objects)
 - Match detail to shot scale: close-up → micro details; wide shot → broad arcs
 
 ## Audio Layer (superset — works on audio-capable models, silently ignored by others)

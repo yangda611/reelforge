@@ -768,6 +768,51 @@ function expandSeedance2References() {
 }
 
 describe("VideoPane Seedance2 inspector", () => {
+  it("uses the beat timing estimate for an unset video duration", () => {
+    renderPane(
+      makeBeat({
+        estimated_duration: 9,
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          resolution: "720p",
+          final_prompt: "existing seedance2 prompt",
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText("时长")).toHaveValue(9);
+  });
+
+  it("uses the audio floor when it exceeds the beat timing estimate", () => {
+    renderPane(
+      makeBeat({
+        estimated_duration: 6,
+        audio_duration_seconds: 10.2,
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          resolution: "720p",
+          final_prompt: "existing seedance2 prompt",
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText("时长")).toHaveValue(11);
+  });
+
+  it("uses the beat timing estimate for Seedance 1.5 Pro", () => {
+    renderPane(
+      makeBeat({
+        audio_type: "dialogue",
+        estimated_duration: 9,
+        audio_duration_seconds: 5.4,
+        seedance2_config_json: "{}",
+      }),
+      { defaultBackend: "newapi_seedance-1.5-pro" },
+    );
+
+    expect(screen.getByLabelText("时长")).toHaveValue(9);
+  });
+
   it("renders and saves the 1.x video prompt while showing image-only reference details", () => {
     videoQueryMockState.includeAudioAsset = true;
     renderPane(

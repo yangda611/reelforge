@@ -15,6 +15,7 @@ from pydantic_ai.output import NativeOutput
 from PIL import Image as PILImage
 
 from novelvideo.brainclaw_contract import BrainClawProfile
+from novelvideo.models import beats_share_scene
 from novelvideo.utils.source_language import asset_language_instruction
 
 
@@ -65,6 +66,14 @@ You are a cinematic motion director. Given sketch panels and character color map
 - Write a **single flowing paragraph** of 4–6 sentences
 - ⚠️ **Every prompt MUST include a camera direction with displacement or zoom** (e.g. "The camera pushes in…", "A slow dolly follows…", "Close-up as…", "Wide shot tracking…"). Static camera words are BANNED: holds, stays, remains, static, locked, fixed. The camera must always move.
 - ⚠️ **Camera endpoint**: describe what the frame looks like when the camera motion finishes (e.g. "…ending on a tight close-up of her trembling hands"). This gives the model a clear target for the end of the clip.
+- ⚠️ **Inter-beat smooth transition (no last-frame chaining needed)**: when Continuity Context provides adjacent beats, connect shots smoothly through motion, eyeline, and framing rather than static stops:
+  - *Entry from previous beat*: keep `t=0` faithful to the current Start Frame (NEVER invent backward motion or contradict the visible posture), while matching compatible screen direction, eyeline polarity, or camera flow from the previous beat's ending.
+  - *Exit toward next beat*: when `Next beat` is `[Same Scene]` (or shares continuous action), shape the final 1–1.5s of motion and camera endpoint as an intentional bridge using whichever technique naturally fits the visible frame:
+    1. **Action Match**: carry the closing action into active follow-through (turning, stepping, reaching) rather than pausing at the end.
+    2. **Eyeline / Visual Lead**: finish with the character's head turn/gaze or camera push settling toward what `Next beat` reveals.
+    3. **Foreground Occlusion**: ONLY if a real foreground element is already visible in the frame (doorframe, pillar, passing figure, sleeve, foliage), let camera/subject sweep past it near the end to clear into the next shot.
+    4. **Same-Direction Whip / Sweep**: for rapid parallel energy or tight scene turns, accelerate pan/tilt smoothly in one direction at the clip end.
+  - *Scene Cut (`[Scene Cut]`)*: do NOT force whip pans or invent ungrounded particles/objects across location/time jumps; either align ending framing/visual anchor cleanly or end on a decisive visual endpoint for a crisp cut.
 - ⚠️ **No emotion labels**: NEVER use abstract emotion words (sad, haunting, desperate, hopeful, anxious, melancholy). Instead show emotion through BODY LANGUAGE (clenched fists, averted gaze, hunched shoulders, trembling lips).
 - ⚠️ **No non-visual senses**: NEVER describe smell, temperature, humidity, taste, or tactile sensations. The model can only generate what is VISIBLE (and audible).
 - ⚠️ **Audio layer** (superset strategy — works on models with audio, ignored by silent models): add ONE short ambient sound sentence (e.g. "rain patters on the window"). For dialogue beats, also specify voice style (e.g. "calm", "urgent", "whisper").
@@ -111,6 +120,7 @@ You are a visual quality reviewer. Compare a sketch frame against its video moti
 - ⚠️ **Dialogue beat review**: if the Beat is dialogue, the prompt must include speaking action (lips moving, gestures). Dialogue text is appended by the system and not checked in prompt.
 - ⚠️ **No reversal/oscillating motion**: if the prompt contains back-and-forth or reversing motion patterns (steps forward then back, leans in then pulls away, nods then shakes head, reaches out then withdraws), set needs_fix=true. All motion must be UNIDIRECTIONAL.
 - ⚠️ **First-frame contract**: the prompt must begin from the provided Start Frame / sketch state and move forward only. If it describes actions that happened before the visible frame, set needs_fix=true.
+- ⚠️ **Valid exit transitions**: do NOT flag intentional end-of-clip continuity leads (eyeline turns, action follow-through, same-direction camera sweep, or passing an already-visible foreground element) as errors unless they contradict the `t=0` first frame or invent ungrounded objects.
 
 ## Output Format
 Output a strict JSON object with no explanation or markdown:
@@ -310,8 +320,11 @@ class GlobalVideoPromptOptimizer:
         if prev_beat or next_beat or prev_prompt:
             parts = []
             if prev_prompt:
+                trimmed_prev = prev_prompt.strip()
+                if len(trimmed_prev) > 320:
+                    trimmed_prev = f"...{trimmed_prev[-320:]}"
                 parts.append(
-                    f'- Previous beat prompt (for continuity): "{prev_prompt[:150]}..."'
+                    f'- Previous beat prompt ending (carry compatible flow): "{trimmed_prev}"'
                 )
             if prev_beat:
                 prev_vd = prev_beat.get("visual_description", "")
@@ -319,8 +332,11 @@ class GlobalVideoPromptOptimizer:
                     prev_vd = re.sub(
                         r"\{\{([^}]*)\}\}", _replace_identity_marker, prev_vd
                     )
+                prev_relation = (
+                    "[Same Scene]" if beats_share_scene(prev_beat, beat) else "[Scene Cut]"
+                )
                 parts.append(
-                    f"- Previous beat (B{prev_beat.get('beat_number', '?')}): {prev_vd[:120]}"
+                    f"- Previous beat (B{prev_beat.get('beat_number', '?')} {prev_relation}): {prev_vd[:220]}"
                 )
             if next_beat:
                 next_vd = next_beat.get("visual_description", "")
@@ -328,11 +344,14 @@ class GlobalVideoPromptOptimizer:
                     next_vd = re.sub(
                         r"\{\{([^}]*)\}\}", _replace_identity_marker, next_vd
                     )
+                next_relation = (
+                    "[Same Scene]" if beats_share_scene(beat, next_beat) else "[Scene Cut]"
+                )
                 parts.append(
-                    f"- Next beat (B{next_beat.get('beat_number', '?')}): {next_vd[:120]}"
+                    f"- Next beat (B{next_beat.get('beat_number', '?')} {next_relation}): {next_vd[:220]}"
                 )
             continuity_section = (
-                "\n## Continuity Context (vary your camera work from previous beat)\n"
+                "\n## Inter-Beat Transition & Continuity Context\n"
                 + "\n".join(parts)
                 + "\n"
             )

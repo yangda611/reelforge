@@ -22,8 +22,68 @@ from typing import Any
 import portalocker
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_TEXT_BYTES = 128 * 1024
-MAX_PROMPT_CHARS = 180_000
+MAX_TEXT_BYTES = 512 * 1024
+MAX_PROMPT_CHARS = 450_000
+
+
+def _decode_zip_filename(entry: zipfile.ZipInfo) -> str:
+    """Recover UTF-8/GB18030 names from ZIPs packed without the UTF-8 bit."""
+    name = entry.filename
+    if entry.flag_bits & 0x800:
+        return name
+    try:
+        raw_name = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            return raw_name.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return name
+
+
+def _is_macos_metadata_entry(path: PurePosixPath) -> bool:
+    return (
+        "__MACOSX" in path.parts
+        or path.name.startswith("._")
+        or path.name == ".DS_Store"
+    )
+
+
+def _decode_markdown_bytes(raw: bytes, label: str) -> str:
+    """Decode Markdown text safely, supporting UTF-8 BOM, UTF-16 BOM, and GB18030."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Unable to decode UTF-16 Markdown file: {label}") from exc
+    if b"\x00" in raw:
+        raise ValueError(f"Markdown source must be text, not binary: {label}")
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"Markdown source must be UTF-8 or GB18030 text: {label}")
+
+
+def _has_valid_zip_skill_entrypoint(docs: list[tuple[str, str]]) -> bool:
+    if not docs:
+        return False
+    exact_skill_count = sum(
+        PurePosixPath(path).name.lower() == "skill.md" for path, _ in docs
+    )
+    if exact_skill_count == 1:
+        return True
+    if exact_skill_count > 1:
+        return False
+    if len(docs) == 1:
+        return True
+    named_skill_count = sum(
+        PurePosixPath(path).name.lower().endswith("skill.md") for path, _ in docs
+    )
+    return named_skill_count == 1
 
 
 def read_source(name: str, encoded: str) -> dict[str, Any]:
@@ -39,8 +99,9 @@ def read_source(name: str, encoded: str) -> dict[str, Any]:
     warnings: list[str] = []
     resources: set[str] = set()
     if name.lower().endswith('.md'):
-        docs.append((Path(name).name, data.decode('utf-8-sig')))
-        resources.add(Path(name).name)
+        file_name = Path(name).name
+        docs.append((file_name, _decode_markdown_bytes(data, file_name)))
+        resources.add(file_name)
     elif name.lower().endswith('.zip'):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -49,24 +110,39 @@ def read_source(name: str, encoded: str) -> dict[str, Any]:
                     raise ValueError('Archive exceeds expanded size or file count limit')
                 seen = set()
                 for entry in entries:
-                    path = PurePosixPath(entry.filename)
-                    if (path.is_absolute() or '..' in path.parts or '\\' in entry.filename
-                            or ':' in entry.filename or entry.filename in seen
-                            or stat.S_ISLNK(entry.external_attr >> 16)):
+                    entry_name = _decode_zip_filename(entry)
+                    path = PurePosixPath(entry_name)
+                    if (
+                        path.is_absolute()
+                        or '..' in path.parts
+                        or '\\' in entry.filename
+                        or '\\' in entry_name
+                        or ':' in entry.filename
+                        or ':' in entry_name
+                        or entry_name in seen
+                        or stat.S_ISLNK(entry.external_attr >> 16)
+                    ):
                         raise ValueError('Unsafe or duplicate archive path')
-                    seen.add(entry.filename)
-                    resources.add(entry.filename)
+                    seen.add(entry_name)
+                    if _is_macos_metadata_entry(path):
+                        continue
+                    resources.add(entry_name)
                     if entry.flag_bits & 1 or entry.file_size > MAX_FILE_BYTES:
                         raise ValueError('Encrypted or oversized archive entry')
                     if entry.is_dir():
                         continue
                     if path.suffix.lower() == '.md':
-                        docs.append((str(path), archive.read(entry).decode('utf-8-sig')))
+                        docs.append(
+                            (
+                                str(path),
+                                _decode_markdown_bytes(archive.read(entry), str(path)),
+                            )
+                        )
                     else:
                         warnings.append(f'Not converted or executed: {path}')
         except (zipfile.BadZipFile, RuntimeError) as exc:
             raise ValueError('Invalid ZIP archive') from exc
-        if sum(PurePosixPath(path).name.lower() == 'skill.md' for path, _ in docs) != 1:
+        if not _has_valid_zip_skill_entrypoint(docs):
             raise ValueError('ZIP must contain exactly one SKILL.md')
     else:
         raise ValueError('Only .md and .zip sources are supported')
@@ -80,7 +156,7 @@ def read_source(name: str, encoded: str) -> dict[str, Any]:
                 warnings.append(f'Missing referenced resource: {target}')
     text = '\n\n'.join(f'--- SOURCE FILE: {path} ---\n{body}' for path, body in docs)
     if not text.strip() or len(text.encode()) > MAX_TEXT_BYTES:
-        raise ValueError('Markdown content exceeds 128 KiB conversion context budget')
+        raise ValueError('Markdown content exceeds 512 KiB conversion context budget')
     return {'name': Path(name).name, 'text': text, 'warnings': warnings,
             'sha256': hashlib.sha256(data).hexdigest(), 'content_base64': encoded, 'resources': sorted(resources)}
 

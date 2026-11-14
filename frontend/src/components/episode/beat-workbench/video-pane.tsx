@@ -424,10 +424,39 @@ export function VideoPane({
     beat.audio_duration_seconds > 0
       ? Math.ceil(beat.audio_duration_seconds)
       : null;
+  const estimatedDurationSeconds =
+    typeof beat.estimated_duration === "number" &&
+    Number.isFinite(beat.estimated_duration) &&
+    beat.estimated_duration > 0
+      ? beat.estimated_duration
+      : 0;
+  const seedance2VideoDurationBounds = useMemo<Seedance2DurationBounds>(() => {
+    const max = seedance2DurationBounds.max;
+    const min = Math.min(
+      max,
+      Math.max(seedance2DurationBounds.min, audioFloorSeconds ?? 0),
+    );
+    return { min, max };
+  }, [
+    seedance2DurationBounds.min,
+    seedance2DurationBounds.max,
+    audioFloorSeconds,
+  ]);
+  const suggestedVideoDuration = clampDuration(
+    Math.max(
+      estimatedDurationSeconds,
+      audioFloorSeconds ?? 0,
+      seedance2VideoDurationBounds.min,
+    ),
+    seedance2VideoDurationBounds,
+  );
   // 时长下限 = max(模型下限, 音频时长)；视频时长须 >= 音频时长。
   const sd15DurationBounds = useMemo<Seedance2DurationBounds>(
     () => ({
-      min: Math.max(seedance2DurationBounds.min, audioFloorSeconds ?? 0),
+      min: Math.min(
+        seedance2DurationBounds.max,
+        Math.max(seedance2DurationBounds.min, audioFloorSeconds ?? 0),
+      ),
       max: seedance2DurationBounds.max,
     }),
     [seedance2DurationBounds.min, seedance2DurationBounds.max, audioFloorSeconds],
@@ -435,7 +464,7 @@ export function VideoPane({
   const [sd15Resolution, setSd15Resolution] =
     useState<Seedance2Resolution>("720p");
   const [sd15Duration, setSd15Duration] = useState<number>(
-    seedance2DurationBounds.min,
+    suggestedVideoDuration,
   );
   useEffect(() => {
     if (!isSd15ProConfig) return;
@@ -447,13 +476,21 @@ export function VideoPane({
         ? prev
         : normalizeSeedance2Resolution(fallbackRes),
     );
-    // 默认时长 = 音频下限（视频须 >= 音频）；用户可在控件里上调。
+    // Default to the beat estimate, while keeping the generated audio inside the clip.
     setSd15Duration(
-      clampDuration(audioFloorSeconds ?? sd15DurationBounds.min, sd15DurationBounds),
+      clampDuration(
+        Math.max(
+          estimatedDurationSeconds,
+          audioFloorSeconds ?? 0,
+          sd15DurationBounds.min,
+        ),
+        sd15DurationBounds,
+      ),
     );
   }, [
     isSd15ProConfig,
     beat.beat_number,
+    estimatedDurationSeconds,
     audioFloorSeconds,
     seedance2ResolutionOptions,
     sd15DurationBounds.min,
@@ -540,8 +577,15 @@ export function VideoPane({
       parseSeedance2Config(
         beat.seedance2_config_json,
         seedance2DefaultRatioForProjectAspect(spec.renderAspect),
+        suggestedVideoDuration,
+        seedance2VideoDurationBounds,
       ),
-    [beat.seedance2_config_json, spec.renderAspect],
+    [
+      beat.seedance2_config_json,
+      spec.renderAspect,
+      suggestedVideoDuration,
+      seedance2VideoDurationBounds,
+    ],
   );
   const [seedance2Draft, setSeedance2Draft] = useState(seedance2Config);
   const videoPricingResolution =
@@ -643,14 +687,18 @@ export function VideoPane({
   useEffect(() => {
     if (!showSeedance2Config && !showHappyHorseConfig && !showGrokVideoConfig) return;
     const current = seedance2DraftRef.current;
-    const nextDuration = clampDuration(current.duration, seedance2DurationBounds);
+    const nextDuration = clampDuration(
+      Math.max(current.duration, audioFloorSeconds ?? 0),
+      seedance2VideoDurationBounds,
+    );
     if (current.duration === nextDuration) return;
     const next = { ...current, duration: nextDuration };
     seedance2DraftRef.current = next;
     setSeedance2Draft(next);
   }, [
-    seedance2DurationBounds.max,
-    seedance2DurationBounds.min,
+    seedance2VideoDurationBounds.max,
+    seedance2VideoDurationBounds.min,
+    audioFloorSeconds,
     showGrokVideoConfig,
     showHappyHorseConfig,
     showSeedance2Config,
@@ -1649,13 +1697,13 @@ export function VideoPane({
                   id={`happyhorse-${beat.beat_number}-duration`}
                   aria-label={t("episode.workbench.video.duration")}
                   type="number"
-                  min={seedance2DurationBounds.min}
-                  max={seedance2DurationBounds.max}
+                  min={seedance2VideoDurationBounds.min}
+                  max={seedance2VideoDurationBounds.max}
                   value={seedance2Draft.duration}
                   onChange={(e) =>
                     updateSeedance2Draft(
                       "duration",
-                      clampDuration(e.target.value, seedance2DurationBounds),
+                      clampDuration(e.target.value, seedance2VideoDurationBounds),
                     )
                   }
                   className={cn("w-20", VIDEO_PARAM_CONTROL_CLASS)}
@@ -2247,13 +2295,13 @@ export function VideoPane({
                 id={`${seedance2Id}-duration`}
                 aria-label={t("episode.workbench.video.duration")}
                 type="number"
-                min={seedance2DurationBounds.min}
-                max={seedance2DurationBounds.max}
+                min={seedance2VideoDurationBounds.min}
+                max={seedance2VideoDurationBounds.max}
                 value={seedance2Draft.duration}
                 onChange={(e) =>
                   updateSeedance2Draft(
                     "duration",
-                    clampDuration(e.target.value, seedance2DurationBounds),
+                    clampDuration(e.target.value, seedance2VideoDurationBounds),
                   )
                 }
                 className={cn("!h-9", SEEDANCE2_CONTROL_CLASS)}
@@ -3210,19 +3258,26 @@ function Seedance2Checkbox({
 function parseSeedance2Config(
   value: string | null | undefined,
   defaultRatio: Seedance2ConfigDraft["ratio"] = "9:16",
+  defaultDuration = 5,
+  durationBounds: Seedance2DurationBounds = { min: 1, max: 15 },
 ): Seedance2ConfigDraft {
   const text = String(value ?? "").trim();
-  if (!text) return defaultSeedance2Config({}, defaultRatio);
+  if (!text) return defaultSeedance2Config({}, defaultRatio, defaultDuration, durationBounds);
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const raw = parsed as Record<string, unknown>;
-      return defaultSeedance2Config(raw, defaultRatio);
+      return defaultSeedance2Config(raw, defaultRatio, defaultDuration, durationBounds);
     }
   } catch {
-    return defaultSeedance2Config({ final_prompt: text }, defaultRatio);
+    return defaultSeedance2Config(
+      { final_prompt: text },
+      defaultRatio,
+      defaultDuration,
+      durationBounds,
+    );
   }
-  return defaultSeedance2Config({}, defaultRatio);
+  return defaultSeedance2Config({}, defaultRatio, defaultDuration, durationBounds);
 }
 
 function isSeedanceReferenceCropBackend(value: string | null | undefined): boolean {
@@ -3266,6 +3321,8 @@ function cropAspectRatioValue(aspect: Seedance2CropAspect): number {
 function defaultSeedance2Config(
   raw: Record<string, unknown>,
   defaultRatio: Seedance2ConfigDraft["ratio"],
+  defaultDuration = 5,
+  durationBounds: Seedance2DurationBounds = { min: 1, max: 15 },
 ): Seedance2ConfigDraft {
   const textOverlay =
     raw.text_overlay && typeof raw.text_overlay === "object" && !Array.isArray(raw.text_overlay)
@@ -3273,11 +3330,15 @@ function defaultSeedance2Config(
       : {};
   const modeUserSet = raw.mode_user_set === true;
   const rawMode = normalizeSeedance2Mode(raw.mode);
+  const parsedDuration = Number(raw.duration);
+  const duration = Number.isFinite(parsedDuration) && parsedDuration > 0
+    ? parsedDuration
+    : defaultDuration;
   return {
     raw,
     mode: !modeUserSet && raw.mode === "first_frame" ? "multimodal_reference" : rawMode,
     mode_user_set: modeUserSet,
-    duration: clampDuration(raw.duration),
+    duration: clampDuration(duration, durationBounds),
     resolution: normalizeSeedance2Resolution(raw.resolution),
     ratio: normalizeSeedance2Ratio(raw.ratio, defaultRatio),
     generate_audio_user_set: raw.generate_audio_user_set === true,

@@ -17,9 +17,7 @@ def _tables(db_path: str | Path) -> set[str]:
     with sqlite3.connect(str(db_path)) as conn:
         return {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
 
 
@@ -66,6 +64,43 @@ async def test_seedance2_voice_audio_records_table_created(initialized_store):
 async def test_beats_seedance2_config_column_added(initialized_store):
     cols = _columns(initialized_store.db_path, "beats")
     assert "seedance2_config_json" in cols
+    assert "estimated_duration" in cols
+
+
+def test_legacy_beats_backfill_estimated_duration(tmp_path):
+    import sqlite3
+
+    from novelvideo.sqlite_store import SQLiteStore
+
+    output_dir = tmp_path / "output"
+    state_dir = tmp_path / "state"
+    output_dir.mkdir()
+    state_dir.mkdir()
+    store = SQLiteStore(
+        "testuser/legacy_duration",
+        output_dir=str(output_dir),
+        state_dir=str(state_dir),
+    )
+
+    with sqlite3.connect(":memory:") as db:
+        db.row_factory = sqlite3.Row
+        db.execute(
+            "CREATE TABLE beats (episode_number INTEGER, beat_number INTEGER, "
+            "narration TEXT, visual_description TEXT, "
+            "PRIMARY KEY (episode_number, beat_number))"
+        )
+        db.execute(
+            "INSERT INTO beats (episode_number, beat_number, narration, visual_description) "
+            "VALUES (1, 1, '旧旁白文本', '画面')"
+        )
+
+        store._ensure_beat_current_columns(db)
+
+        estimated_duration = db.execute(
+            "SELECT estimated_duration FROM beats WHERE episode_number = 1"
+        ).fetchone()[0]
+
+    assert estimated_duration == len("旧旁白文本") / 4.0
 
 
 @pytest.mark.asyncio
@@ -179,5 +214,7 @@ def test_character_voice_field_defaults_match_pydantic():
 def test_novel_visual_beat_seedance2_config_default():
     from novelvideo.models import NovelVisualBeat
 
-    beat = NovelVisualBeat(beat_number=1, episode_number=1, narration="x", visual_description="y")
+    beat = NovelVisualBeat(
+        beat_number=1, episode_number=1, narration="x", visual_description="y"
+    )
     assert beat.seedance2_config_json == "{}"

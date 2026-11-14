@@ -1097,3 +1097,100 @@ def test_seedance2_panel_state_uses_authoritative_language_for_freshness(
 
     assert state.current_prompt_inputs_hash == "current-hash"
     assert seen == {"fallback_language": "en", "hash_language": "en"}
+
+
+async def test_seedance2_composer_task_includes_adjacent_beats_and_transition_rules():
+    from novelvideo.seedance2_i2v.models import Seedance2I2VMode
+    from novelvideo.seedance2_i2v.prompt import (
+        SEEDANCE2_COMPOSER_SYSTEM_PROMPT,
+        build_seedance2_prompt_composer_task,
+        generate_seedance2_prompt,
+    )
+
+    assert "Cinematic Continuity & Smooth Transition Rules" in SEEDANCE2_COMPOSER_SYSTEM_PROMPT
+    assert "Action Match" in SEEDANCE2_COMPOSER_SYSTEM_PROMPT
+
+    task = build_seedance2_prompt_composer_task(
+        mode=Seedance2I2VMode.FIRST_FRAME,
+        beat={
+            "beat_number": 2,
+            "scene_id": "corridor",
+            "visual_description": "知薇推开走廊尽头的木门。",
+        },
+        assets=[],
+        text_overlay={},
+        prompt_guidance="",
+        draft_prompt="画面呈现知薇推开木门。",
+        prev_beat={
+            "beat_number": 1,
+            "scene_id": "corridor",
+            "visual_description": "知薇快步走向走廊尽头。",
+            "seedance2_config_json": json.dumps(
+                {"final_prompt": "镜头紧跟背影推进，她抬起右手伸向门把手。"}
+            ),
+        },
+        next_beat={
+            "beat_number": 3,
+            "scene_id": "balcony",
+            "visual_description": "夜风吹过空旷的阳台。",
+        },
+        language="zh",
+    )
+    assert '"adjacent_beats"' in task
+    assert '"same_scene_with_prev": true' in task
+    assert '"same_scene_with_next": false' in task
+    assert "她抬起右手伸向门把手" in task
+
+    captured = {}
+
+    async def fake_composer(**kwargs):
+        captured.update(kwargs)
+        return "根据图片1延续动作推进。"
+
+    await generate_seedance2_prompt(
+        mode=Seedance2I2VMode.FIRST_FRAME,
+        beat={"beat_number": 2, "visual_description": "知薇推开门。"},
+        assets=[],
+        text_overlay={},
+        prompt_guidance="",
+        composer=fake_composer,
+        prev_beat={"beat_number": 1, "visual_description": "知薇走近门前。"},
+        next_beat={"beat_number": 3, "visual_description": "阳台夜景。"},
+    )
+    assert captured["prev_beat"]["beat_number"] == 1
+    assert captured["next_beat"]["beat_number"] == 3
+
+
+async def test_seedance2_panel_forwards_prev_and_next_beats(monkeypatch, tmp_path):
+    from novelvideo.seedance2_i2v import panel_service
+    from novelvideo.seedance2_i2v.prompt import Seedance2PromptGeneration
+
+    seen = {}
+
+    class Store:
+        async def update_beat_asset(self, **_kwargs):
+            return None
+
+    async def fake_generate(**kwargs):
+        seen.update(kwargs)
+        return Seedance2PromptGeneration(
+            prompt="根据图片1顺畅衔接。",
+            used_ai=True,
+            draft_prompt="根据图片1顺畅衔接。",
+        )
+
+    monkeypatch.setattr(panel_service, "build_seedance2_project_assets", lambda **_kwargs: [])
+    monkeypatch.setattr(panel_service, "generate_seedance2_prompt", fake_generate)
+
+    await panel_service.generate_seedance2_prompt_for_panel(
+        store=Store(),
+        state_dir=tmp_path / "state",
+        episode=1,
+        beat={"beat_number": 2, "visual_description": "知薇推开门。"},
+        prev_beat={"beat_number": 1, "visual_description": "知薇走近门前。"},
+        next_beat={"beat_number": 3, "visual_description": "阳台夜景。"},
+        project_dir=tmp_path,
+    )
+
+    assert seen["prev_beat"]["beat_number"] == 1
+    assert seen["next_beat"]["beat_number"] == 3

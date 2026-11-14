@@ -287,6 +287,7 @@ async def generate_seedance2_prompt_for_panel(
     episode: int,
     beat: dict[str, Any],
     project_dir: Path,
+    prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     composer=None,
     manual_prompt_reference: str | None = None,
@@ -345,6 +346,8 @@ async def generate_seedance2_prompt_for_panel(
         },
         manual_prompt_reference=reference_prompt,
         composer=composer,
+        prev_beat=prev_beat,
+        next_beat=next_beat,
         language=output_language,
     )
     config.final_prompt = mark_seedance2_prompt_references_for_editor(result.prompt)

@@ -3215,7 +3215,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             )
             return VideoGenResult(status=VideoGenStatus.FAILED, error=safe_error)
 
-        if requested_mode:
+        if requested_mode and not is_seedance2_model:
             try:
                 await self._apply_huimeng_protocol_media_inputs(
                     metadata,
@@ -3509,6 +3509,14 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     or self._is_grok_video_channel_model()
                 ),
             )
+            if is_seedance2_model:
+                # A Seedance model alias can route through a generic OpenAI
+                # channel, which reads images rather than the native metadata.
+                # Keep both representations: native adapters still need the
+                # ordered reference_images list for multimodal references.
+                reference_images = metadata.get("reference_images")
+                if isinstance(reference_images, list) and reference_images:
+                    payload["images"] = list(reference_images)
             payload = apply_media_request_schema(
                 payload, self.request_schema, self.model_params
             )

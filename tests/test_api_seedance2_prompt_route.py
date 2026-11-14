@@ -242,6 +242,7 @@ def test_generate_seedance2_prompt_updates_config_json(monkeypatch, tmp_path):
     assert seen["prompt_guidance"] == "more camera motion"
     assert seen.get("prompt_guidance_template_keys") == ["camera"]
     assert seen["language"] == "en"
+    assert seen["prev_beat"] is None
     assert seen["next_beat"]["beat_number"] == 2
     assert store.updates == [
         {
@@ -250,6 +251,41 @@ def test_generate_seedance2_prompt_updates_config_json(monkeypatch, tmp_path):
             "updates": {"seedance2_config_json": saved_json},
         }
     ]
+
+
+def test_generate_seedance2_prompt_passes_prev_and_next_beats(monkeypatch, tmp_path):
+    from novelvideo.seedance2_i2v import panel_service
+
+    saved_json = json.dumps({"mode": "first_frame", "final_prompt": "ok"})
+    seen = {}
+
+    async def _generate_seedance2_prompt_for_panel(**kwargs):
+        seen.update(kwargs)
+        return saved_json
+
+    monkeypatch.setattr(
+        panel_service,
+        "generate_seedance2_prompt_for_panel",
+        _generate_seedance2_prompt_for_panel,
+    )
+    client, _store = _client(
+        monkeypatch,
+        tmp_path,
+        [
+            {"beat_number": 1, "visual_description": "Beat 1"},
+            {"beat_number": 2, "visual_description": "Beat 2"},
+            {"beat_number": 3, "visual_description": "Beat 3"},
+        ],
+    )
+
+    response = client.post(
+        "/projects/demo/episodes/1/beats/2/seedance2-prompt/generate",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert seen["prev_beat"]["beat_number"] == 1
+    assert seen["next_beat"]["beat_number"] == 3
 
 
 def test_generate_seedance2_prompt_reserves_feature_credit_and_confirms(

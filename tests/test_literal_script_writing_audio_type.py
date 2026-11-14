@@ -22,6 +22,8 @@ def _payload(audio_type: str | None = None) -> dict:
         "speaker_kind": "character",
         "visual_description": "昏暗的街区里只有面馆亮着灯。",
         "scene_id": "",
+        "continues_previous_shot": False,
+        "estimated_duration_seconds": 3.0,
     }
     if audio_type is not None:
         payload["audio_type"] = audio_type
@@ -77,6 +79,13 @@ def test_literal_beat_meta_accepts_narration_audio_type_for_non_dialogue():
 def test_literal_beat_meta_rejects_action_audio_type():
     with pytest.raises(ValidationError, match="silence/narration/dialogue"):
         LiteralBeatMetaOutput.model_validate(_payload("action"))
+
+
+def test_literal_beat_meta_requires_a_positive_timing_estimate():
+    with pytest.raises(ValidationError, match="greater than 0"):
+        LiteralBeatMetaOutput.model_validate(
+            {**_payload(), "estimated_duration_seconds": 0}
+        )
 
 
 def test_literal_workflow_leaves_silence_narration_segment_empty():
@@ -141,7 +150,9 @@ def test_literal_content_filter_log_mentions_line_context_and_terms():
         total=37,
         line_ctx=SimpleNamespace(
             raw_line="沈晚握紧匕首，指尖渗出血。",
-            scene_block=SimpleNamespace(header_line="苏鸾寝殿 夜 内", location="苏鸾寝殿"),
+            scene_block=SimpleNamespace(
+                header_line="苏鸾寝殿 夜 内", location="苏鸾寝殿"
+            ),
             prev_window=["苏糖后退一步。"],
             next_line="屋内灯光闪烁。",
             source_line_number=11,
@@ -194,7 +205,9 @@ def test_literal_scene_menu_prompt_lists_scene_ids_without_variant_menu():
     episode = SimpleNamespace(
         scene_menu=[
             SimpleNamespace(scene_id="故宫"),
-            SimpleNamespace(scene_id="故宫_下雪", base_scene_id="故宫", variant_id="下雪"),
+            SimpleNamespace(
+                scene_id="故宫_下雪", base_scene_id="故宫", variant_id="下雪"
+            ),
         ]
     )
 
@@ -221,7 +234,9 @@ def test_literal_locked_base_allows_derived_scene_candidates():
     workflow = LiteralScriptWritingWorkflow(cognee_store=None)
     episode = SimpleNamespace(
         scene_menu=[
-            SimpleNamespace(scene_id="故宫_下雪", base_scene_id="故宫", variant_id="下雪"),
+            SimpleNamespace(
+                scene_id="故宫_下雪", base_scene_id="故宫", variant_id="下雪"
+            ),
             SimpleNamespace(scene_id="故宫"),
             SimpleNamespace(scene_id="御花园"),
         ]
@@ -271,7 +286,9 @@ def test_literal_locked_base_rejects_other_scene_candidate():
 
     workflow._build_scene_menu_for_episode(episode)
 
-    allowed = workflow._allowed_scene_ids_for_block(workflow._resolve_scene_id("故宫", episode))
+    allowed = workflow._allowed_scene_ids_for_block(
+        workflow._resolve_scene_id("故宫", episode)
+    )
     assert "御花园" not in allowed
 
 
@@ -335,7 +352,11 @@ class _LiteralRunStore:
             title="第一集",
             identity_ids=[],
             identity_default_map={},
-            scene_menu=[SimpleNamespace(scene_id="Room", base_scene_id="", variant_id="", time_of_day="")],
+            scene_menu=[
+                SimpleNamespace(
+                    scene_id="Room", base_scene_id="", variant_id="", time_of_day=""
+                )
+            ],
             prop_menu=[SimpleNamespace(prop_id="灯笼")],
         )
         self.persisted = None
@@ -373,13 +394,22 @@ class _SequencedLiteralAgent:
         return SimpleNamespace(output=outcome)
 
 
-def _valid_literal_output(visual_description: str) -> LiteralBeatMetaOutput:
+def _valid_literal_output(
+    visual_description: str,
+    *,
+    audio_type: str = "silence",
+    speaker: str = "",
+    continues_previous_shot: bool = False,
+    estimated_duration_seconds: float = 3.0,
+) -> LiteralBeatMetaOutput:
     return LiteralBeatMetaOutput(
-        audio_type="silence",
-        speaker="",
+        audio_type=audio_type,
+        speaker=speaker,
         speaker_kind="character",
         visual_description=visual_description,
         scene_id="",
+        continues_previous_shot=continues_previous_shot,
+        estimated_duration_seconds=estimated_duration_seconds,
     )
 
 
@@ -488,6 +518,115 @@ async def test_literal_workflow_retries_one_line_with_a_fresh_model_call(monkeyp
     assert workflow.last_degraded_lines == []
     assert workflow.last_review_passed is True
     assert any("正在重新调用模型" in message for message in logs)
+
+
+@pytest.mark.asyncio
+async def test_literal_workflow_merges_continuous_lines_and_sums_duration(monkeypatch):
+    store = _LiteralRunStore()
+    agent = _SequencedLiteralAgent(
+        [
+            _valid_literal_output(
+                "{{MAYA_youth}}站在门边，手握门把。",
+                audio_type="dialogue",
+                speaker="MAYA",
+                estimated_duration_seconds=2.5,
+            ),
+            _valid_literal_output(
+                "{{MAYA_youth}}推门进入室内。",
+                audio_type="dialogue",
+                speaker="MAYA",
+                continues_previous_shot=True,
+                estimated_duration_seconds=3.0,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        LiteralScriptWritingWorkflow,
+        "agent",
+        property(lambda _workflow: agent),
+    )
+    workflow = LiteralScriptWritingWorkflow(cognee_store=store, sqlite_store=store)
+
+    script = await workflow.run(
+        episode_num=1,
+        source_text=(
+            "SCENE 1 - ROOM\nLocation: Room\nMAYA: 门外有人。\nMAYA: 我来开门。"
+        ),
+    )
+
+    assert len(script.beats) == 1
+    assert script.beats[0].narration_segment == "门外有人。\n我来开门。"
+    assert "；" in script.beats[0].visual_description
+    assert script.beats[0].estimated_duration == 5.5
+
+
+@pytest.mark.asyncio
+async def test_literal_workflow_keeps_audio_speaker_changes_as_separate_beats(
+    monkeypatch,
+):
+    store = _LiteralRunStore()
+    agent = _SequencedLiteralAgent(
+        [
+            _valid_literal_output(
+                "{{MAYA_youth}}站在门口。",
+                audio_type="dialogue",
+                speaker="MAYA",
+                estimated_duration_seconds=2,
+            ),
+            _valid_literal_output(
+                "{{JACK_adult}}从室内回应。",
+                audio_type="dialogue",
+                speaker="JACK",
+                continues_previous_shot=True,
+                estimated_duration_seconds=2,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        LiteralScriptWritingWorkflow,
+        "agent",
+        property(lambda _workflow: agent),
+    )
+    workflow = LiteralScriptWritingWorkflow(cognee_store=store, sqlite_store=store)
+
+    script = await workflow.run(
+        episode_num=1,
+        source_text=("SCENE 1 - ROOM\nLocation: Room\nMAYA: 有人在吗？\nJACK: 我在。"),
+    )
+
+    assert len(script.beats) == 2
+    assert [beat.speaker for beat in script.beats] == ["MAYA", "JACK"]
+
+
+@pytest.mark.asyncio
+async def test_literal_workflow_does_not_merge_across_scene_blocks(monkeypatch):
+    store = _LiteralRunStore()
+    agent = _SequencedLiteralAgent(
+        [
+            _valid_literal_output("她从桌边站起。", estimated_duration_seconds=2),
+            _valid_literal_output(
+                "她走进走廊。",
+                continues_previous_shot=True,
+                estimated_duration_seconds=3,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        LiteralScriptWritingWorkflow,
+        "agent",
+        property(lambda _workflow: agent),
+    )
+    workflow = LiteralScriptWritingWorkflow(cognee_store=store, sqlite_store=store)
+
+    script = await workflow.run(
+        episode_num=1,
+        source_text=(
+            "SCENE 1 - ROOM\nLocation: Room\n她从桌边站起。\n"
+            "SCENE 2 - HALL\nLocation: Hall\n她走进走廊。"
+        ),
+    )
+
+    assert len(script.beats) == 2
 
 
 @pytest.mark.asyncio

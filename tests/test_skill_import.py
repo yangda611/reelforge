@@ -345,3 +345,52 @@ def test_public_record_reports_live_conversion_version_not_persisted_value():
     assert result['current_conversion_version'] == CONVERSION_VERSION
     assert result['quality_report']['version'] == 3
     assert record['current_conversion_version'] == 2
+
+
+def test_zip_ignores_macos_appledouble_metadata_and_recovers_utf8_filename():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('seedance2.0 XXXXXXSKILL.md', '# 武打提示词\n使用连续动作推进。'.encode('utf-8'))
+        archive.writestr(
+            '__MACOSX/._seedance2.0 XXXXXXSKILL.md',
+            b'\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x02\x00\x00\x00\t\x00\x00\x002\x00\x00\x01\xa3\x00\x00',
+        )
+
+    # Simulate macOS Archive Utility writing UTF-8 filename bytes without flag bit 0x800.
+    raw_zip = data.getvalue().replace(b'XXXXXX', '武打'.encode('utf-8'))
+    result = read_source('skill.zip', base64.b64encode(raw_zip).decode())
+    assert result['resources'] == ['seedance2.0 武打SKILL.md']
+    assert result['warnings'] == []
+    assert '使用连续动作推进' in result['text']
+
+
+def test_markdown_supports_gb18030_and_rejects_binary_nul_bytes():
+    gb_bytes = '# 动作分镜\n连续镜头推进。'.encode('gb18030')
+    gb_result = read_source('combat.md', base64.b64encode(gb_bytes).decode())
+    assert '连续镜头推进' in gb_result['text']
+
+    with pytest.raises(ValueError, match='not binary'):
+        read_source('broken.md', base64.b64encode(b'# title\x00\xff\xfe').decode())
+
+
+def test_large_multifile_chinese_skill_up_to_512kib_is_accepted():
+    body = '# 分镜参考\n' + ('动作衔接与镜头推进规则。\n' * 8500)
+    assert len(body.encode('utf-8')) > 128 * 1024
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('demo/SKILL.md', '# 主技能\n参考 [规则](references/rules.md)')
+        archive.writestr('demo/references/rules.md', body)
+
+    result = read_source('large.zip', base64.b64encode(data.getvalue()).decode())
+    assert result['warnings'] == []
+    assert 'demo/SKILL.md' in result['resources']
+    assert 'demo/references/rules.md' in result['resources']
+
+
+def test_zip_multi_md_without_skill_entrypoint_is_still_rejected():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('demo/a.md', '# A')
+        archive.writestr('demo/b.md', '# B')
+    with pytest.raises(ValueError, match='exactly one SKILL.md'):
+        read_source('bad.zip', base64.b64encode(data.getvalue()).decode())

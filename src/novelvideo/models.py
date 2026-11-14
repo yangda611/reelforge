@@ -13,7 +13,10 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from novelvideo.time_of_day import is_time_of_day_token, time_of_day_name_candidates
-from novelvideo.utils.asset_names import coerce_path_safe_asset_name, path_safe_asset_name
+from novelvideo.utils.asset_names import (
+    coerce_path_safe_asset_name,
+    path_safe_asset_name,
+)
 from novelvideo.utils.derived_scenes import compose_derived_scene_name
 
 
@@ -33,7 +36,9 @@ def _dedupe_non_empty(values: list[Any] | tuple[Any, ...] | None) -> list[str]:
     return result
 
 
-def normalize_detected_identities(values: list[Any] | tuple[Any, ...] | None) -> list[str]:
+def normalize_detected_identities(
+    values: list[Any] | tuple[Any, ...] | None,
+) -> list[str]:
     """Normalize detected identity IDs, preserving the explicit no-character marker."""
     result = _dedupe_non_empty(values)
     real_ids = [item for item in result if item != NO_CHARACTER_MARKER]
@@ -49,7 +54,11 @@ def normalize_detected_props(values: list[Any] | tuple[Any, ...] | None) -> list
 
 def real_detected_identities(values: list[Any] | tuple[Any, ...] | None) -> list[str]:
     """Return only concrete identity IDs from a detected_identities payload."""
-    return [item for item in normalize_detected_identities(values) if item != NO_CHARACTER_MARKER]
+    return [
+        item
+        for item in normalize_detected_identities(values)
+        if item != NO_CHARACTER_MARKER
+    ]
 
 
 def real_detected_props(values: list[Any] | tuple[Any, ...] | None) -> list[str]:
@@ -58,7 +67,9 @@ def real_detected_props(values: list[Any] | tuple[Any, ...] | None) -> list[str]
 
 
 def _extract_identity_marker_ids(visual_description: str) -> list[str]:
-    return list(extract_char_identities_from_markers(visual_description, strict=False).values())
+    return list(
+        extract_char_identities_from_markers(visual_description, strict=False).values()
+    )
 
 
 def complete_detected_refs_from_visual_description(
@@ -107,12 +118,15 @@ def extract_char_identities_from_markers(
             result[char_name] = marker
         elif strict:
             raise ValueError(
-                f"marker '{{{{{marker}}}}}' 缺少身份后缀，" f"应为 '{{{{{marker}_身份名}}}}' 格式"
+                f"marker '{{{{{marker}}}}}' 缺少身份后缀，"
+                f"应为 '{{{{{marker}_身份名}}}}' 格式"
             )
     return result
 
 
-def extract_prop_ids_from_markers(visual_desc: str, *, strict: bool = False) -> list[str]:
+def extract_prop_ids_from_markers(
+    visual_desc: str, *, strict: bool = False
+) -> list[str]:
     """从 visual_description 的 [[prop_id]] marker 提取 prop_id 列表。"""
     result: list[str] = []
     seen: set[str] = set()
@@ -133,7 +147,9 @@ class SceneRef(BaseModel):
     """Beat 内引用的场景资产。"""
 
     scene_id: str = Field(default="", description="场景 ID")
-    variant_id: str = Field(default="", description="场景外观/状态选择器；为空表示基础场景")
+    variant_id: str = Field(
+        default="", description="场景外观/状态选择器；为空表示基础场景"
+    )
     render_anchor_id: str = Field(
         default="",
         description="Beat 实际 render 背景槽位；为空表示默认场景图，selected_background 表示使用 beat 冻结背景",
@@ -147,10 +163,18 @@ class SceneRef(BaseModel):
 class SceneMenuItem(BaseModel):
     """Episode 级场景菜单项。"""
 
-    scene_id: str = Field(default="", description="场景菜单项 ID；派生场景可为完整派生场景名")
-    base_scene_id: str = Field(default="", description="派生场景所属基础场景 ID；基础场景为空")
-    variant_id: str = Field(default="", description="派生场景外观/状态标签；基础场景为空")
-    time_of_day: str = Field(default="", description="派生场景时间标签；基础场景或非时间版为空")
+    scene_id: str = Field(
+        default="", description="场景菜单项 ID；派生场景可为完整派生场景名"
+    )
+    base_scene_id: str = Field(
+        default="", description="派生场景所属基础场景 ID；基础场景为空"
+    )
+    variant_id: str = Field(
+        default="", description="派生场景外观/状态标签；基础场景为空"
+    )
+    time_of_day: str = Field(
+        default="", description="派生场景时间标签；基础场景或非时间版为空"
+    )
 
 
 class PropMenuItem(BaseModel):
@@ -275,6 +299,28 @@ def beat_scene_variant_id(value: Any) -> str:
     return scene_ref.variant_id if scene_ref else ""
 
 
+def _beat_scene_description(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("scene_description", "") or "").strip().lower()
+    return str(getattr(value, "scene_description", "") or "").strip().lower()
+
+
+def beats_share_scene(first: Any, second: Any) -> bool:
+    """Return True when two beats share the same concrete scene identity."""
+    if not first or not second:
+        return False
+    first_ref = beat_scene_ref(first)
+    second_ref = beat_scene_ref(second)
+    if first_ref and second_ref:
+        return (
+            first_ref.scene_id == second_ref.scene_id
+            and first_ref.variant_id == second_ref.variant_id
+        )
+    first_desc = _beat_scene_description(first)
+    second_desc = _beat_scene_description(second)
+    return bool(first_desc and second_desc and first_desc == second_desc)
+
+
 def resolve_scene_record_name(
     scene_id: str,
     variant_id: str | None = "",
@@ -353,7 +399,9 @@ def resolve_scene_plate(
     if not base:
         return "", False
 
-    names = {str(name or "").strip() for name in known_names or [] if str(name or "").strip()}
+    names = {
+        str(name or "").strip() for name in known_names or [] if str(name or "").strip()
+    }
     if not names:
         return resolve_scene_record_name(base, variant, known_names), False
 
@@ -414,7 +462,9 @@ def resolve_scene_plate_from_records(
             found = by_key.get((base, variant, time_name))
             if found:
                 return found, True
-        fallback_name, fallback_baked = resolve_scene_plate(base, variant, time_of_day, names)
+        fallback_name, fallback_baked = resolve_scene_plate(
+            base, variant, time_of_day, names
+        )
         if fallback_name != base or fallback_baked:
             return fallback_name, fallback_baked
         found = by_key.get((base, variant, ""))
@@ -574,7 +624,8 @@ def build_prop_menu(
                 return None
             return PropMenuItem(
                 prop_id=prop_id,
-                prop_type=str(item.get("prop_type", "") or "object").strip() or "object",
+                prop_type=str(item.get("prop_type", "") or "object").strip()
+                or "object",
                 visual_prompt=str(
                     item.get("visual_prompt", "") or item.get("description", "") or ""
                 ).strip(),
@@ -678,8 +729,12 @@ class StyleConfig(BaseModel):
         default=False,
         description="是否为系统预设（True=不可删除，False=自定义风格）",
     )
-    created_at: Optional[datetime] = Field(default=None, description="创建时间（仅自定义风格）")
-    created_by: Optional[str] = Field(default=None, description="创建者（仅自定义风格）")
+    created_at: Optional[datetime] = Field(
+        default=None, description="创建时间（仅自定义风格）"
+    )
+    created_by: Optional[str] = Field(
+        default=None, description="创建者（仅自定义风格）"
+    )
     preview_path: Optional[str] = Field(
         default=None,
         description="自定义风格参考图相对于项目目录的路径；预设风格为空",
@@ -699,7 +754,9 @@ class StyleConfig(BaseModel):
         return result
 
     @classmethod
-    def from_legacy_dict(cls, style_id: str, data: dict, name: str = "") -> "StyleConfig":
+    def from_legacy_dict(
+        cls, style_id: str, data: dict, name: str = ""
+    ) -> "StyleConfig":
         """从旧版 STYLE_PRESETS 格式创建 StyleConfig。
 
         Args:
@@ -840,7 +897,9 @@ class VisualBeat(BaseModel):
     beat_number: int = Field(description="节拍序号（从1开始）")
     narration_segment: str = Field(description="这段解说词（中文）")
     visual_description: str = Field(description="对应画面描述（中文，创意意图描述）")
-    source_text_sha256: str = Field(default="", description="生成镜头时实际输入文本的 SHA256")
+    source_text_sha256: str = Field(
+        default="", description="生成镜头时实际输入文本的 SHA256"
+    )
 
     time_of_day: str = Field(
         default="",
@@ -856,21 +915,24 @@ class VisualBeat(BaseModel):
         description="silence=无朗读画面 beat / narration=旁白解说 / dialogue=角色台词",
     )
     speaker: str = Field(
-        default="", description="说话人标签（主角色可用 identity_id，群众/路人可用普通标签）"
+        default="",
+        description="说话人标签（主角色可用 identity_id，群众/路人可用普通标签）",
     )
     speaker_kind: str = Field(
         default="character",
         description="speaker 类型：character=物理角色或普通角色，non_character=广播/画外音/字幕/屏幕文字等非角色发声源",
     )
 
-    # 时长信息（生成时按字数估算，不持久化到 DB）
-    estimated_duration: float = Field(default=0.0, description="预估时长（秒），按字数计算")
+    # Editorial shot estimate; user-selected video duration remains separate.
+    estimated_duration: float = Field(default=0.0, description="叙事镜头预估时长（秒）")
 
     # 手工分镜插入支持
     shot_order: Optional[int] = Field(
         default=None, description="显示/叙事顺序（fractional ordering）"
     )
-    duration_seconds: Optional[float] = Field(default=None, description="用户指定目标时长（秒）")
+    duration_seconds: Optional[float] = Field(
+        default=None, description="用户指定目标时长（秒）"
+    )
     is_manual_shot: bool = Field(default=False, description="是否为用户手工插入的分镜")
 
     # ==========================================================================
@@ -884,10 +946,14 @@ class VisualBeat(BaseModel):
     )
 
     # 视频历史版本
-    video_versions: list[str] = Field(default_factory=list, description="历史版本路径列表")
+    video_versions: list[str] = Field(
+        default_factory=list, description="历史版本路径列表"
+    )
 
     # 视频池条目 ID
-    video_pool_id: Optional[str] = Field(default=None, description="选中的视频池条目 ID")
+    video_pool_id: Optional[str] = Field(
+        default=None, description="选中的视频池条目 ID"
+    )
 
     # 视频生成模式（与持久化层 NovelVisualBeat / DB beats.video_mode 对齐）
     video_mode: str = Field(
@@ -1044,7 +1110,9 @@ class CharacterIdentity(BaseModel):
         default="extracted",
         description="来源: 'extracted'（小说提取）或 'user_created'（手动创建）",
     )
-    updated_at: str = Field(default="", description="身份资产最后一次内容变化时间 ISO 字符串")
+    updated_at: str = Field(
+        default="", description="身份资产最后一次内容变化时间 ISO 字符串"
+    )
 
     @model_validator(mode="after")
     def sanitize_names(self):
@@ -1093,7 +1161,9 @@ class NovelCharacter(BaseModel):
     role: str = Field(default="", description="角色定位（主角/配角/反派）")
     is_main: bool = Field(default=False, description="是否为主角/核心角色")
     gender: str = Field(default="", description="性别")
-    age_group: str = Field(default="youth", description="年龄段: child/youth/middle/elder")
+    age_group: str = Field(
+        default="youth", description="年龄段: child/youth/middle/elder"
+    )
     body_type: str = Field(default="", description="体型描述，如'纤细高挑'、'健壮魁梧'")
     fish_voice_id: str = Field(
         default="",
@@ -1140,7 +1210,9 @@ class NovelCharacter(BaseModel):
         default="[]",
         description="身份列表的 JSON 字符串",
     )
-    updated_at: str = Field(default="", description="角色资产最后一次内容变化时间 ISO 字符串")
+    updated_at: str = Field(
+        default="", description="角色资产最后一次内容变化时间 ISO 字符串"
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -1207,7 +1279,9 @@ class NovelCharacter(BaseModel):
     def voice_samples_by_age_group(self, value: dict[str, dict]) -> None:
         import json
 
-        self.voice_samples_by_age_group_json = json.dumps(value or {}, ensure_ascii=False)
+        self.voice_samples_by_age_group_json = json.dumps(
+            value or {}, ensure_ascii=False
+        )
 
     @identities.setter
     def identities(self, value: List[CharacterIdentity]):
@@ -1273,7 +1347,9 @@ class NovelEvent(BaseModel):
     text_start: int = Field(default=0, description="原文起始位置（字符偏移）")
     text_end: int = Field(default=0, description="原文结束位置")
     content: str = Field(default="", description="事件对应的原文")
-    causes: List[str] = Field(default_factory=list, description="因果关系（前置事件ID）")
+    causes: List[str] = Field(
+        default_factory=list, description="因果关系（前置事件ID）"
+    )
 
 
 class NovelEpisode(BaseModel):
@@ -1307,7 +1383,9 @@ class NovelEpisode(BaseModel):
         default="{}",
         description='JSON: 本集角色默认身份映射，如 {"杜晨": "杜晨_中年时期"}',
     )
-    updated_at: str = Field(default="", description="剧集规划最后一次内容变化时间 ISO 字符串")
+    updated_at: str = Field(
+        default="", description="剧集规划最后一次内容变化时间 ISO 字符串"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1417,9 +1495,13 @@ class NovelVisualBeat(BaseModel):
 
     beat_number: int = Field(..., description="节拍序号（1-based）")
     episode_number: int = Field(..., description="所属集数")
-    narration: str = Field(default="", description="TTS 文本（旁白或台词，用于嵌入索引）")
+    narration: str = Field(
+        default="", description="TTS 文本（旁白或台词，用于嵌入索引）"
+    )
     visual_description: str = Field(default="", description="画面描述（创意意图）")
-    source_text_sha256: str = Field(default="", description="生成镜头时实际输入文本的 SHA256")
+    source_text_sha256: str = Field(
+        default="", description="生成镜头时实际输入文本的 SHA256"
+    )
 
     time_of_day: str = Field(
         default="",
@@ -1449,18 +1531,28 @@ class NovelVisualBeat(BaseModel):
     )
 
     # 对话支持
-    audio_type: str = Field(default="narration", description="silence/narration/dialogue")
+    audio_type: str = Field(
+        default="narration", description="silence/narration/dialogue"
+    )
     speaker: str = Field(default="", description="说话人标签")
     speaker_kind: str = Field(
         default="character",
         description="speaker 类型：character/non_character",
     )
 
+    estimated_duration: float = Field(
+        default=0.0,
+        ge=0,
+        description="镜头叙事时长估算（秒）；不同于用户设置的目标视频时长",
+    )
+
     # 手工分镜插入支持
     shot_order: Optional[int] = Field(
         default=None, description="显示/叙事顺序（fractional ordering）"
     )
-    duration_seconds: Optional[float] = Field(default=None, description="用户指定目标时长（秒）")
+    duration_seconds: Optional[float] = Field(
+        default=None, description="用户指定目标时长（秒）"
+    )
     is_manual_shot: bool = Field(default=False, description="是否为用户手工插入的分镜")
 
     @model_validator(mode="after")
@@ -1500,16 +1592,30 @@ class NovelScene(BaseModel):
     name: str = Field(description="场景名称，如 '皇宫·大殿'")
     aliases: List[str] = Field(default_factory=list, description="别名")
     scene_type: str = Field(default="interior", description="interior/exterior/nature")
-    base_scene_id: str = Field(default="", description="派生场景所属基础场景 ID；基础场景为空")
-    variant_id: str = Field(default="", description="派生场景状态/外观标签；基础场景为空")
-    time_of_day: str = Field(default="", description="场景参考图自身时间；为空表示通用时间")
+    base_scene_id: str = Field(
+        default="", description="派生场景所属基础场景 ID；基础场景为空"
+    )
+    variant_id: str = Field(
+        default="", description="派生场景状态/外观标签；基础场景为空"
+    )
+    time_of_day: str = Field(
+        default="", description="场景参考图自身时间；为空表示通用时间"
+    )
 
-    environment_prompt: str = Field(default="", description="环境描述 prompt（用于生成参考图）")
-    variant_prompt: str = Field(default="", description="派生场景相对基础场景的增量视觉描述")
+    environment_prompt: str = Field(
+        default="", description="环境描述 prompt（用于生成参考图）"
+    )
+    variant_prompt: str = Field(
+        default="", description="派生场景相对基础场景的增量视觉描述"
+    )
     description: str = Field(default="", description="场景叙述性描述")
-    spatial_layout_image: str = Field(default="", description="场景级空间布局参考图路径")
+    spatial_layout_image: str = Field(
+        default="", description="场景级空间布局参考图路径"
+    )
     notes: str = Field(default="")
-    updated_at: str = Field(default="", description="场景资产最后一次内容变化时间 ISO 字符串")
+    updated_at: str = Field(
+        default="", description="场景资产最后一次内容变化时间 ISO 字符串"
+    )
 
     @model_validator(mode="after")
     def sanitize_name(self):
@@ -1523,7 +1629,9 @@ class NovelScene(BaseModel):
         return self
 
 
-def build_scene_effective_prompt(scene: NovelScene, base_scene: NovelScene | None = None) -> str:
+def build_scene_effective_prompt(
+    scene: NovelScene, base_scene: NovelScene | None = None
+) -> str:
     """Build the display/generation fallback prompt for a scene record.
 
     New derived scenes store only sparse deltas in variant_prompt.  Old derived
@@ -1531,7 +1639,9 @@ def build_scene_effective_prompt(scene: NovelScene, base_scene: NovelScene | Non
     """
 
     own_prompt = str(
-        getattr(scene, "environment_prompt", "") or getattr(scene, "description", "") or ""
+        getattr(scene, "environment_prompt", "")
+        or getattr(scene, "description", "")
+        or ""
     ).strip()
     variant_prompt = str(getattr(scene, "variant_prompt", "") or "").strip()
     base_scene_id = str(getattr(scene, "base_scene_id", "") or "").strip()
@@ -1581,12 +1691,18 @@ class NovelProp(BaseModel):
         default="object", description="weapon/accessory/artifact/document/furniture"
     )
 
-    visual_prompt: str = Field(default="", description="道具视觉 prompt（用于生成参考图）")
-    description: str = Field(default="", description="道具叙述性描述（材质、尺寸、用途）")
+    visual_prompt: str = Field(
+        default="", description="道具视觉 prompt（用于生成参考图）"
+    )
+    description: str = Field(
+        default="", description="道具叙述性描述（材质、尺寸、用途）"
+    )
 
     owner: str = Field(default="", description="所属角色名")
     notes: str = Field(default="")
-    updated_at: str = Field(default="", description="道具资产最后一次内容变化时间 ISO 字符串")
+    updated_at: str = Field(
+        default="", description="道具资产最后一次内容变化时间 ISO 字符串"
+    )
 
     @model_validator(mode="after")
     def sanitize_name(self):
@@ -1612,7 +1728,8 @@ class GenreStyle(BaseModel):
 
     # 视觉风格（默认：写实古装剧风格）
     art_style: str = Field(
-        default="写实古装剧风格", description="画风，如'写实古装剧风格', '少女漫画风', '热血漫画风'"
+        default="写实古装剧风格",
+        description="画风，如'写实古装剧风格', '少女漫画风', '热血漫画风'",
     )
     color_palette: list[str] = Field(default_factory=list, description="主色调列表")
 
@@ -1642,7 +1759,9 @@ class GridEntry(BaseModel):
     type: str = Field(description="图片类型：render 或 sketch")
     mode_key: str = Field(description="生成模式，如 3x3, 1x1_9-16, 2x2_1-1")
     beat_nums: list[int] = Field(description="包含的 beat 编号列表")
-    preset: str = Field(default="scene", description="preset 分组：scene / char / loc / custom")
+    preset: str = Field(
+        default="scene", description="preset 分组：scene / char / loc / custom"
+    )
     grid_path: str = Field(description="整图文件相对路径")
     prompt_path: str = Field(default="", description="提示词文件相对路径")
     generated_at: Optional[datetime] = Field(default=None, description="生成时间")
@@ -1668,7 +1787,9 @@ class PoolImage(BaseModel):
     - generated_at 记录生成时间，用于版本排序
     """
 
-    id: str = Field(description="唯一标识，格式: beat_{NN}_t{timestamp}[_render|_sketch]")
+    id: str = Field(
+        description="唯一标识，格式: beat_{NN}_t{timestamp}[_render|_sketch]"
+    )
     mode: str = Field(description="生成模式：1x1, 3x3, 5x5, regen 等")
     grid_index: int = Field(description="所属网格的索引（从1开始）")
     cell_index: int = Field(description="在网格中的单元格索引（从1开始，按行优先）")
@@ -1677,9 +1798,15 @@ class PoolImage(BaseModel):
     row: int = Field(description="在网格中的行号（从0开始）")
     col: int = Field(description="在网格中的列号（从0开始）")
     original_beat: int = Field(description="原始生成时对应的 beat 编号")
-    generated_at: Optional[datetime] = Field(default=None, description="生成时间（用于版本管理）")
-    type: str = Field(default="render", description="图片类型：render（渲染图）或 sketch（草图）")
-    content_hash: Optional[str] = Field(default=None, description="内容哈希（用于去重）")
+    generated_at: Optional[datetime] = Field(
+        default=None, description="生成时间（用于版本管理）"
+    )
+    type: str = Field(
+        default="render", description="图片类型：render（渲染图）或 sketch（草图）"
+    )
+    content_hash: Optional[str] = Field(
+        default=None, description="内容哈希（用于去重）"
+    )
     beat_content_hash: Optional[str] = Field(
         default=None, description="生成时 beat 内容的 SHA256（用于 stale 判断）"
     )
@@ -1734,13 +1861,23 @@ class PoolIndex(BaseModel):
 
     def filter_by_beat_and_type(self, beat: int, img_type: str) -> list[PoolImage]:
         """按 beat 和类型筛选图片。"""
-        return [img for img in self.images if img.original_beat == beat and img.type == img_type]
+        return [
+            img
+            for img in self.images
+            if img.original_beat == beat and img.type == img_type
+        ]
 
-    def find_grid(self, grid_type: str, mode_key: str, beat_nums: list[int]) -> Optional[GridEntry]:
+    def find_grid(
+        self, grid_type: str, mode_key: str, beat_nums: list[int]
+    ) -> Optional[GridEntry]:
         """按 3 要素查找整图。"""
         beat_set = set(beat_nums)
         for g in self.grids:
-            if g.type == grid_type and g.mode_key == mode_key and set(g.beat_nums) == beat_set:
+            if (
+                g.type == grid_type
+                and g.mode_key == mode_key
+                and set(g.beat_nums) == beat_set
+            ):
                 return g
         return None
 

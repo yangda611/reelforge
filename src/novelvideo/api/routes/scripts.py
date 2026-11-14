@@ -591,6 +591,10 @@ async def generate_seedance2_prompt(
     if target is None:
         raise HTTPException(status_code=404, detail=f"Beat {beat_num} not found")
 
+    prev_beat = next(
+        (beat for beat in beats if int(beat.get("beat_number") or 0) == beat_num - 1),
+        None,
+    )
     next_beat = next(
         (beat for beat in beats if int(beat.get("beat_number") or 0) == beat_num + 1),
         None,
@@ -661,6 +665,7 @@ async def generate_seedance2_prompt(
             episode=episode_num,
             beat=target,
             project_dir=project_dir,
+            prev_beat=prev_beat,
             next_beat=next_beat,
             manual_prompt_reference=body.manual_prompt_reference,
             prompt_guidance=body.prompt_guidance,

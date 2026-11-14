@@ -180,7 +180,7 @@ class SceneLineContext:
 
 
 class LiteralBeatMetaOutput(BaseModel):
-    """逐行剧本模式的 LLM 输出。"""
+    """单行标注结果及相邻镜头连续性判断。"""
 
     audio_type: str = Field(
         default="silence",
@@ -202,6 +202,14 @@ class LiteralBeatMetaOutput(BaseModel):
         default="",
         description="兜底 scene_id：仅在系统未锁定当前场次 scene_id 时使用。必须从本集场景菜单中精确选择（字符串完全相等），否则留空。",
     )
+    continues_previous_shot: bool = Field(
+        description="当前行是否应与上一条源文本行合成同一个连续镜头；新场景、新景别/视点、揭示信息或音频说话人改变时为 false。",
+    )
+    estimated_duration_seconds: float = Field(
+        gt=0,
+        le=30,
+        description="当前行给连续镜头增加的时长秒数；只估算新增动作/台词所需时间，不重复计算上一行已覆盖的时间。",
+    )
 
     @field_validator("scene_id")
     @classmethod
@@ -210,7 +218,10 @@ class LiteralBeatMetaOutput(BaseModel):
         if not scene_id:
             return ""
         valid_scene_ids = set((info.context or {}).get("valid_scene_ids") or [])
-        if "valid_scene_ids" in (info.context or {}) and scene_id not in valid_scene_ids:
+        if (
+            "valid_scene_ids" in (info.context or {})
+            and scene_id not in valid_scene_ids
+        ):
             return ""
         return scene_id
 
@@ -296,7 +307,8 @@ class LiteralBeatMetaOutput(BaseModel):
         return self
 
 
-LITERAL_SCRIPT_PROMPT = """# 你是短剧剧本逐行分镜标注师
+# Disabled legacy prompt retained for rollback. It explicitly forced one source line per Beat.
+LEGACY_LITERAL_SCRIPT_PROMPT = """# 你是短剧剧本逐行分镜标注师
 
 你的任务不是改写整集，而是严格围绕“当前这一行剧本”补全 2.0 beat 元数据。
 
@@ -367,6 +379,34 @@ LITERAL_SCRIPT_PROMPT = """# 你是短剧剧本逐行分镜标注师
 """
 
 
+LITERAL_SCRIPT_PROMPT = """# 你是短剧连续镜头规划师
+
+你的任务是逐行识别剧本中的可见动作与声音，再判断每行是否开启新镜头。源文本的换行仅用于输入，不代表镜头边界。
+
+## 镜头边界
+- 连续表演、同一动作链或同一观察构图能够承载的内容，优先延续上一镜；不要按台词行、动作阶段、眼神变化或标点机械切镜。
+- 只有当景别/观察视点改变、空间或时间切换、出现新的关键信息需要揭示，或原文明确要求切镜时，才开启新镜。
+- `continues_previous_shot` 只判断当前行与紧邻的上一条源文本内容行；场次头变化时必须为 false。
+- 当前数据结构每个 Beat 只承载一种音频类型和一个说话人。音频类型或说话人改变时必须为 false，避免把不同声部合成一个音频段。
+- 标注当前行本身的画面，不复述整段剧情。若延续上一镜，描述应与上一行的动作、人物位置和道具状态兼容，不要重置动作或位置。
+
+## 时长估算
+- `estimated_duration_seconds`：若开启新镜，估算当前镜头完整时长；若延续上一镜，只估算当前行新增的动作/台词时间。
+- 根据动作完成所需时间、台词自然说完所需时间、停顿和信息可读性估算。不要按字符数固定换算，不给每个镜头统一秒数，也不要用多余静止时间填满。
+- 轻微反应或短动作可短于 2 秒；常规动作/短台词通常数秒；只有动作确实展开、长台词必须说完或信息需要阅读时才增加时长。
+- 只估算叙事剪辑时长，不要套用视频模型的固定片段长度。最终视频生成会按模型支持范围和实测音频时长调整。
+
+## 输出要求
+- 严格按当前行判断 `audio_type`、`speaker`、`speaker_kind`；不凭常识补台词或声音。
+- `visual_description` 仅描述当前行可见内容，忠实保留明确的景别、机位、屏幕、监控、分屏、黑屏等画面提示。
+- 只有必要时补足可画的动作、姿态和空间关系；不得新增原文没有的事件、时空切换或机位变化。
+- 角色仅使用 `{{identity_id}}` 标记，道具仅使用 `[[prop_id]]` 标记；只标当前画面实际可见且候选菜单中存在的资产。
+- 画面必须明确唯一，不得写“或者 / 可选 / 二选一”。抓、递、扶、按等互动要写清主动方、受动方及接触关系。
+- 当前场景和时间由场次头锁定，不要更改；`scene_id` 只在系统未锁定时从菜单精确选择，否则留空。
+- 只输出当前行的结构化元数据，不解释、不复述原行。
+"""
+
+
 def split_literal_source_text(source_text: str) -> list[str]:
     return split_screenplay_lines(source_text)
 
@@ -434,7 +474,7 @@ class LiteralScriptWritingWorkflow:
                     "valid_scene_ids": self._valid_scene_ids,
                     "valid_prop_ids": self._valid_prop_ids,
                 },
-                name="逐行剧本分镜标注师",
+                name="连续镜头规划师",
             )
         return self._agent
 
@@ -550,6 +590,7 @@ class LiteralScriptWritingWorkflow:
         beats: list[VisualBeat] = []
         total = max(1, len(line_contexts))
         current_block: SceneBlock | None = None
+        previous_line_block: SceneBlock | None = None
         episode_sticky_identities: dict[str, str] = dict(episode_identity_default_map)
         block_sticky_identities: dict[str, str] = {}
         safe_prompt_history: list[str] = []
@@ -659,7 +700,7 @@ class LiteralScriptWritingWorkflow:
 
             prompt = f"""{asset_language_instruction(self._output_language)}
 
-请为第 {episode_num} 集当前这一行剧本补全 beat 元数据。
+请为第 {episode_num} 集当前这一行剧本补全镜头元数据，并判断是否与上一行属于同一连续镜头。
 
 ## 本集信息
 - 标题: {episode.title}
@@ -685,6 +726,11 @@ class LiteralScriptWritingWorkflow:
 ## 约束
 - narration_segment 由系统根据 audio_type 定型：dialogue 提取台词，narration 保留解说文本，silence 留空；你不要输出 narration_segment
 {self._audio_type_mode_instruction()}
+- `continues_previous_shot` 只表示是否与上一条源文本内容行属于同一镜头；不要把换行本身当成切镜理由
+- 同一连续动作/表演且构图和观察视点可承载时，优先延续；景别或视点变化、时空切换、关键信息揭示、明确切镜时才新开镜头
+- 音频类型或说话人不同必须新开 Beat，令 `continues_previous_shot=false`
+- `estimated_duration_seconds`：新开镜头时估算当前镜头完整时长；延续上一镜时只计新增动作/台词，不重复计算之前已覆盖的时间
+- 按动作、自然说话速度、停顿和信息可读性估时，不按字符数固定换算，不统一填充秒数，也不套用视频模型固定片长
 - 当前 beat 的 scene_id 与 time_of_day 已由当前场次锁定，不要改写
 - 当前行可见的道具用 `[[prop_id]]` 标在 visual_description 里
 - 同一场次块内同一角色默认沿用已锁定 identity_id，只有当前行有强证据时才切换
@@ -766,23 +812,63 @@ class LiteralScriptWritingWorkflow:
                 if content_filtered
                 else self._derive_narration_segment(raw_line, audio_type)
             )
-
-            beats.append(
-                VisualBeat(
-                    beat_number=len(beats) + 1,
-                    narration_segment=narration_segment,
-                    visual_description=visual_description,
-                    source_text_sha256=source_text_sha256,
-                    time_of_day=time_of_day,
-                    scene_ref=self._canonical_scene_ref_for_menu_choice(
-                        resolved_scene_id
-                    ),
-                    audio_type=audio_type,
-                    speaker=speaker,
-                    speaker_kind=speaker_kind,
-                    estimated_duration=0.0,
-                )
+            scene_ref = self._canonical_scene_ref_for_menu_choice(resolved_scene_id)
+            line_duration = (
+                0.0
+                if content_filtered
+                else float(output.estimated_duration_seconds or 0.0)
             )
+            if line_duration <= 0 and not content_filtered:
+                line_duration = 3.0
+            line_duration = min(max(line_duration, 0.0), 30.0)
+
+            previous_beat = beats[-1] if beats else None
+            can_continue_previous_shot = bool(
+                output.continues_previous_shot
+                and not content_filtered
+                and previous_beat is not None
+                and previous_line_block is block
+                and previous_beat.audio_type == audio_type
+                and previous_beat.speaker == speaker
+                and previous_beat.speaker_kind == speaker_kind
+                and previous_beat.scene_ref == scene_ref
+                and previous_beat.time_of_day == time_of_day
+            )
+
+            if can_continue_previous_shot and previous_beat:
+                previous_beat.visual_description = (
+                    f"{previous_beat.visual_description.rstrip('；;。')}；"
+                    f"{visual_description.lstrip('；;，,')}"
+                )
+                if narration_segment:
+                    previous_beat.narration_segment = "\n".join(
+                        part
+                        for part in (
+                            previous_beat.narration_segment,
+                            narration_segment,
+                        )
+                        if part
+                    )
+                previous_beat.estimated_duration += line_duration
+                log(
+                    f"[Literal] 行 {content_index}/{total} -> 延续 Beat {previous_beat.beat_number}"
+                )
+            else:
+                beats.append(
+                    VisualBeat(
+                        beat_number=len(beats) + 1,
+                        narration_segment=narration_segment,
+                        visual_description=visual_description,
+                        source_text_sha256=source_text_sha256,
+                        time_of_day=time_of_day,
+                        scene_ref=scene_ref,
+                        audio_type=audio_type,
+                        speaker=speaker,
+                        speaker_kind=speaker_kind,
+                        estimated_duration=line_duration,
+                    )
+                )
+                log(f"[Literal] 行 {content_index}/{total} -> 新 Beat {audio_type}")
 
             identities_in_beat = re.findall(r"\{\{(.+?)\}\}", visual_description)
             for identity_id in identities_in_beat:
@@ -797,7 +883,7 @@ class LiteralScriptWritingWorkflow:
                 "[上一行因内容审核未提供]" if content_filtered else raw_line
             )
             safe_prompt_history = safe_prompt_history[-2:]
-            log(f"[Literal] 行 {content_index}/{total} -> {audio_type}")
+            previous_line_block = block
 
         if self.last_degraded_lines:
             self.last_review_passed = False
@@ -878,6 +964,8 @@ class LiteralScriptWritingWorkflow:
                 else "该行未能生成，请手动补充。"
             ),
             scene_id="",
+            continues_previous_shot=False,
+            estimated_duration_seconds=1.0,
         )
 
     def _build_fallback_line_metadata(self, raw_line: str) -> LiteralBeatMetaOutput:
@@ -929,6 +1017,8 @@ class LiteralScriptWritingWorkflow:
             speaker_kind="non_character" if is_non_character else "character",
             visual_description=visual_description,
             scene_id="",
+            continues_previous_shot=False,
+            estimated_duration_seconds=0.0,
         )
 
     async def run_all_episodes(self) -> list[NarrationScript]:
@@ -1476,7 +1566,8 @@ class LiteralScriptWritingWorkflow:
         if alias_matches:
             return next(iter(alias_matches)) if len(alias_matches) == 1 else ""
         partial_matches = {
-            scene_id for scene_id in base_ids
+            scene_id
+            for scene_id in base_ids
             if location in scene_id or scene_id in location
         }
         if len(partial_matches) == 1:

@@ -625,6 +625,81 @@ async def test_newapi_seedance2_generator_preserves_config_resolution_and_scene_
     assert "seconds" not in payload
 
 
+async def test_newapi_seedance2_all_reference_does_not_send_image_and_images(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import (
+        NewApiVideoGenerator,
+        ShotReference,
+        VideoGenStatus,
+    )
+
+    captured: dict[str, object] = {}
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example",
+        model="seedance-2.0-value",
+        resolution="720p",
+        generate_audio=True,
+    )
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_confirm(*_args, **_kwargs):
+        return None
+
+    async def fake_refund(*_args, **_kwargs):
+        return None
+
+    async def fake_post_json(_url: str, payload: dict):
+        captured["payload"] = payload
+        return {"id": "task-1", "_newapi_request_id": "req-1"}
+
+    async def fake_get_json(_url: str):
+        return {"status": "completed", "url": "https://example.com/out.mp4"}
+
+    async def fake_download_video(_url: str, output_path: str):
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"video")
+        return b"video"
+
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_confirm)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_refund)
+    monkeypatch.setattr(generator, "_post_json", fake_post_json)
+    monkeypatch.setattr(generator, "_get_json", fake_get_json)
+    monkeypatch.setattr(generator, "_download_video", fake_download_video)
+
+    result = await generator.generate(
+        image_path="https://example.com/first.png",
+        prompt="动画化参考图片1和图片2。",
+        output_path=str(tmp_path / "out.mp4"),
+        duration=5,
+        aspect_ratio="16:9",
+        poll_interval=0,
+        max_polls=1,
+        gen_mode="allReference",
+        references=[
+            ShotReference("image", "https://example.com/ref-1.png", "图片1"),
+            ShotReference("image", "https://example.com/ref-2.png", "图片2"),
+        ],
+    )
+
+    assert result.status == VideoGenStatus.DONE
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert "image" not in payload
+    assert payload["images"] == [
+        "https://example.com/ref-1.png",
+        "https://example.com/ref-2.png",
+    ]
+
+
 async def test_newapi_video_generator_handles_wrapped_failure_status(
     tmp_path, monkeypatch
 ):

@@ -142,3 +142,52 @@ def test_keyframe_prompt_builder_applies_language_to_task_and_fallback(
     assert result == "generated"
     assert required in seen["prompt"][0]
     assert expected_fallback in builder._fallback_build(language)
+
+
+def test_global_video_optimizer_includes_transition_context_and_prev_prompt_tail(
+    monkeypatch, tmp_path
+):
+    import novelvideo.agents.global_video_optimizer as module
+
+    assert "Inter-beat smooth transition" in module.GLOBAL_VIDEO_OPTIMIZER_INSTRUCTIONS_EN
+    assert "Action Match" in module.GLOBAL_VIDEO_OPTIMIZER_INSTRUCTIONS_EN
+    assert "Foreground Occlusion" in module.GLOBAL_VIDEO_OPTIMIZER_INSTRUCTIONS_EN
+
+    sketch_path = tmp_path / "beat_02.png"
+    sketch_path.write_bytes(b"fake-image")
+    seen = {}
+    optimizer = module.GlobalVideoPromptOptimizer()
+    monkeypatch.setattr(optimizer, "_get_agent", lambda _language: _TextAgent("ok", seen))
+    monkeypatch.setattr(optimizer, "_compress_image", lambda _path: b"compressed")
+
+    long_prefix = "A" * 340
+    prev_tail = "camera sweeps right past the wooden pillar toward the doorway."
+    asyncio.run(
+        optimizer.optimize_single_beat(
+            beat={
+                "beat_number": 2,
+                "scene_ref": {"scene_id": "tea_house", "variant_id": ""},
+                "visual_description": "She steps through the doorway.",
+            },
+            sketch_image_path=str(sketch_path),
+            character_color_map={},
+            language="en",
+            prev_beat={
+                "beat_number": 1,
+                "scene_ref": {"scene_id": "tea_house", "variant_id": ""},
+                "visual_description": "She rises from the table and turns right.",
+            },
+            next_beat={
+                "beat_number": 3,
+                "scene_ref": {"scene_id": "courtyard", "variant_id": ""},
+                "visual_description": "Wide shot of the rain-soaked courtyard.",
+            },
+            prev_prompt=f"{long_prefix} {prev_tail}",
+        )
+    )
+
+    task = seen["prompt"][0]
+    assert "## Inter-Beat Transition & Continuity Context" in task
+    assert "B1 [Same Scene]" in task
+    assert "B3 [Scene Cut]" in task
+    assert prev_tail in task

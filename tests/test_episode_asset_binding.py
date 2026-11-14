@@ -101,14 +101,23 @@ def test_explicit_empty_asset_scope_rejects_unknown_markers(key):
     )
     with pytest.raises(ValidationError, match="非法"):
         LiteralBeatMetaOutput.model_validate(
-            {"visual_description": description},
+            {
+                "visual_description": description,
+                "continues_previous_shot": False,
+                "estimated_duration_seconds": 3.0,
+            },
             context={key: set()},
         )
 
 
 def test_explicit_empty_scene_scope_discards_unknown_scene():
     output = LiteralBeatMetaOutput.model_validate(
-        {"visual_description": "烛光照亮昏暗的房间。", "scene_id": "未知场景"},
+        {
+            "visual_description": "烛光照亮昏暗的房间。",
+            "scene_id": "未知场景",
+            "continues_previous_shot": False,
+            "estimated_duration_seconds": 3.0,
+        },
         context={"valid_scene_ids": set()},
     )
     assert output.scene_id == ""
@@ -119,6 +128,8 @@ def test_absent_validation_context_keeps_standalone_outputs_usable():
         {
             "visual_description": "{{未知_青年}}拿着[[未知玉佩]]。",
             "scene_id": "未知场景",
+            "continues_previous_shot": False,
+            "estimated_duration_seconds": 3.0,
         }
     )
     assert output.scene_id == "未知场景"
@@ -176,6 +187,8 @@ async def test_script_generation_prepares_missing_menus_before_metadata(
             return SimpleNamespace(
                 output=LiteralBeatMetaOutput(
                     visual_description="烛光照亮昏暗的房间。",
+                    continues_previous_shot=False,
+                    estimated_duration_seconds=3.0,
                 )
             )
 
@@ -320,7 +333,11 @@ async def test_generated_source_survives_persistence_and_allows_safe_backfill(
     class Agent:
         async def run(self, prompt):
             return SimpleNamespace(
-                output=LiteralBeatMetaOutput(visual_description="昏暗的室内画面。")
+                output=LiteralBeatMetaOutput(
+                    visual_description="昏暗的室内画面。",
+                    continues_previous_shot=False,
+                    estimated_duration_seconds=3.0,
+                )
             )
 
     monkeypatch.setattr(
@@ -482,7 +499,10 @@ async def test_narrated_generation_accepts_legitimate_empty_scene_plan(
         async def run(self, prompt):
             return SimpleNamespace(
                 output=LiteralBeatMetaOutput(
-                    visual_description="抽象的光影画面。", audio_type="narration"
+                    visual_description="抽象的光影画面。",
+                    audio_type="narration",
+                    continues_previous_shot=False,
+                    estimated_duration_seconds=3.0,
                 )
             )
 
@@ -635,7 +655,11 @@ async def test_shared_script_generation_resolves_episode_scene_alias(
     class Agent:
         async def run(self, prompt):
             return SimpleNamespace(
-                output=LiteralBeatMetaOutput(visual_description="医生在柜台前停下。")
+                output=LiteralBeatMetaOutput(
+                    visual_description="医生在柜台前停下。",
+                    continues_previous_shot=False,
+                    estimated_duration_seconds=3.0,
+                )
             )
 
     monkeypatch.setattr(

@@ -215,6 +215,14 @@ def resolve_target_video_duration(
                 return parsed
         except (TypeError, ValueError):
             pass
+    estimated = beat.get("estimated_duration")
+    if estimated is not None:
+        try:
+            parsed = float(estimated)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
     return float(default)
 
 
@@ -362,11 +370,17 @@ async def insert_manual_shot(
         insert_index = 0
     else:
         insert_index = next(
-            (idx for idx, beat in enumerate(beats) if beat.get("beat_number") == after_beat_number),
+            (
+                idx
+                for idx, beat in enumerate(beats)
+                if beat.get("beat_number") == after_beat_number
+            ),
             None,
         )
         if insert_index is None:
-            raise ValueError(f"Beat {after_beat_number} not found in episode {episode_number}")
+            raise ValueError(
+                f"Beat {after_beat_number} not found in episode {episode_number}"
+            )
         previous_beat = beats[insert_index]
         next_beat = beats[insert_index + 1] if insert_index + 1 < len(beats) else None
 
@@ -386,7 +400,9 @@ async def insert_manual_shot(
                 if beat.get("beat_number") == after_beat_number
             )
             previous_beat = beats[insert_index]
-            next_beat = beats[insert_index + 1] if insert_index + 1 < len(beats) else None
+            next_beat = (
+                beats[insert_index + 1] if insert_index + 1 < len(beats) else None
+            )
         previous_order = beat_order_value(previous_beat) if previous_beat else None
         next_order = beat_order_value(next_beat) if next_beat else None
         new_order = calculate_insert_order(previous_order, next_order)
@@ -398,23 +414,31 @@ async def insert_manual_shot(
     saved_identities = (
         list(detected_identities)
         if detected_identities is not None
-        else list(extract_char_identities_from_markers(visual_description, strict=False).values())
+        else list(
+            extract_char_identities_from_markers(
+                visual_description, strict=False
+            ).values()
+        )
     )
     saved_props = (
         list(detected_props)
         if detected_props is not None
         else list(extract_prop_ids_from_markers(visual_description, strict=False))
     )
-    inherited_scene_ref = scene_ref if scene_ref is not None else source.get("scene_ref")
+    inherited_scene_ref = (
+        scene_ref if scene_ref is not None else source.get("scene_ref")
+    )
     scene_ref_json = (
         json.dumps(inherited_scene_ref, ensure_ascii=False)
         if isinstance(inherited_scene_ref, dict) and inherited_scene_ref
         else ""
     )
-    normalized_audio_type, normalized_speaker, normalized_narration = _normalize_manual_audio_fields(
-        audio_type=audio_type,
-        speaker=speaker,
-        narration_segment=narration_segment,
+    normalized_audio_type, normalized_speaker, normalized_narration = (
+        _normalize_manual_audio_fields(
+            audio_type=audio_type,
+            speaker=speaker,
+            narration_segment=narration_segment,
+        )
     )
     new_beat = NovelVisualBeat(
         episode_number=episode_number,
@@ -428,7 +452,9 @@ async def insert_manual_shot(
         keyframe_prompt="",
         video_mode="first_frame",
         scene_ref_json=scene_ref_json,
-        time_of_day=source.get("time_of_day", "") if time_of_day is None else time_of_day,
+        time_of_day=source.get("time_of_day", "")
+        if time_of_day is None
+        else time_of_day,
         detected_identities_json=json.dumps(saved_identities, ensure_ascii=False),
         detected_props_json=json.dumps(saved_props, ensure_ascii=False),
         audio_type=normalized_audio_type,
@@ -438,7 +464,9 @@ async def insert_manual_shot(
 
     refreshed = await store.get_beats_as_dicts(episode_number)
     return next(
-        beat for beat in refreshed if int(beat.get("beat_number", 0)) == new_beat.beat_number
+        beat
+        for beat in refreshed
+        if int(beat.get("beat_number", 0)) == new_beat.beat_number
     )
 
 
@@ -450,7 +478,11 @@ async def delete_manual_shot(
 ) -> list[dict]:
     beats = sort_beats_for_display(await store.get_beats_as_dicts(episode_number))
     target = next(
-        (beat for beat in beats if int(beat.get("beat_number", 0) or 0) == int(beat_number)),
+        (
+            beat
+            for beat in beats
+            if int(beat.get("beat_number", 0) or 0) == int(beat_number)
+        ),
         None,
     )
     if target is None:
@@ -461,11 +493,15 @@ async def delete_manual_shot(
     deleted = await store.delete_manual_beat(episode_number, int(beat_number))
     if not deleted:
         raise ValueError(f"Manual shot {beat_number} was not deleted")
-    _delete_manual_shot_artifacts(store, episode_number=episode_number, beat_number=beat_number)
+    _delete_manual_shot_artifacts(
+        store, episode_number=episode_number, beat_number=beat_number
+    )
     return sort_beats_for_display(await store.get_beats_as_dicts(episode_number))
 
 
-def _delete_manual_shot_artifacts(store, *, episode_number: int, beat_number: int) -> None:
+def _delete_manual_shot_artifacts(
+    store, *, episode_number: int, beat_number: int
+) -> None:
     project_dir_value = getattr(store, "project_dir", "")
     if not project_dir_value:
         return
