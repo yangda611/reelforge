@@ -556,6 +556,42 @@ export function useDetectIdentities(project: string, episode: number) {
   });
 }
 
+export interface PlanFixedCameraDecision {
+  beat_number: number;
+  lock_camera_beat: number | null;
+  lock_spatial_mode: "full_body" | "upper_body" | "";
+  reason?: string;
+}
+
+export interface PlanFixedCameraResult {
+  total_beats: number;
+  locked_beats: number[];
+  updated_count: number;
+  decisions: PlanFixedCameraDecision[];
+}
+
+export function usePlanFixedCameraLocks(project: string, episode: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      jsonWithBackendError<ApiResponse<PlanFixedCameraResult>>(
+        api.post(
+          p`api/v1/projects/${project}/episodes/${episode}/beats/plan-fixed-camera`,
+          {
+            timeout: AI_DETECT_IDENTITIES_TIMEOUT_MS,
+            throwHttpErrors: false,
+          },
+        ),
+      ),
+    onSuccess: (res) => {
+      if (!res.ok) return;
+      qc.invalidateQueries({ queryKey: queryKeys.beats(project, episode) });
+      qc.invalidateQueries({ queryKey: queryKeys.script(project, episode) });
+      invalidateAssetReferences(qc, project);
+    },
+  });
+}
+
 export interface BeatImageUploadResult {
   beat_num: number;
   pool_id: string;

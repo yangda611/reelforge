@@ -38,6 +38,7 @@ from novelvideo.task_backend.envelope import (
     RunningTaskAuthorityIndeterminate,
 )
 from novelvideo.task_backend.cancel import (
+    DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS,
     TaskCancelled,
     TaskTimedOut,
     is_cancel_requested,
@@ -594,7 +595,7 @@ def _project_task_timeout_seconds() -> int:
             logger.warning(
                 "Invalid ST_PROJECT_TASK_TIMEOUT_S=%r; using default", raw_value
             )
-    return 30 * 60
+    return DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
 
 
 def _project_task_failure_for_exception(
@@ -626,7 +627,10 @@ def _project_task_failure_for_exception(
         return str(exc), {"error_code": exc.error_code}, True
 
     if isinstance(exc, TaskTimedOut):
-        timeout_seconds = int(getattr(exc, "timeout_seconds", None) or 30 * 60)
+        timeout_seconds = int(
+            getattr(exc, "timeout_seconds", None)
+            or DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
+        )
         timeout_minutes = max(round(timeout_seconds / 60), 1)
         return (
             f"任务超过 {timeout_minutes} 分钟未完成，已自动放弃",

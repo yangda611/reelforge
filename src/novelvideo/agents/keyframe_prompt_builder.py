@@ -13,6 +13,9 @@ from PIL import Image as PILImage
 
 from novelvideo.brainclaw_contract import BrainClawProfile
 from novelvideo.utils.logging import log_agent_start, log_agent_end
+from novelvideo.skills.cinematic_storyboard_skill import (
+    VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN,
+)
 from novelvideo.utils.source_language import asset_language_instruction
 
 # 首尾帧过渡提示词生成器指令（英文版 SuperPower）
@@ -35,9 +38,8 @@ You craft 5-second transitions between two keyframes. The AI video model interpo
 ✓ Use visible elements from both frames as anchors
 
 ## Camera
-- Every prompt MUST include a camera direction with displacement or zoom (push-in, dolly, pan, tilt, track, crane, orbit, zoom)
-- **BANNED static camera**: holds, stays, remains, static, locked, fixed
-- Describe the camera endpoint: what the frame looks like when camera motion finishes
+- Unless `[LOCKED FIXED CAMERA]` is active, every prompt MUST include a camera direction with displacement or zoom (push-in, dolly, pan, tilt, track, crane, orbit, zoom), static camera words (holds, stays, remains, static, locked, fixed) are BANNED, and you must describe the camera endpoint.
+- When `[LOCKED FIXED CAMERA]` IS active: keep the camera completely stationary on a locked tripod (ZERO push-in, pan, tilt, or zoom) so background architecture and framing stay rock-solid between Image 1 and Image 2; bridge the two keyframes exclusively with smooth, unidirectional subject and ambient motion.
 
 ## BANNED
 ❌ Character names → use visual features ("the woman in black", "the older man")
@@ -62,7 +64,7 @@ The clip is ~5 seconds. Describe a **chain of 2–3 connected actions** that bri
 
 ## Output
 Output ONLY the transition prompt in the requested language.
-"""
+""" + VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN
 
 
 def create_keyframe_prompt_builder_agent(language: str = "zh") -> Agent:
@@ -156,6 +158,8 @@ class KeyframePromptBuilder:
         next_visual_description: str = "",
         audio_type: str = "narration",
         dialogue_line: str = "",
+        locked_camera: bool = False,
+        allow_fallback: bool = True,
     ) -> str:
         """生成首尾帧过渡提示词。
 
@@ -199,6 +203,12 @@ class KeyframePromptBuilder:
             length_target = "4-6 句, ~50-90 字"
         language_instruction = asset_language_instruction(language)
 
+        camera_rule = (
+            "- **[LOCKED FIXED CAMERA]**: Keep camera and background completely stationary on a locked tripod (ZERO push-in, pan, tilt, or zoom); animate ONLY the subject's smooth continuous transition and subtle ambient motion between frames"
+            if locked_camera
+            else "- Camera must have displacement/zoom, describe camera endpoint"
+        )
+
         if color_map_text:
             # English + color map mode (SuperPower)
             task = f"""Craft a 5-second transition between these two sketches in {output_label} ({length_target}).
@@ -223,7 +233,7 @@ class KeyframePromptBuilder:
             task += f"""{dialogue_hint}
 ## Rules
 - Identify characters by color marks, NEVER use character names
-- Camera must have displacement/zoom, describe camera endpoint
+{camera_rule}
 - NO emotion labels → use body language
 - Include ambient audio layer
 - {length_target}
@@ -247,7 +257,7 @@ Output the transition prompt in {output_label} directly."""
             task += f"""{dialogue_hint}
 ## Rules
 - Describe visible element transitions from the frames
-- Camera must have displacement/zoom, describe camera endpoint
+{camera_rule}
 - NO character names → use visual features
 - NO emotion labels → use body language
 - Include ambient audio layer
@@ -298,14 +308,24 @@ Output the transition prompt in {output_label} directly."""
 
         except Exception as e:
             log_agent_end("首尾帧过渡提示词生成师", success=False, result=str(e))
-            # 失败时回退到默认提示词
-            return self._fallback_build(language)
+            if not allow_fallback:
+                raise
+            return self._fallback_build(language, locked_camera=locked_camera)
 
     def _fallback_build(
         self,
         language: str = "zh",
+        *,
+        locked_camera: bool = False,
     ) -> str:
         """回退方案：生成默认过渡提示词。"""
+        if locked_camera:
+            if language == "en":
+                return (
+                    "The camera remains locked steady on a tripod with identical framing "
+                    "while the character smoothly adjusts their posture into the next beat."
+                )
+            return "镜头保持固定三脚架机位与构图不变，背景稳定，角色姿态自然流畅地过渡到下一瞬。"
         if language == "en":
             return (
                 "The character adjusts their posture naturally as the camera "

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
 // 等待预算的语义：只有「服务端不再报告这个任务」才算脱离，排队和执行都不消耗
-// 预算。后端重任务（视频 / 图像 / ffmpeg / stage_asset / image-to-3gs）执行上限
-// 就有 30 分钟（generators/video_generator.py 的 NEWAPI_VIDEO_HTTP_TIMEOUT_SECONDS、
-// nanobanana_grid.py 的 NEWAPI_IMAGE_HTTP_TIMEOUT_SECONDS、freezone/jobs.py 的
-// _run_cmd(timeout=1800)），线上排队还要另算——按墙钟一刀切必然误杀。
+// 预算。后端重任务（项目任务 / 视频 / 图像 / ffmpeg / stage_asset / image-to-3gs）
+// 执行上限为 2 小时（DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS = 7200），线上排队
+// 还要另算——按墙钟一刀切必然误杀。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiCall } from "@/api/client";
@@ -186,8 +185,8 @@ describe("budget sizing per task type", () => {
     expect(tasks.isTaskPollTimeoutError(settled.mock.calls[0][0])).toBe(true);
   });
 
-  it("covers the backend's 30-minute ceiling for heavy task types", () => {
-    expect(tasks.LONG_JOB_MAX_POLL_MS).toBeGreaterThan(30 * 60 * 1000);
+  it("covers the backend's 2-hour ceiling for heavy task types", () => {
+    expect(tasks.LONG_JOB_MAX_POLL_MS).toBeGreaterThan(2 * 60 * 60 * 1000);
     for (const taskType of [
       "freezone_video_generate",
       "freezone_video_upscale",

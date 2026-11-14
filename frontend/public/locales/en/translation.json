@@ -4011,6 +4011,7 @@
       "preview": "Preview",
       "view": {
         "display": "Show",
+        "selectAll": "Select all",
         "selectedCount": "{{count}} selected",
         "clear": "Clear",
         "totalShots": "{{count}} shots",
@@ -4448,6 +4449,21 @@
         "lockedLightTooltip": "Locked lighting: uses the scene image's own lighting; no relight.",
         "lockedLightLabel": "Locked lighting"
       },
+      "spatialLock": {
+        "label": "Fixed-camera spatial lock",
+        "idleHint": "Unlocked: free framing and camera motion",
+        "activeHint": "Locked to #B{{n}} background plate & stance; video keeps a steady tripod camera",
+        "modeOff": "Unlocked",
+        "modeFullBody": "Lock camera · Full body",
+        "modeUpperBody": "Lock camera · Upper body only",
+        "anchorLabel": "Anchor beat",
+        "anchorItem": "Anchor #B{{n}}",
+        "lockedToast": "Locked camera & background space to #B{{n}}",
+        "unlockedToast": "Fixed-camera lock cleared",
+        "saveFailed": "Failed to save fixed-camera lock",
+        "videoBannerLockedTo": "Fixed-camera sequence (anchored to #B{{n}}): tripod framing and camera scale stay locked for seamless shot-to-shot continuity.",
+        "videoBannerFeedNext": "This shot anchors the next fixed-camera beat (#B{{n}}): keep ending motion steady (first-last-frame mode bridges cleanly into #B{{n}})."
+      },
       "renderGrid": {
         "title": "Render Grid",
         "titleWithCount": "Render Grid ({{count}} grids)",
@@ -4515,6 +4531,11 @@
         "reassignColorsDesc": "This will reassign colors for this episode's sketches based on current script identities. Existing sketches may display inconsistent color markers.",
         "reassignColorsTooltip": "Reassign colors based on script identities (idempotent)",
         "reassignColorsSuccess": "Reassigned colors for {{count}} identities and {{propCount}} props",
+        "aiCameraLock": "AI Camera Lock",
+        "aiCameraLockTooltip": "Automatically plan fixed-camera spatial locks across consecutive same-setup beats",
+        "aiCameraLockRunning": "Analyzing fixed-camera shot locks…",
+        "aiCameraLockEmpty": "No consecutive fixed-camera shots need locking in this episode",
+        "aiCameraLockSuccess": "Planned fixed-camera lock for {{count}} beat(s) ({{beats}})",
         "genAudioTitle": "Generate all audio?",
         "genAudioDesc": "Generate TTS voiceover for all beats missing audio.",
         "genAudio": "Generate all audio",
@@ -8353,6 +8374,25 @@
         "fetchFailed": "Could not fetch models. Sync the channel and check upstream model-list support, or enter a name manually.",
         "syncFirst": "Sync the channel key and Base URL before fetching models."
       },
+      "reasoning": {
+        "title": "Global Thinking Level",
+        "description": "Enable reasoning on configured models with a default thinking level (High by default). Switch globally or per feature to Off if an upstream model rejects the reasoning parameter.",
+        "saved": "Thinking level saved and active for upcoming model calls.",
+        "levels": {
+          "high": "High (Default)",
+          "medium": "Medium",
+          "low": "Low",
+          "minimal": "Minimal",
+          "off": "Off (Omit reasoning parameter)"
+        },
+        "shortLevels": {
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low",
+          "minimal": "Minimal",
+          "off": "Off"
+        }
+      },
       "featureModels": {
         "title": "Business Model Mapping",
         "description": "Assign upstream models to text understanding, content generation, and vision understanding features. Unset features use backend defaults.",
@@ -8423,14 +8463,19 @@
         "colProvider": "Configured Channel",
         "colUpstreamModel": "Upstream Model",
         "colModel": "Upstream Model",
+        "colReasoning": "Thinking",
+        "reasoningInherit": "Default ({{default}})",
         "upstreamModelPlaceholder": "Enter upstream model, e.g. qwen-plus",
         "save": "Save Mapping",
         "saveRow": "Save",
         "savedOne": "Saved this feature's channel.",
         "applyToAll": "Apply to All",
         "bulkModelPlaceholder": "Bulk-fill upstream model, e.g. qwen-plus",
-        "bulkMissingModel": "Enter the upstream model to apply first.",
+        "bulkMissingModel": "Enter an upstream model or select a thinking level to apply first.",
+        "bulkReasoningKeep": "Thinking (keep)",
+        "bulkReasoningInherit": "Follow global default",
         "bulkApplied": "Filled {{count}} model draft(s). Click Save Mapping to write them to NewAPI.",
+        "bulkReasoningApplied": "Updated thinking level for {{count}} feature(s).",
         "saveHint": "Writes NewAPI channels grouped by provider.",
         "saved": "Saved {{count}} channel(s).",
         "savedPartial": "Done: {{succeeded}} succeeded, {{failed}} failed.",

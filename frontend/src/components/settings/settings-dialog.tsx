@@ -72,6 +72,7 @@ import {
   useSaveAgentLlmConfig,
   useSaveOfficialConfig,
   useSaveBrainClawConfig,
+  useSaveReasoningConfig,
   useSetCustomLlmMode,
   useInitCustomNewApi,
   useSaveCustomChannel,
@@ -86,6 +87,8 @@ import {
   type GatewayMode,
   type AgentLlmMode,
   type CustomLlmMode,
+  type FeatureReasoningEffort,
+  type LlmReasoningEffort,
   type ModelGatewayConfig,
   type CustomChannelInput,
   type NewApiDatabaseConfigInput,
@@ -602,6 +605,7 @@ function ModelConfigSection({ open }: { open: boolean }) {
       ) : null}
 
       <AgentLlmPanel config={config} loading={loading} />
+      <LlmReasoningPanel config={config} loading={loading} />
 
       <Tabs
         className="mt-4"
@@ -947,6 +951,186 @@ function AgentLlmPanel({
         </Button>
       </div>
     </div>
+  );
+}
+
+const LLM_REASONING_EFFORT_OPTIONS: readonly LlmReasoningEffort[] = [
+  "high",
+  "medium",
+  "low",
+  "minimal",
+  "off",
+];
+
+function reasoningEffortLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  effort: LlmReasoningEffort,
+): string {
+  return t(`settings.modelConfig.reasoning.levels.${effort}`);
+}
+
+function reasoningEffortShortLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  effort: LlmReasoningEffort,
+): string {
+  return t(`settings.modelConfig.reasoning.shortLevels.${effort}`);
+}
+
+function LlmReasoningPanel({
+  config,
+  loading,
+}: {
+  config: ModelGatewayConfig | undefined;
+  loading: boolean;
+}) {
+  const { t } = useTranslation();
+  const saveReasoning = useSaveReasoningConfig();
+  const defaultEffort: LlmReasoningEffort =
+    config?.reasoning?.defaultEffort ?? "high";
+
+  const handleChange = async (value: LlmReasoningEffort) => {
+    try {
+      const response = await saveReasoning.mutateAsync({
+        defaultEffort: value,
+      });
+      if (!response.ok) {
+        toast.error(
+          getResponseErrorMessage(
+            response,
+            t("settings.modelConfig.requestFailed"),
+          ),
+        );
+        return;
+      }
+      toast.success(t("settings.modelConfig.reasoning.saved"));
+    } catch (error) {
+      toast.error(
+        await getRequestErrorMessage(
+          error,
+          t("settings.modelConfig.requestFailed"),
+        ),
+      );
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-md border border-border/70 px-3 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h4 className="text-xs font-medium text-foreground">
+            {t("settings.modelConfig.reasoning.title")}
+          </h4>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            {t("settings.modelConfig.reasoning.description")}
+          </p>
+        </div>
+        <Select
+          value={defaultEffort}
+          onValueChange={(value) => {
+            if (value) void handleChange(value as LlmReasoningEffort);
+          }}
+          disabled={loading || saveReasoning.isPending}
+        >
+          <SelectTrigger
+            size="sm"
+            className="w-[180px] shrink-0"
+            aria-label={t("settings.modelConfig.reasoning.title")}
+          >
+            <SelectValue>
+              {(value: string) =>
+                reasoningEffortLabel(
+                  t,
+                  (value as LlmReasoningEffort) || defaultEffort,
+                )
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {LLM_REASONING_EFFORT_OPTIONS.map((effort) => (
+              <SelectItem key={effort} value={effort}>
+                {reasoningEffortLabel(t, effort)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+function FeatureReasoningSelect({ featureId }: { featureId: string }) {
+  const { t } = useTranslation();
+  const configQuery = useModelGatewayConfig(true);
+  const saveReasoning = useSaveReasoningConfig();
+  const defaultEffort: LlmReasoningEffort =
+    configQuery.data?.data?.reasoning?.defaultEffort ?? "high";
+  const featureValue: FeatureReasoningEffort =
+    configQuery.data?.data?.reasoning?.featureEfforts?.[featureId] ?? "inherit";
+
+  const formatFeatureEffort = (value: FeatureReasoningEffort) => {
+    if (!value || value === "inherit") {
+      return t("settings.modelConfig.featureModels.reasoningInherit", {
+        default: reasoningEffortShortLabel(t, defaultEffort),
+      });
+    }
+    return reasoningEffortShortLabel(t, value);
+  };
+
+  const handleValueChange = async (value: FeatureReasoningEffort) => {
+    try {
+      const response = await saveReasoning.mutateAsync({
+        featureEfforts: { [featureId]: value },
+      });
+      if (!response.ok) {
+        toast.error(
+          getResponseErrorMessage(
+            response,
+            t("settings.modelConfig.requestFailed"),
+          ),
+        );
+        return;
+      }
+      toast.success(t("settings.modelConfig.reasoning.saved"));
+    } catch (error) {
+      toast.error(
+        await getRequestErrorMessage(
+          error,
+          t("settings.modelConfig.requestFailed"),
+        ),
+      );
+    }
+  };
+
+  return (
+    <Select
+      value={featureValue}
+      onValueChange={(value) => {
+        if (value) void handleValueChange(value as FeatureReasoningEffort);
+      }}
+      disabled={saveReasoning.isPending}
+    >
+      <SelectTrigger
+        size="sm"
+        className="w-full"
+        aria-label={`${t(`settings.modelConfig.featureModels.features.${featureId}`)} ${t("settings.modelConfig.featureModels.colReasoning")}`}
+      >
+        <SelectValue>
+          {(value: string) =>
+            formatFeatureEffort((value as FeatureReasoningEffort) || "inherit")
+          }
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false}>
+        <SelectItem value="inherit">
+          {formatFeatureEffort("inherit")}
+        </SelectItem>
+        {LLM_REASONING_EFFORT_OPTIONS.map((effort) => (
+          <SelectItem key={effort} value={effort}>
+            {reasoningEffortShortLabel(t, effort)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -1802,9 +1986,9 @@ function CustomGatewayPanel({
   );
 }
 
-// 功能模型映射每行的三列栅格：功能 | 供应商 | 模型名称。表头与行共用同一模板以对齐。
+// 功能模型映射每行的四列栅格：功能 | 供应商 | 模型名称 | 思考等级。表头与行共用同一模板以对齐。
 const FEATURE_ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_150px_minmax(0,1fr)] items-center gap-3";
+  "grid grid-cols-[minmax(0,0.9fr)_132px_minmax(0,1.15fr)_124px] items-center gap-2.5";
 
 function splitFeatureModelGroups(
   groups: readonly FeatureModelGroup[],
@@ -3536,6 +3720,7 @@ function CogneeModelsBlock({
         <span>{t("settings.modelConfig.featureModels.colFeature")}</span>
         <span>{t("settings.modelConfig.featureModels.colProvider")}</span>
         <span>{t("settings.modelConfig.featureModels.colModel")}</span>
+        <span>{t("settings.modelConfig.featureModels.colReasoning")}</span>
       </div>
       <div className="mt-2">
         <FeatureModelRow
@@ -5925,7 +6110,11 @@ function FeatureModelCapabilitySection({
     configuredProviders[0] ?? "",
   );
   const [bulkModel, setBulkModel] = useState("");
+  const [bulkReasoning, setBulkReasoning] = useState<
+    FeatureReasoningEffort | "__keep__"
+  >("__keep__");
   const updateFeatureModel = useSettingsStore((s) => s.updateFeatureModel);
+  const saveReasoning = useSaveReasoningConfig();
   const featureCount = useMemo(
     () => groups.reduce((total, group) => total + group.features.length, 0),
     [groups],
@@ -5937,27 +6126,71 @@ function FeatureModelCapabilitySection({
     }
   }, [bulkProvider, configuredProviders]);
 
-  const handleApplyBulk = () => {
+  const handleApplyBulk = async () => {
     const provider = bulkProvider;
     const model = bulkModel.trim();
-    if (!provider) {
-      toast.error(t("settings.modelConfig.featureModels.noChannels"));
+    const shouldApplyReasoning = bulkReasoning !== "__keep__";
+    const shouldApplyModels = Boolean(model);
+
+    if (!shouldApplyModels && !shouldApplyReasoning) {
+      toast.error(
+        configuredProviders.length === 0
+          ? t("settings.modelConfig.featureModels.noChannels")
+          : t("settings.modelConfig.featureModels.bulkMissingModel"),
+      );
       return;
     }
-    if (!model) {
-      toast.error(t("settings.modelConfig.featureModels.bulkMissingModel"));
-      return;
-    }
-    for (const group of groups) {
-      for (const feature of group.features) {
-        updateFeatureModel(feature.id, { provider, model });
+
+    if (shouldApplyModels) {
+      if (!provider) {
+        toast.error(t("settings.modelConfig.featureModels.noChannels"));
+        return;
+      }
+      for (const group of groups) {
+        for (const feature of group.features) {
+          updateFeatureModel(feature.id, { provider, model });
+        }
       }
     }
-    toast.success(
-      t("settings.modelConfig.featureModels.bulkApplied", {
-        count: featureCount,
-      }),
-    );
+
+    if (shouldApplyReasoning) {
+      const featureEfforts = Object.fromEntries(
+        groups.flatMap((group) =>
+          group.features.map((feature) => [feature.id, bulkReasoning]),
+        ),
+      ) as Record<string, FeatureReasoningEffort>;
+      try {
+        const res = await saveReasoning.mutateAsync({ featureEfforts });
+        if (!res.ok) {
+          toast.error(
+            getResponseErrorMessage(res, t("settings.modelConfig.requestFailed")),
+          );
+          return;
+        }
+      } catch (error) {
+        toast.error(
+          await getRequestErrorMessage(
+            error,
+            t("settings.modelConfig.requestFailed"),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (shouldApplyModels) {
+      toast.success(
+        t("settings.modelConfig.featureModels.bulkApplied", {
+          count: featureCount,
+        }),
+      );
+    } else {
+      toast.success(
+        t("settings.modelConfig.featureModels.bulkReasoningApplied", {
+          count: featureCount,
+        }),
+      );
+    }
   };
 
   return (
@@ -5968,7 +6201,7 @@ function FeatureModelCapabilitySection({
           {hint}
         </p>
       ) : null}
-      <div className="mt-2 grid grid-cols-[150px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/70 px-3 py-2">
+      <div className="mt-2 grid grid-cols-[150px_minmax(0,1fr)_136px_auto] items-center gap-2 rounded-md border border-border/70 px-3 py-2">
         <Select
           value={bulkProvider}
           onValueChange={(value) =>
@@ -6005,18 +6238,55 @@ function FeatureModelCapabilitySection({
           className="h-8 rounded-md border-input/80 focus-visible:border-ring/70 focus-visible:ring-1 focus-visible:ring-ring/30"
           disabled={configuredProviders.length === 0}
         />
+        <Select
+          value={bulkReasoning}
+          onValueChange={(value) =>
+            setBulkReasoning((value as FeatureReasoningEffort | "__keep__") || "__keep__")
+          }
+          disabled={saveReasoning.isPending}
+        >
+          <SelectTrigger size="sm" className="w-full">
+            <SelectValue>
+              {(value: string) => {
+                if (!value || value === "__keep__") {
+                  return t("settings.modelConfig.featureModels.bulkReasoningKeep");
+                }
+                if (value === "inherit") {
+                  return t("settings.modelConfig.featureModels.bulkReasoningInherit");
+                }
+                return reasoningEffortShortLabel(t, value as LlmReasoningEffort);
+              }}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectItem value="__keep__">
+              {t("settings.modelConfig.featureModels.bulkReasoningKeep")}
+            </SelectItem>
+            <SelectItem value="inherit">
+              {t("settings.modelConfig.featureModels.bulkReasoningInherit")}
+            </SelectItem>
+            {LLM_REASONING_EFFORT_OPTIONS.map((effort) => (
+              <SelectItem key={effort} value={effort}>
+                {reasoningEffortShortLabel(t, effort)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Button
           type="button"
           size="sm"
           className="shrink-0"
-          onClick={handleApplyBulk}
-          disabled={configuredProviders.length === 0}
+          onClick={() => void handleApplyBulk()}
+          disabled={
+            saveReasoning.isPending ||
+            (configuredProviders.length === 0 && bulkReasoning === "__keep__")
+          }
         >
           {t("settings.modelConfig.featureModels.applyToAll")}
         </Button>
       </div>
 
-      {/* 表头：功能 / 供应商 / 上游模型名（与下方行栅格对齐） */}
+      {/* 表头：功能 / 供应商 / 上游模型名 / 思考等级（与下方行栅格对齐） */}
       <div
         className={cn(
           FEATURE_ROW_GRID,
@@ -6026,6 +6296,7 @@ function FeatureModelCapabilitySection({
         <span>{t("settings.modelConfig.featureModels.colFeature")}</span>
         <span>{t("settings.modelConfig.featureModels.colProvider")}</span>
         <span>{t("settings.modelConfig.featureModels.colModel")}</span>
+        <span>{t("settings.modelConfig.featureModels.colReasoning")}</span>
       </div>
 
       <div className="mt-2 space-y-2">
@@ -6259,6 +6530,7 @@ function FeatureModelRow({
           )}
         </Button>
       </div>
+      <FeatureReasoningSelect featureId={featureId} />
     </div>
   );
 }

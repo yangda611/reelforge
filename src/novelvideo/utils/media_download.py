@@ -20,6 +20,42 @@ from yarl import URL
 from novelvideo.ports.video_delivery import VideoDeliveryError, VideoDeliveryReceipt
 
 _CHUNK_SIZE = 1024 * 1024
+_PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _allow_proxy_fake_ip() -> bool:
+    """Allow RFC 2544 TUN Fake-IP DNS (e.g. Clash/Mihomo) only in local CE."""
+    from novelvideo.shared.runtime_env import uses_local_ce_runtime
+
+    if not uses_local_ce_runtime():
+        return False
+    return os.environ.get("SUPERTALE_ENV", "").strip().lower() != "production"
+
+
+def _is_ip_literal(host: str) -> bool:
+    candidate = host.strip("[]")
+    try:
+        ipaddress.ip_address(candidate)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_allowed_resolved_address(
+    host: str, address: ipaddress.IPv4Address | ipaddress.IPv6Address
+) -> bool:
+    if address.is_global:
+        return True
+    normalized_host = host.strip(".").lower()
+    return bool(
+        _allow_proxy_fake_ip()
+        and address.version == 4
+        and address in _PROXY_FAKE_IP_NETWORK
+        and normalized_host
+        and normalized_host != "localhost"
+        and not normalized_host.endswith(".localhost")
+        and not _is_ip_literal(normalized_host)
+    )
 
 
 class _PublicResolver(aiohttp.abc.AbstractResolver):
@@ -38,7 +74,9 @@ class _PublicResolver(aiohttp.abc.AbstractResolver):
             raise VideoDeliveryError(
                 "VIDEO_DOWNLOAD_URL_INVALID", retryable=False
             ) from exc
-        if not addresses or any(not address.is_global for address in addresses):
+        if not addresses or any(
+            not _is_allowed_resolved_address(host, address) for address in addresses
+        ):
             raise VideoDeliveryError("VIDEO_DOWNLOAD_URL_INVALID", retryable=False)
         return [
             {

@@ -70,6 +70,7 @@ import {
 import { SketchPoseEditorDialog } from "./sketch-pose-editor-dialog";
 import { SketchCropDialog } from "./sketch-crop-dialog";
 import { CreditCostInline } from "@/components/credit-cost-inline";
+import { FixedCameraLockControl } from "./fixed-camera-lock-control";
 import {
   MEDIA_PRIMARY_ACTION_BUTTON_CLASS,
   MEDIA_THUMB_ACTIVE_CLASS,
@@ -858,6 +859,13 @@ export function SketchSection({
           </Button>
         </div>
       </div>
+
+      <FixedCameraLockControl
+        beat={beat}
+        project={project}
+        episode={episode}
+        className="col-span-2"
+      />
 
       <Dialog
         open={backgroundDialogOpen}

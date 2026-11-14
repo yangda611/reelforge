@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -32,8 +33,10 @@ class Seedance2VideoConfig(BaseModel):
     prompt_inputs_hash: str = ""
     prompt_updated_at: str = ""
     duration: int = 4
+    duration_user_set: bool = False
     resolution: str = "720p"
     ratio: str = "9:16"
+    ratio_user_set: bool = False
     generate_audio: bool = True
     generate_audio_user_set: bool = False
     return_last_frame: bool = False
@@ -81,27 +84,87 @@ class Seedance2VideoConfig(BaseModel):
         return normalized
 
 
-def parse_seedance2_config(value: Any) -> Seedance2VideoConfig:
+def default_seedance2_ratio_for_project_aspect(aspect_ratio: str | None) -> str:
+    """Map project_config aspect_ratio ('16:9', '2:3', '9:16') to a Seedance 2 ratio."""
+    cleaned = str(aspect_ratio or "").strip()
+    if cleaned == "16:9":
+        return "16:9"
+    if cleaned in {"9:16", "2:3"}:
+        return "9:16"
+    return "9:16"
+
+
+def default_seedance2_ratio_for_state_dir(state_dir: str | Path | None) -> str | None:
+    """Read project_config.json in state_dir and return the implied Seedance 2 ratio."""
+    if not state_dir:
+        return None
+    from novelvideo.project_config import load_project_config_file_from_state_dir
+
+    config = load_project_config_file_from_state_dir(state_dir)
+    aspect_ratio = str(config.get("aspect_ratio") or "").strip()
+    if not aspect_ratio:
+        return None
+    return default_seedance2_ratio_for_project_aspect(aspect_ratio)
+
+
+def parse_seedance2_config(
+    value: Any,
+    *,
+    default_ratio: str | None = None,
+    default_duration: int | None = None,
+) -> Seedance2VideoConfig:
     """Parse a stored dict/JSON config into a normalized config object."""
 
+    safe_default_ratio = str(default_ratio or "").strip() or None
+    safe_default_duration = (
+        max(1, int(default_duration))
+        if isinstance(default_duration, (int, float)) and int(default_duration) > 0
+        else None
+    )
+
     if isinstance(value, Seedance2VideoConfig):
-        return value
+        result = value.model_copy()
+        if safe_default_ratio and not result.ratio_user_set:
+            result.ratio = safe_default_ratio
+        if safe_default_duration and not result.duration_user_set:
+            result.duration = safe_default_duration
+        return result
+
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            return Seedance2VideoConfig()
+            kwargs: dict[str, Any] = {}
+            if safe_default_ratio:
+                kwargs["ratio"] = safe_default_ratio
+            if safe_default_duration:
+                kwargs["duration"] = safe_default_duration
+            return Seedance2VideoConfig(**kwargs)
         try:
             value = json.loads(text)
         except json.JSONDecodeError:
-            return Seedance2VideoConfig(final_prompt=text)
+            kwargs = {"final_prompt": text}
+            if safe_default_ratio:
+                kwargs["ratio"] = safe_default_ratio
+            if safe_default_duration:
+                kwargs["duration"] = safe_default_duration
+            return Seedance2VideoConfig(**kwargs)
     if isinstance(value, dict):
         value = dict(value)
         if value.get("generate_audio") is False and not value.get("generate_audio_user_set"):
             value["generate_audio"] = True
         if value.get("human_review") is False and not value.get("human_review_user_set"):
             value["human_review"] = True
+        if safe_default_ratio and not value.get("ratio_user_set"):
+            value["ratio"] = safe_default_ratio
+        if safe_default_duration and not value.get("duration_user_set"):
+            value["duration"] = safe_default_duration
         return Seedance2VideoConfig.model_validate(value)
-    return Seedance2VideoConfig()
+    kwargs = {}
+    if safe_default_ratio:
+        kwargs["ratio"] = safe_default_ratio
+    if safe_default_duration:
+        kwargs["duration"] = safe_default_duration
+    return Seedance2VideoConfig(**kwargs)
 
 
 def dump_seedance2_config(config: Seedance2VideoConfig | dict[str, Any] | str | None) -> str:

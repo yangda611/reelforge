@@ -1775,6 +1775,206 @@ def test_freezone_single_image_generation_routes_newapi(monkeypatch, tmp_path):
     }
 
 
+def test_newapi_image_edit_falls_back_to_data_uri_on_upstream_fetch_failure(monkeypatch):
+    import copy
+    import io
+    import httpx
+    from PIL import Image
+    from novelvideo.generators import nanobanana_grid
+
+    monkeypatch.setattr(nanobanana_grid, "_NEWAPI_UNREACHABLE_RELAY_HOSTS", {})
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, format="PNG")
+    ref_png = buf.getvalue()
+
+    posted_payloads = []
+    call_logs = []
+    reservations = []
+    refunds = []
+    confirms = []
+
+    class FetchFailResponse:
+        status_code = 400
+        text = (
+            '{"error":{"message":"{\\"error\\":{\\"message\\":\\"reference image 1: '
+            'fetch reference image: Get \\\\\\"https://res.cloudinary.com/demo/image/upload/v1/ref.jpg\\\\\\": '
+            'dial tcp [2001:db8::1]:443: connect: network is unreachable\\",\\"type\\":\\"new_api_error\\",'
+            '\\"code\\":\\"invalid_request\\"}}","type":"invalid_request_error","code":"fail_to_fetch_task"}}'
+        )
+        headers = {"x-oneapi-request-id": "req-fetch-fail"}
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "bad request",
+                request=httpx.Request("POST", "http://newapi.test/v1/images/edits"),
+                response=self,
+            )
+
+    class SuccessResponse:
+        status_code = 200
+        headers = {"x-oneapi-request-id": "req-ok"}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": base64.b64encode(b"edited-image").decode()}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            posted_payloads.append((url, copy.deepcopy(json)))
+            if isinstance(json.get("image"), list) and str(json["image"][0]).startswith("https://"):
+                return FetchFailResponse()
+            return SuccessResponse()
+
+    class FakeUsageMeter:
+        async def reserve_current_model_call_credit(self, **_kwargs):
+            rid = f"res_{len(reservations) + 1}"
+            reservations.append(rid)
+            return rid
+
+        async def refund_model_call_credit_reservation(self, reservation_id, *, metadata=None):
+            refunds.append((reservation_id, metadata))
+
+        async def bump_model_call(self, **kwargs):
+            confirms.append(kwargs)
+
+    async def fake_update_call_log(**kwargs):
+        call_logs.append(copy.deepcopy(kwargs))
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        nanobanana_grid,
+        "upload_image_bytes",
+        lambda *_args, **_kwargs: "https://res.cloudinary.com/demo/image/upload/v1/ref.jpg",
+    )
+    monkeypatch.setattr(nanobanana_grid, "get_usage_meter", lambda: FakeUsageMeter())
+    monkeypatch.setattr(
+        nanobanana_grid, "update_current_model_call_log", fake_update_call_log
+    )
+
+    # First call: tries Cloudinary URL -> upstream returns fetch reference image 400 ->
+    # retries once inline with data:image/jpeg;base64,... -> succeeds under single reservation.
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="edit prompt",
+            reference_images=[ref_png],
+            image_config={"aspect_ratio": "16:9", "image_size": "1K", "quality": "low"},
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes == b"edited-image"
+    assert error == ""
+    assert len(posted_payloads) == 2
+    assert posted_payloads[0][1]["image"] == [
+        "https://res.cloudinary.com/demo/image/upload/v1/ref.jpg"
+    ]
+    assert posted_payloads[1][1]["image"][0].startswith("data:image/jpeg;base64,")
+    assert len(reservations) == 1
+    assert refunds == []
+    assert len(confirms) == 1
+    assert confirms[0]["credit_reservation_id"] == "res_1"
+    logged_images = [
+        entry["request_payload"]["image"][0]
+        for entry in call_logs
+        if entry.get("request_payload")
+    ]
+    assert any(item.startswith("<data-uri:") for item in logged_images)
+    assert not any(item.startswith("data:image/") for item in logged_images)
+
+    # Second call to same endpoint + unreachable relay host sends data URI directly.
+    image_bytes_2, _text_2, error_2 = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="edit prompt 2",
+            reference_images=[ref_png],
+            image_config={"aspect_ratio": "16:9", "image_size": "1K", "quality": "low"},
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes_2 == b"edited-image"
+    assert error_2 == ""
+    assert len(posted_payloads) == 3
+    assert posted_payloads[2][1]["image"][0].startswith("data:image/jpeg;base64,")
+
+
+def test_newapi_image_edit_supports_explicit_data_url_reference_format(monkeypatch):
+    import io
+    import httpx
+    from PIL import Image
+    from novelvideo.generators import nanobanana_grid
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (40, 50, 60)).save(buf, format="PNG")
+    ref_png = buf.getvalue()
+
+    posted = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": base64.b64encode(b"data-url-ok").decode()}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            posted["url"] = url
+            posted["json"] = json
+            return FakeResponse()
+
+    def unexpected_upload(*_args, **_kwargs):
+        pytest.fail("data-url format must not upload via media relay")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid, "upload_image_bytes", unexpected_upload)
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="edit prompt",
+            reference_images=[ref_png],
+            image_config={
+                "aspect_ratio": "16:9",
+                "image_size": "1K",
+                "reference_image_format": "data-url",
+            },
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes == b"data-url-ok"
+    assert error == ""
+    assert posted["url"] == "http://newapi.test/v1/images/edits"
+    assert len(posted["json"]["image"]) == 1
+    assert posted["json"]["image"][0].startswith("data:image/jpeg;base64,")
+
+
 def run_async(coro):
     import asyncio
 

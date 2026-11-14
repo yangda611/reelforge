@@ -4975,3 +4975,217 @@ def test_gateway_model_error_message_names_model_and_status():
     assert converted.gateway_status == 503
     assert "brainclaw" in str(converted)
     assert "503" in str(converted)
+
+
+def test_reasoning_settings_default_high_and_per_feature_overrides(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(config, "STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
+
+    assert gateway_settings.get_llm_reasoning_settings() == {
+        "defaultEffort": "high",
+        "featureEfforts": {},
+    }
+    assert gateway_settings.get_effective_reasoning_effort() == "high"
+    assert (
+        gateway_settings.get_effective_reasoning_effort("LITERAL_BEAT_META_MODEL")
+        == "high"
+    )
+
+    updated = gateway_settings.save_llm_reasoning_settings(
+        default_effort="medium",
+        feature_efforts={
+            "LITERAL_BEAT_META_MODEL": "low",
+            "COGNEE": "off",
+        },
+    )
+    assert updated == {
+        "defaultEffort": "medium",
+        "featureEfforts": {
+            "LITERAL_BEAT_META": "low",
+            "COGNEE": "off",
+        },
+    }
+    assert (
+        gateway_settings.get_effective_reasoning_effort("CHARACTER_BUILD_MODEL")
+        == "medium"
+    )
+    assert (
+        gateway_settings.get_effective_reasoning_effort("LITERAL_BEAT_META_MODEL")
+        == "low"
+    )
+    assert gateway_settings.get_effective_reasoning_effort("COGNEE") is None
+
+    cleared = gateway_settings.save_llm_reasoning_settings(
+        feature_efforts={"COGNEE": "inherit"}
+    )
+    assert cleared["featureEfforts"] == {"LITERAL_BEAT_META": "low"}
+    assert gateway_settings.get_effective_reasoning_effort("COGNEE") == "medium"
+
+    with pytest.raises(ValueError, match="unsupported reasoning effort"):
+        gateway_settings.save_llm_reasoning_settings(default_effort="none")
+
+
+def test_reasoning_route_persists_and_returns_gateway_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+
+    app = FastAPI()
+    app.include_router(model_gateway.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    initial = client.get("/api/v1/model-gateway/config")
+    assert initial.status_code == 200
+    assert initial.json()["data"]["reasoning"] == {
+        "defaultEffort": "high",
+        "featureEfforts": {},
+    }
+
+    bad = client.post(
+        "/api/v1/model-gateway/reasoning",
+        json={"defaultEffort": "invalid-level"},
+    )
+    assert bad.status_code == 400
+
+    res = client.post(
+        "/api/v1/model-gateway/reasoning",
+        json={
+            "defaultEffort": "low",
+            "featureEfforts": {"LITERAL_BEAT_META": "high", "FREEZONE_VISION": "off"},
+        },
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["ok"] is True
+    assert payload["data"]["reasoning"] == {
+        "defaultEffort": "low",
+        "featureEfforts": {
+            "LITERAL_BEAT_META": "high",
+            "FREEZONE_VISION": "off",
+        },
+    }
+    assert build_model_gateway_status()["reasoning"] == payload["data"]["reasoning"]
+
+
+def test_configured_text_models_apply_reasoning_level_on_wire(monkeypatch, tmp_path):
+    import httpx
+    from pydantic import BaseModel
+    from pydantic_ai import Agent
+
+    monkeypatch.setattr(config, "STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+
+    requests: list[dict] = []
+
+    class BeatMeta(BaseModel):
+        value: str
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        tools = payload.get("tools") or []
+        if tools:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": tools[0]["function"]["name"],
+                            "arguments": '{"value":"ok"}',
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
+        else:
+            message = {"role": "assistant", "content": "plain ok"}
+            finish_reason = "stop"
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": payload["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": finish_reason,
+                        "message": message,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        config,
+        "_newapi_text_http_client_factory",
+        lambda *, timeout_seconds: lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=timeout_seconds,
+        ),
+    )
+
+    structured_model = config._newapi_text_openai_model(
+        "DC-literal-beat-meta-LLM",
+        api_key="key",
+        base_url="https://example.test/v1",
+        timeout_seconds=12.0,
+        profile=None,
+        model_env="LITERAL_BEAT_META_MODEL",
+    )
+    plain_model = config._newapi_text_openai_model(
+        "DC-freezone-text-writer-LLM",
+        api_key="key",
+        base_url="https://example.test/v1",
+        timeout_seconds=12.0,
+        profile=None,
+        model_env="FREEZONE_TEXT_WRITER_MODEL",
+    )
+
+    # 1. Default reasoning effort is high on both structured & plain models.
+    structured_agent = Agent(
+        structured_model,
+        output_type=BeatMeta,
+        model_settings=config.get_newapi_structured_output_model_settings(),
+    )
+    plain_agent = Agent(plain_model, output_type=str)
+    asyncio.run(structured_agent.run("s1"))
+    asyncio.run(plain_agent.run("p1"))
+    assert requests[0]["reasoning_effort"] == "high"
+    assert requests[1]["reasoning_effort"] == "high"
+
+    # 2. Per-feature override to medium and off take effect per model_env.
+    gateway_settings.save_llm_reasoning_settings(
+        default_effort="medium",
+        feature_efforts={
+            "LITERAL_BEAT_META": "off",
+            "FREEZONE_TEXT_WRITER": "low",
+        },
+    )
+    asyncio.run(structured_agent.run("s2"))
+    asyncio.run(plain_agent.run("p2"))
+    assert "reasoning_effort" not in requests[2]
+    assert requests[3]["reasoning_effort"] == "low"
+
+    # 3. Global off omits reasoning_effort even on already-constructed Agent instances.
+    gateway_settings.save_llm_reasoning_settings(
+        default_effort="off",
+        feature_efforts={},
+        replace_features=True,
+    )
+    asyncio.run(structured_agent.run("s3"))
+    asyncio.run(plain_agent.run("p3"))
+    assert "reasoning_effort" not in requests[4]
+    assert "reasoning_effort" not in requests[5]

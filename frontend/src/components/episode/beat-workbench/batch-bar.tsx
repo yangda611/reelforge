@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   Loader2,
+  Lock,
   Mic2,
   Palette,
   Sparkles,
@@ -15,6 +16,7 @@ import { useAudioBillingQuote, useGenerateAudio } from "@/lib/queries/audio";
 import {
   useAssignColors,
   useDetectIdentities,
+  usePlanFixedCameraLocks,
 } from "@/lib/queries/sketches";
 import {
   useGlobalOptimize,
@@ -86,6 +88,7 @@ export function BatchBar({
 
   const assignColors = useAssignColors(project, episode);
   const detectIdentities = useDetectIdentities(project, episode);
+  const planFixedCamera = usePlanFixedCameraLocks(project, episode);
   const generateAudio = useGenerateAudio(project, episode);
   const globalOptimize = useGlobalOptimize(project, episode);
   const globalOptimizeAssetRevision = useMemo(
@@ -271,6 +274,36 @@ export function BatchBar({
       toast.error(t("common.error"));
     }
   };
+  const handlePlanFixedCamera = async () => {
+    const toastId = toast.loading(
+      t("episode.workbench.batch.aiCameraLockRunning"),
+    );
+    try {
+      const res = await planFixedCamera.mutateAsync();
+      if (!res.ok) {
+        toast.error(res.error ?? t("common.error"), { id: toastId });
+        return;
+      }
+      const lockedBeats = res.data.locked_beats ?? [];
+      if (lockedBeats.length === 0) {
+        toast.info(t("episode.workbench.batch.aiCameraLockEmpty"), {
+          id: toastId,
+        });
+        return;
+      }
+      const preview = lockedBeats.slice(0, 6).map((n) => `#${n}`).join("、");
+      const suffix = lockedBeats.length > 6 ? "…" : "";
+      toast.success(
+        t("episode.workbench.batch.aiCameraLockSuccess", {
+          count: lockedBeats.length,
+          beats: `${preview}${suffix}`,
+        }),
+        { id: toastId },
+      );
+    } catch (error) {
+      toast.error(backendErrorToastMessage(error, t), { id: toastId });
+    }
+  };
 
   return (
     <div className="flex h-full w-full items-center px-3">
@@ -351,6 +384,21 @@ export function BatchBar({
               <Palette className="size-3.5" />
             )}
             {t("episode.workbench.batch.reassignColors")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void handlePlanFixedCamera()}
+            disabled={planFixedCamera.isPending || beats.length < 2}
+            className={TOOLBAR_CONTROL_CLASS}
+            title={t("episode.workbench.batch.aiCameraLockTooltip")}
+          >
+            {planFixedCamera.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Lock className="size-3.5" />
+            )}
+            {t("episode.workbench.batch.aiCameraLock")}
           </Button>
           {/* 精品剧 (spine_template === "drama") 把解说烘进渲染视频，没有独立音频阶段 —— 隐藏「生成全集音频」 */}
           {SHOW_EPISODE_AUDIO_ENTRY && spineTemplate !== "drama" && (

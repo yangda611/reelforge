@@ -9,6 +9,7 @@ from typing import Any
 
 from novelvideo.project_context import ProjectContext
 from novelvideo.task_backend.cancel import (
+    DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS,
     TaskTimedOut,
     await_envelope_with_cancel_watch,
     raise_if_envelope_cancel_requested,
@@ -500,7 +501,10 @@ def run_compose_episode(
             )
         except subprocess.TimeoutExpired as exc:
             raise TaskTimedOut(
-                timeout_seconds=int(envelope.get("__timeout_seconds") or 30 * 60)
+                timeout_seconds=int(
+                    envelope.get("__timeout_seconds")
+                    or DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
+                )
             ) from exc
 
     try:
@@ -622,7 +626,9 @@ def run_compose_episode(
                     ]
                 )
             cmd.append(str(clip_path))
-            result = run_checked(cmd, default_timeout_seconds=30 * 60)
+            result = run_checked(
+                cmd, default_timeout_seconds=DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
+            )
             check_cancel()
             if result.returncode == 0:
                 video_clips.append(str(clip_path))
@@ -679,7 +685,9 @@ def run_compose_episode(
                 str(output_path),
             ]
         )
-        result = run_checked(cmd, default_timeout_seconds=30 * 60)
+        result = run_checked(
+            cmd, default_timeout_seconds=DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
+        )
         check_cancel()
         if result.returncode != 0:
             raise RuntimeError(f"拼接失败: {result.stderr[:500]}")
@@ -704,6 +712,9 @@ async def _run_global_optimize_video_async(
         prepare_global_optimizer_input,
     )
     from novelvideo.cognee import CogneeStore
+    from novelvideo.skills.cinematic_storyboard_skill import (
+        load_prev_episode_last_beat_from_store,
+    )
     from novelvideo.utils.path_resolver import PathResolver
 
     payload = envelope.get("payload") or {}
@@ -751,6 +762,13 @@ async def _run_global_optimize_video_async(
         updated_count = 0
         failure_messages: list[str] = []
         prev_prompt = None
+        prev_ep_beat = None
+        prev_ep_prompt = None
+        if episode > 1:
+            (
+                prev_ep_beat,
+                prev_ep_prompt,
+            ) = await load_prev_episode_last_beat_from_store(store, episode)
 
         for index, beat in enumerate(sorted_beats):
             beat_num = int(beat.get("beat_number") or 0)
@@ -768,7 +786,12 @@ async def _run_global_optimize_video_async(
                 log(f"Beat {beat_num}: 无草图帧，跳过")
                 continue
 
-            prev_beat = sorted_beats[index - 1] if index > 0 else None
+            if index > 0:
+                prev_beat = sorted_beats[index - 1]
+                effective_prev_prompt = prev_prompt
+            else:
+                prev_beat = prev_ep_beat
+                effective_prev_prompt = prev_ep_prompt
             next_beat = (
                 sorted_beats[index + 1] if index < len(sorted_beats) - 1 else None
             )
@@ -780,7 +803,7 @@ async def _run_global_optimize_video_async(
                     language=language,
                     prev_beat=prev_beat,
                     next_beat=next_beat,
-                    prev_prompt=prev_prompt,
+                    prev_prompt=effective_prev_prompt,
                     total_beats=len(sorted_beats),
                 )
                 prompt = result["prompt"]

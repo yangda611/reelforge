@@ -188,7 +188,7 @@ async def _run_freezone_agent_product_async(
                 if run_status in {"cancelled", "failed", "interrupted", "completed"}:
                     # Keep the operation and its credit reservation available for
                     # a late provider result, but do not occupy a worker slot for
-                    # the remainder of the generic 30-minute task timeout.
+                    # the remainder of the generic 2-hour task timeout.
                     raise AgentProductSettlementPending(
                         operation_id=operation_id,
                         status=f"workflow_{run_status}",

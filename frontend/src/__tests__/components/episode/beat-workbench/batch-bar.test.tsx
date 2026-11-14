@@ -52,6 +52,11 @@ beforeAll(async () => {
                 reassignColorsDesc: "确认重新配色？",
                 reassignColorsSuccess:
                   "已分配 {{count}} 个身份、{{propCount}} 个道具",
+                aiCameraLock: "AI 机位锁定",
+                aiCameraLockTooltip: "AI 机位锁定",
+                aiCameraLockRunning: "正在分析固定机位锁定…",
+                aiCameraLockEmpty: "当前集未识别到适合锁定的连续固定机位镜头",
+                aiCameraLockSuccess: "已完成 AI 机位锁定规划：共锁定 {{count}} 个镜头（{{beats}}）",
                 insertManualBeforeFirst: "首镜前插入",
                 insertManualBeforeFirstTooltip: "首镜前插入",
                 genMissingManualTitle: "补生成草图？",
@@ -118,6 +123,7 @@ beforeAll(async () => {
 const {
   assignColorsMock,
   detectIdentitiesMock,
+  planFixedCameraMock,
   generateMissingManualMock,
   regenerateSketchesMock,
   sketchStartMock,
@@ -126,6 +132,7 @@ const {
 } = vi.hoisted(() => ({
   assignColorsMock: vi.fn(),
   detectIdentitiesMock: vi.fn(),
+  planFixedCameraMock: vi.fn(),
   generateMissingManualMock: vi.fn(),
   regenerateSketchesMock: vi.fn(),
   sketchStartMock: vi.fn(),
@@ -140,6 +147,10 @@ vi.mock("@/lib/queries/sketches", () => ({
   }),
   useDetectIdentities: () => ({
     mutateAsync: detectIdentitiesMock,
+    isPending: false,
+  }),
+  usePlanFixedCameraLocks: () => ({
+    mutateAsync: planFixedCameraMock,
     isPending: false,
   }),
   useGenerateMissingManualSketches: () => ({
@@ -358,6 +369,16 @@ beforeEach(() => {
   regenerateSketchesMock.mockResolvedValue({
     ok: true,
     scope: "sketch_grid:demo",
+  });
+  planFixedCameraMock.mockReset();
+  planFixedCameraMock.mockResolvedValue({
+    ok: true,
+    data: {
+      total_beats: 3,
+      locked_beats: [2, 3],
+      updated_count: 2,
+      decisions: [],
+    },
   });
   sketchStartMock.mockReset();
   toastSuccessMock.mockReset();
@@ -580,6 +601,13 @@ describe("BatchBar", () => {
     expect(assignColorsMock).toHaveBeenCalledWith({ force: true });
     expect(toastSuccessMock).toHaveBeenCalledWith(
       "已分配 1 个身份、2 个道具",
+    );
+
+    await user.click(screen.getByRole("button", { name: "AI 机位锁定" }));
+    expect(planFixedCameraMock).toHaveBeenCalledTimes(1);
+    expect(toastSuccessMock).toHaveBeenCalledWith(
+      "已完成 AI 机位锁定规划：共锁定 2 个镜头（#2、#3）",
+      { id: "toast-1" },
     );
   });
 

@@ -190,14 +190,14 @@ def test_celery_task_failure_maps_soft_time_limit(monkeypatch) -> None:
     )
 
     assert handled is True
-    assert error == "任务超过 30 分钟未完成，已自动放弃"
-    assert metadata == {"error_code": "TASK_TIMEOUT", "timeout_seconds": 30 * 60}
+    assert error == "任务超过 120 分钟未完成，已自动放弃"
+    assert metadata == {"error_code": "TASK_TIMEOUT", "timeout_seconds": 2 * 60 * 60}
 
 
 def test_project_task_timeout_is_independent_from_celery_hard_limit(monkeypatch) -> None:
     celery_tasks = _import_celery_tasks(monkeypatch)
 
-    assert celery_tasks._project_task_timeout_seconds() == 30 * 60
+    assert celery_tasks._project_task_timeout_seconds() == 2 * 60 * 60
 
 
 def test_celery_task_failure_maps_cooperative_task_timeout(monkeypatch) -> None:
@@ -205,12 +205,12 @@ def test_celery_task_failure_maps_cooperative_task_timeout(monkeypatch) -> None:
     from novelvideo.task_backend.cancel import TaskTimedOut
 
     error, metadata, handled = celery_tasks._project_task_failure_for_exception(
-        TaskTimedOut(timeout_seconds=30 * 60)
+        TaskTimedOut(timeout_seconds=2 * 60 * 60)
     )
 
     assert handled is True
-    assert error == "任务超过 30 分钟未完成，已自动放弃"
-    assert metadata == {"error_code": "TASK_TIMEOUT", "timeout_seconds": 30 * 60}
+    assert error == "任务超过 120 分钟未完成，已自动放弃"
+    assert metadata == {"error_code": "TASK_TIMEOUT", "timeout_seconds": 2 * 60 * 60}
 
 
 def test_celery_task_failure_reraises_non_business_base_exception(monkeypatch) -> None:

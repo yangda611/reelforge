@@ -7,7 +7,7 @@ import io
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
@@ -15,7 +15,14 @@ from pydantic_ai.output import NativeOutput
 from PIL import Image as PILImage
 
 from novelvideo.brainclaw_contract import BrainClawProfile
-from novelvideo.models import beats_share_scene
+from novelvideo.models import (
+    beat_lock_camera_beat,
+    beats_locked_fixed_camera,
+    beats_share_scene,
+)
+from novelvideo.skills.cinematic_storyboard_skill import (
+    VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN,
+)
 from novelvideo.utils.source_language import asset_language_instruction
 
 
@@ -64,8 +71,8 @@ You are a cinematic motion director. Given sketch panels and character color map
 ## Prompt Requirements
 - Write in the requested output language, **present tense** throughout
 - Write a **single flowing paragraph** of 4–6 sentences
-- ⚠️ **Every prompt MUST include a camera direction with displacement or zoom** (e.g. "The camera pushes in…", "A slow dolly follows…", "Close-up as…", "Wide shot tracking…"). Static camera words are BANNED: holds, stays, remains, static, locked, fixed. The camera must always move.
-- ⚠️ **Camera endpoint**: describe what the frame looks like when the camera motion finishes (e.g. "…ending on a tight close-up of her trembling hands"). This gives the model a clear target for the end of the clip.
+- ⚠️ **Every prompt MUST include a camera direction with displacement or zoom** (e.g. "The camera pushes in…", "A slow dolly follows…", "Close-up as…", "Wide shot tracking…") **UNLESS the task specifies `[LOCKED FIXED CAMERA]`**. Outside `[LOCKED FIXED CAMERA]` mode, static camera words are BANNED: holds, stays, remains, static, locked, fixed. When `[LOCKED FIXED CAMERA]` IS specified, keep the camera completely steady on a locked tripod (zero zoom, pan, tilt, or dolly) and drive smooth continuity purely through subject movement and ambient motion.
+- ⚠️ **Camera endpoint**: describe what the frame looks like when the clip finishes (e.g. "…ending on a tight close-up of her trembling hands", or in `[LOCKED FIXED CAMERA]` mode, the final posture/eyeline resting point within the unchanged frame). This gives the model a clear target for the end of the clip.
 - ⚠️ **Inter-beat smooth transition (no last-frame chaining needed)**: when Continuity Context provides adjacent beats, connect shots smoothly through motion, eyeline, and framing rather than static stops:
   - *Entry from previous beat*: keep `t=0` faithful to the current Start Frame (NEVER invent backward motion or contradict the visible posture), while matching compatible screen direction, eyeline polarity, or camera flow from the previous beat's ending.
   - *Exit toward next beat*: when `Next beat` is `[Same Scene]` (or shares continuous action), shape the final 1–1.5s of motion and camera endpoint as an intentional bridge using whichever technique naturally fits the visible frame:
@@ -86,7 +93,7 @@ You are a cinematic motion director. Given sketch panels and character color map
 
 ## Output Format
 Output the motion prompt directly in the requested language. No JSON, explanation, or markdown.
-"""
+""" + VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN
 
 
 GLOBAL_VIDEO_REVIEWER_INSTRUCTIONS_EN = """# Video Prompt Reviewer
@@ -112,7 +119,7 @@ You are a visual quality reviewer. Compare a sketch frame against its video moti
 
 ## Prompt Requirements
 - Single flowing paragraph, 4–6 sentences (~50–90 words)
-- ⚠️ **Camera movement is mandatory with displacement/zoom**: if the prompt lacks an explicit camera direction (push-in, dolly, pan, close-up, wide shot, etc.) or uses static camera words (holds, stays, remains, static, locked, fixed), set needs_fix=true and fix it.
+- ⚠️ **Camera movement rule**: unless the task specifies `[LOCKED FIXED CAMERA]`, camera movement with displacement/zoom is mandatory — if the prompt lacks an explicit camera direction (push-in, dolly, pan, close-up, wide shot, etc.) or uses static camera words (holds, stays, remains, static, locked, fixed), set needs_fix=true and fix it. When `[LOCKED FIXED CAMERA]` IS specified, require a steady locked/tripod camera with zero zoom/pan/dolly and focus motion on continuous character action.
 - ⚠️ **No emotion labels**: if the prompt contains abstract emotion words (sad, haunting, desperate, hopeful, anxious, melancholy) instead of body language, set needs_fix=true.
 - ⚠️ **No non-visual senses**: if the prompt describes smell, temperature, humidity, taste, or tactile sensations, set needs_fix=true.
 - ⚠️ **No static primary verbs**: if the main action uses freezes, stares, stands, waits, remains, holds still, set needs_fix=true.
@@ -315,12 +322,23 @@ class GlobalVideoPromptOptimizer:
             spk_label = identity_to_color.get(speaker, speaker) if speaker else ""
             dialogue_hint = f"\n## Dialogue Beat\nSpeaker: {spk_label}. Prompt MUST include speaking action (lips moving, gestures while talking). Dialogue text will be appended by the system.\n"
 
+        is_locked_camera = beats_locked_fixed_camera(
+            beat, prev_beat=prev_beat, next_beat=next_beat
+        )
+        lock_target_bn = beat_lock_camera_beat(beat)
+
         # Build continuity context
         continuity_section = ""
-        if prev_beat or next_beat or prev_prompt:
+        effective_prev_prompt = prev_prompt
+        if not effective_prev_prompt and isinstance(prev_beat, dict):
+            raw_prev_vp = str(prev_beat.get("video_prompt") or "").strip()
+            if raw_prev_vp:
+                effective_prev_prompt = raw_prev_vp
+
+        if prev_beat or next_beat or effective_prev_prompt or is_locked_camera:
             parts = []
-            if prev_prompt:
-                trimmed_prev = prev_prompt.strip()
+            if effective_prev_prompt:
+                trimmed_prev = effective_prev_prompt.strip()
                 if len(trimmed_prev) > 320:
                     trimmed_prev = f"...{trimmed_prev[-320:]}"
                 parts.append(
@@ -335,9 +353,17 @@ class GlobalVideoPromptOptimizer:
                 prev_relation = (
                     "[Same Scene]" if beats_share_scene(prev_beat, beat) else "[Scene Cut]"
                 )
-                parts.append(
-                    f"- Previous beat (B{prev_beat.get('beat_number', '?')} {prev_relation}): {prev_vd[:220]}"
-                )
+                prev_ep_num = prev_beat.get("_from_previous_episode")
+                if prev_ep_num is not None:
+                    cliffhanger = str(prev_beat.get("_prev_episode_cliffhanger") or "").strip()
+                    cliff_note = f" | Finale Hook: {cliffhanger}" if cliffhanger else ""
+                    parts.append(
+                        f"- [Previous Episode Ep{prev_ep_num} Finale Beat (B{prev_beat.get('beat_number', '?')} {prev_relation}) - Cross-Episode Seamless Bridge Required{cliff_note}]: {prev_vd[:220]}"
+                    )
+                else:
+                    parts.append(
+                        f"- Previous beat (B{prev_beat.get('beat_number', '?')} {prev_relation}): {prev_vd[:220]}"
+                    )
             if next_beat:
                 next_vd = next_beat.get("visual_description", "")
                 if next_vd:
@@ -350,6 +376,15 @@ class GlobalVideoPromptOptimizer:
                 parts.append(
                     f"- Next beat (B{next_beat.get('beat_number', '?')} {next_relation}): {next_vd[:220]}"
                 )
+            if is_locked_camera:
+                anchor_note = (
+                    f"anchored to Beat {lock_target_bn}"
+                    if lock_target_bn is not None
+                    else "feeding into the next locked beat"
+                )
+                parts.append(
+                    f"- **[LOCKED FIXED CAMERA]** ({anchor_note}): Hold the camera completely steady on a locked tripod with ZERO push-in, pan, tilt, or zoom so the background aligns seamlessly across cuts. Drive continuity solely through forward character motion, eyeline lead, and subtle ambient details."
+                )
             continuity_section = (
                 "\n## Inter-Beat Transition & Continuity Context\n"
                 + "\n".join(parts)
@@ -359,12 +394,20 @@ class GlobalVideoPromptOptimizer:
         position_hint = ""
         if total_beats > 0:
             position_hint = f"\nThis is Beat {bn} of {total_beats} total. "
-            if bn <= 2:
+            if is_locked_camera:
+                position_hint += "This beat belongs to a FIXED-CAMERA continuity sequence — keep framing, horizon, and shot scale identical."
+            elif bn <= 2:
                 position_hint += "This is an OPENING beat — establish the scene with a wider shot before pushing in."
             elif bn >= total_beats - 1:
                 position_hint += "This is a CLOSING beat — build to a final visual climax or cliffhanger moment."
             else:
                 position_hint += "Vary shot scale and angle from adjacent beats to create visual rhythm."
+
+        locked_req = (
+            "\n6. [LOCKED FIXED CAMERA]: Keep the camera stationary on a locked tripod (NO zoom, push-in, pan, or tilt); create smooth flow exclusively with continuous character action and subtle ambient motion."
+            if is_locked_camera
+            else ""
+        )
 
         language_instruction = asset_language_instruction(language)
         output_label = "English" if language == "en" else "Chinese"
@@ -381,7 +424,7 @@ class GlobalVideoPromptOptimizer:
 2. Use Motion Prompt as the authoritative forward action chain
 3. If Motion Prompt starts with an action that contradicts the visible t=0 state, begin from the first compatible action instead
 4. Generate the motion prompt in {output_label}
-5. Use character appearance descriptions, never use character names
+5. Use character appearance descriptions, never use character names{locked_req}
 
 ## Output Language
 {language_instruction}
@@ -440,6 +483,8 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
         beats: list[dict] | None = None,
         sketches_dir: str | None = None,
         progress_callback=None,
+        prev_episode_last_beat: Optional[dict[str, Any]] = None,
+        prev_episode_last_prompt: Optional[str] = None,
     ) -> list[dict]:
         """优化整集所有 Beat 的视频提示词（逐 beat 调用 optimize_single_beat）。
 
@@ -451,6 +496,8 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
             beats: beat 数据列表
             sketches_dir: 草图帧目录路径，用于查找单帧
             progress_callback: 进度回调 fn(beat_num, total)
+            prev_episode_last_beat: 上一集结尾 Beat（用于第 N 集 N>1 首镜跨集承接）
+            prev_episode_last_prompt: 上一集结尾视频提示词尾段
 
         Returns:
             [{"beat_number": int, "video_mode": str, "prompt": str}, ...]
@@ -461,7 +508,7 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
         validated = []
         sorted_beats = sorted(beats, key=lambda b: b.get("beat_number", 0))
 
-        prev_prompt = None
+        prev_prompt = prev_episode_last_prompt
         for i, beat in enumerate(sorted_beats):
             bn = beat.get("beat_number", 0)
 
@@ -479,7 +526,7 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
                 continue
 
             # prev/next beat for continuity
-            prev_beat = sorted_beats[i - 1] if i > 0 else None
+            prev_beat = sorted_beats[i - 1] if i > 0 else prev_episode_last_beat
             next_beat = sorted_beats[i + 1] if i < len(sorted_beats) - 1 else None
 
             try:
@@ -531,7 +578,9 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
                 log_fn(msg)
 
         color_map_text = self._build_color_map_text(character_color_map)
-        beats_by_num = {b.get("beat_number"): b for b in beats}
+        sorted_beats = sorted(beats, key=lambda b: b.get("beat_number", 0))
+        beats_by_num = {b.get("beat_number"): b for b in sorted_beats}
+        idx_by_num = {b.get("beat_number"): i for i, b in enumerate(sorted_beats)}
         sketches_path = Path(sketches_dir)
         fixed_count = 0
 
@@ -547,6 +596,16 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
                 continue
 
             beat = beats_by_num.get(beat_num, {})
+            beat_idx = idx_by_num.get(beat_num, -1)
+            prev_beat = sorted_beats[beat_idx - 1] if beat_idx > 0 else None
+            next_beat = (
+                sorted_beats[beat_idx + 1]
+                if 0 <= beat_idx < len(sorted_beats) - 1
+                else None
+            )
+            is_locked_camera = beats_locked_fixed_camera(
+                beat, prev_beat=prev_beat, next_beat=next_beat
+            )
             visual_desc = beat.get("visual_description", "")
             narration = beat.get("narration_segment", "")
             audio_type = beat.get("audio_type", "narration")
@@ -565,6 +624,9 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
                 dialogue_hint = ""
                 if audio_type == "dialogue":
                     dialogue_hint = "\n- ⚠️ 此 Beat 为角色台词，prompt 中需描述说话动作（张嘴说话等）。台词由系统追加。"
+                locked_hint = ""
+                if is_locked_camera:
+                    locked_hint = "\n- [LOCKED FIXED CAMERA] 此 Beat 处于固定机位锁定序列，要求机位静止稳定（无推拉摇移变焦），请勿将静止机位判错。"
 
                 review_task = f"""审核 Beat {beat_num} 的视频提示词是否与草图画面吻合。
 
@@ -577,7 +639,7 @@ Output the {output_label} motion prompt directly. No JSON, explanation, or markd
 
 ## Beat 上下文
 - 画面描述: {visual_desc}
-- {narration_label}{dialogue_hint}
+- {narration_label}{dialogue_hint}{locked_hint}
 
 请对比草图画面与 prompt，判断是否需要修正。prompt 必须从草图这一帧之后开始，不能描述抵达这一帧之前发生的动作。直接输出 JSON 对象。"""
 

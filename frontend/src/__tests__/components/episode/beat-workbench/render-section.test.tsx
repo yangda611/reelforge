@@ -103,6 +103,21 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/queries/scripts", () => ({
+  useScript: () => ({
+    data: {
+      ok: true,
+      data: {
+        beats: [],
+      },
+    },
+  }),
+  useUpdateBeat: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ ok: true, data: {} }),
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/lib/queries/sketches", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/queries/sketches")>();
   return {

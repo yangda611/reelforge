@@ -20,6 +20,7 @@ from novelvideo.egress_context import (
     ambient_organization_egress_context,
 )
 from novelvideo.task_backend.cancel import (
+    DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS,
     TaskCancelled,
     TaskTimedOut,
     is_cancel_requested,
@@ -466,7 +467,8 @@ def run_project_subprocess(
                 with contextlib.suppress(Exception):
                     proc.communicate(timeout=1)
                 raise TaskTimedOut(
-                    timeout_seconds=timeout_seconds or int(timeout or 30 * 60)
+                    timeout_seconds=timeout_seconds
+                    or int(timeout or DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS)
                 )
             if _cancel_requested_sync(scope):
                 _kill_process_group(proc)
@@ -487,7 +489,8 @@ def run_project_subprocess(
                     raise TaskCancelled()
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TaskTimedOut(
-                        timeout_seconds=timeout_seconds or int(timeout or 30 * 60)
+                        timeout_seconds=timeout_seconds
+                        or int(timeout or DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS)
                     )
                 if check and completed.returncode != 0:
                     if restricted:

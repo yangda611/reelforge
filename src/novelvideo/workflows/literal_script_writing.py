@@ -24,6 +24,10 @@ from novelvideo.models import (
     extract_char_identities_from_markers,
     extract_prop_ids_from_markers,
 )
+from novelvideo.skills.cinematic_storyboard_skill import (
+    LITERAL_BEAT_STORYBOARD_SKILL_DIRECTIVES,
+    load_prev_episode_script_context_from_store,
+)
 from novelvideo.sqlite_store import load_episode_planning_content
 from novelvideo.time_of_day import normalize_time_of_day
 from novelvideo.utils.screenplay_quality import check_screenplay_import_quality
@@ -379,32 +383,35 @@ LEGACY_LITERAL_SCRIPT_PROMPT = """# 你是短剧剧本逐行分镜标注师
 """
 
 
-LITERAL_SCRIPT_PROMPT = """# 你是短剧连续镜头规划师
+LITERAL_SCRIPT_PROMPT = """# 你是电影级短剧连续镜头规划师
 
-你的任务是逐行识别剧本中的可见动作与声音，再判断每行是否开启新镜头。源文本的换行仅用于输入，不代表镜头边界。
+你的任务是逐行识别剧本中的可见动作与声音，按电影视听语言规划镜头边界与节奏时长。源文本的换行仅用于输入，不代表镜头边界。
 
-## 镜头边界
-- 连续表演、同一动作链或同一观察构图能够承载的内容，优先延续上一镜；不要按台词行、动作阶段、眼神变化或标点机械切镜。
-- 只有当景别/观察视点改变、空间或时间切换、出现新的关键信息需要揭示，或原文明确要求切镜时，才开启新镜。
+## 镜头边界与长短镜调度（融合 Seedance 2.0 最长 15 秒特性）
+- 连续表演、同一动作链、或同一观察构图能够流畅承载的内容，**积极用 `continues_previous_shot: true` 合并为完整长镜头（单镜可达 8~15 秒）**，避免按句子、标点或细碎小动作机械切成大量 3~4 秒短镜头。
+- 该短则短、该长则长：震撼反应/触感特写/门铃切入保留锐利短镜（2~5 秒）；连续走位、铺垫氛围、压迫对峙、连续敲击配合动作阶段展开可放开合并为 8~15 秒长镜。若累加时长即将超过 15 秒，在自然停顿或反应落点处开启新镜。
+- 只有当景别或观察视点实质变化、出现新的关键信息/道具揭示、空间或时间切换，或原文明确要求切镜时，才开启新镜。
 - `continues_previous_shot` 只判断当前行与紧邻的上一条源文本内容行；场次头变化时必须为 false。
 - 当前数据结构每个 Beat 只承载一种音频类型和一个说话人。音频类型或说话人改变时必须为 false，避免把不同声部合成一个音频段。
 - 标注当前行本身的画面，不复述整段剧情。若延续上一镜，描述应与上一行的动作、人物位置和道具状态兼容，不要重置动作或位置。
 
-## 时长估算
-- `estimated_duration_seconds`：若开启新镜，估算当前镜头完整时长；若延续上一镜，只估算当前行新增的动作/台词时间。
-- 根据动作完成所需时间、台词自然说完所需时间、停顿和信息可读性估算。不要按字符数固定换算，不给每个镜头统一秒数，也不要用多余静止时间填满。
-- 轻微反应或短动作可短于 2 秒；常规动作/短台词通常数秒；只有动作确实展开、长台词必须说完或信息需要阅读时才增加时长。
-- 只估算叙事剪辑时长，不要套用视频模型的固定片段长度。最终视频生成会按模型支持范围和实测音频时长调整。
+## 时长估算（节奏真实分化）
+- `estimated_duration_seconds`：若开启新镜，估算当前镜头完整时长（常规 2~15 秒，充分拉开短切与长镜对比）；若延续上一镜，只估算当前行新增的动作/台词/停顿增量时间。
+- 根据动作完成所需物理时间、台词/旁白自然语速（约 4~5 字/秒加呼吸留白）、信息揭示停顿来估算。严禁所有镜头都写成千篇一律的 3~4 秒，也不要用无意义的静止时间硬凑秒数。
+- 轻微反应或触感特写可为 2~4 秒；单句干脆对白或动作交接 4~7 秒；持续表演、复杂空间调度或完整独白/铺垫给足 8~15 秒。
 
-## 输出要求
+## 画面与空间物理描写要求
 - 严格按当前行判断 `audio_type`、`speaker`、`speaker_kind`；不凭常识补台词或声音。
-- `visual_description` 仅描述当前行可见内容，忠实保留明确的景别、机位、屏幕、监控、分屏、黑屏等画面提示。
+- `visual_description` 采用「可拍物理动作 + 双重空间锚定 + 视线/手部任务 + 道具/光影状态」：
+  * 存在双人站位、视角切换或物我交互时，明确画面位置（左/中/右、前/中/后景）与场景内相对朝向（如“画面左侧收银台后，{{人物}}面向右侧门口……”）。
+  * 抓、递、放、敲等手部动作写清主动方、受动方、接触关系与结束落点；若当前是旁白/内心独白 OS（`narration`），明确人物闭口专注当前动作，不要张嘴念词。
+- 禁止空洞画质词（如“8K / 电影感 / 大师级 / 极高画质”）和与当前镜头无关的静态外貌复述（角色服装发型由身份图承载）。
 - 只有必要时补足可画的动作、姿态和空间关系；不得新增原文没有的事件、时空切换或机位变化。
 - 角色仅使用 `{{identity_id}}` 标记，道具仅使用 `[[prop_id]]` 标记；只标当前画面实际可见且候选菜单中存在的资产。
-- 画面必须明确唯一，不得写“或者 / 可选 / 二选一”。抓、递、扶、按等互动要写清主动方、受动方及接触关系。
+- 画面必须明确唯一，不得写“或者 / 可选 / 二选一”。
 - 当前场景和时间由场次头锁定，不要更改；`scene_id` 只在系统未锁定时从菜单精确选择，否则留空。
 - 只输出当前行的结构化元数据，不解释、不复述原行。
-"""
+""" + LITERAL_BEAT_STORYBOARD_SKILL_DIRECTIVES
 
 
 def split_literal_source_text(source_text: str) -> list[str]:
@@ -553,6 +560,16 @@ class LiteralScriptWritingWorkflow:
         self._scene_section = self._build_scene_menu_for_episode(episode)
         await self._load_scene_aliases_for_episode()
         self._prop_section = self._build_prop_menu_for_episode(episode)
+
+        prev_episode_context_text = ""
+        prev_ep_last_beat: dict[str, Any] | None = None
+        if episode_num > 1:
+            (
+                prev_episode_context_text,
+                prev_ep_last_beat,
+            ) = await load_prev_episode_script_context_from_store(
+                self.sqlite_store, episode_num
+            )
         episode_identity_ids = set(self._valid_identity_ids)
         episode_identity_default_map = dict(
             getattr(episode, "identity_default_map", {}) or {}
@@ -672,20 +689,56 @@ class LiteralScriptWritingWorkflow:
 
             prev_beat_anchor = ""
             if beats:
-                last = beats[-1]
-                prev_identities = re.findall(
-                    r"\{\{(.+?)\}\}", last.visual_description or ""
+                anchor_lines = []
+                recent_beats = beats[-2:]
+                for idx, past in enumerate(recent_beats):
+                    past_desc = (past.visual_description or "").strip()
+                    past_scene = (
+                        past.scene_ref.scene_id if past.scene_ref else ""
+                    ) or "未定"
+                    past_identities = re.findall(r"\{\{(.+?)\}\}", past_desc)
+                    past_props = extract_prop_ids_from_markers(past_desc, strict=False)
+                    parts = [f"场景={past_scene}"]
+                    if past_identities:
+                        parts.append(f"身份={', '.join(past_identities)}")
+                    if past_props:
+                        parts.append(f"道具={', '.join(past_props)}")
+                    snippet = re.sub(r"\s+", " ", past_desc)[:120]
+                    tag = "前第2 beat" if (len(recent_beats) == 2 and idx == 0) else "上一 beat"
+                    anchor_lines.append(
+                        f"- {tag} (Beat {past.beat_number}): {' | '.join(parts)} | 画面={snippet}"
+                    )
+                anchor_lines.append(
+                    "- 景别与转场提醒: 严禁在同一场次内连续3拍停留相同景别与平视机位；请结合15套景别组合推进景别梯度（远/全/中/近/特或局部手/眼/道具特写），并嵌入动作顺接/视线顺接/前景遮挡等转场锚点。"
                 )
-                prev_props = extract_prop_ids_from_markers(
-                    last.visual_description or "", strict=False
-                )
-                anchor_parts = []
+                prev_beat_anchor = "\n".join(anchor_lines)
+            elif prev_ep_last_beat:
+                prev_desc = str(prev_ep_last_beat.get("visual_description") or "").strip()
+                prev_scene_ref = prev_ep_last_beat.get("scene_ref") or {}
+                prev_scene = (
+                    str(prev_scene_ref.get("scene_id") or "")
+                    if isinstance(prev_scene_ref, dict)
+                    else str(prev_ep_last_beat.get("scene_id") or "")
+                ) or "未定"
+                prev_identities = re.findall(r"\{\{(.+?)\}\}", prev_desc)
+                prev_props = extract_prop_ids_from_markers(prev_desc, strict=False)
+                parts = [f"场景={prev_scene}"]
                 if prev_identities:
-                    anchor_parts.append(f"身份: {', '.join(prev_identities)}")
+                    parts.append(f"身份={', '.join(prev_identities)}")
                 if prev_props:
-                    anchor_parts.append(f"道具: {', '.join(prev_props)}")
-                if anchor_parts:
-                    prev_beat_anchor = "- 上一 beat 已选: " + " | ".join(anchor_parts)
+                    parts.append(f"道具={', '.join(prev_props)}")
+                snippet = re.sub(r"\s+", " ", prev_desc)[:140]
+                prev_beat_anchor = (
+                    f"- 上一集结尾镜头 (EP{episode_num - 1} Beat {prev_ep_last_beat.get('beat_number', '?')}): "
+                    f"{' | '.join(parts)} | 画面={snippet}\n"
+                    "- 跨集丝滑承接要求: 当前为新的一集开篇，首镜必须顺接上一集末拍的视线方向、动作动势或核心悬念道具，完成跨集无痕过渡。"
+                )
+
+            prev_episode_context_section = (
+                f"\n{prev_episode_context_text}\n"
+                if (content_index <= 3 and prev_episode_context_text)
+                else ""
+            )
 
             sticky_lines = []
             if block_sticky_identities:
@@ -718,7 +771,7 @@ class LiteralScriptWritingWorkflow:
 - 当前场次前文（最多 2 行）:
 {chr(10).join(f"  - {item}" for item in safe_prompt_history) if safe_prompt_history else "  - 无"}
 {prev_beat_anchor or "- 上一 beat 已选: 无"}
-{sticky_section or "- 当前场次已锁定结果: 无"}
+{sticky_section or "- 当前场次已锁定结果: 无"}{prev_episode_context_section}
 ## 当前行
 - 行序号: {content_index}/{total}
 - 上一行: {safe_prompt_history[-1] if safe_prompt_history else "无"}
@@ -833,6 +886,7 @@ class LiteralScriptWritingWorkflow:
                 and previous_beat.speaker_kind == speaker_kind
                 and previous_beat.scene_ref == scene_ref
                 and previous_beat.time_of_day == time_of_day
+                and (float(previous_beat.estimated_duration or 0.0) + line_duration) <= 15.0
             )
 
             if can_continue_previous_shot and previous_beat:

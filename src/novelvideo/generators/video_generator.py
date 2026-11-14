@@ -140,7 +140,7 @@ def _safe_video_error_code(exc: BaseException, fallback: str) -> str:
 
 
 def _run_video_subprocess(
-    cmd: list[str], *, timeout: int = 30 * 60
+    cmd: list[str], *, timeout: int = 2 * 60 * 60
 ) -> subprocess.CompletedProcess:
     return run_project_subprocess(cmd, capture_output=True, text=True, timeout=timeout)
 

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -81,6 +82,7 @@ from novelvideo.image_request_usage import (
 )
 from novelvideo.storage.media_relay import (
     IMAGE_TRANSFORM_AI_REFERENCE_JPEG,
+    _apply_image_transform,
     media_relay_ttl_seconds,
     relay_tenant_image_bytes_from_context,
     upload_image_bytes,
@@ -88,6 +90,8 @@ from novelvideo.storage.media_relay import (
 
 _VALID_IMAGE_SIZES = {"512", "1K", "2K", "4K"}
 _OPENROUTER_IMAGE_CAPABILITY_CACHE: dict[str, tuple[bool, str]] = {}
+_NEWAPI_UNREACHABLE_RELAY_HOSTS: dict[tuple[str, str], float] = {}
+_NEWAPI_UNREACHABLE_RELAY_TTL_SECONDS = 900.0
 _OPENAI_VALID_QUALITIES = {"low", "medium", "high", "auto"}
 _OPENAI_MIN_PIXELS = 655_360
 _OPENAI_MAX_PIXELS = 8_294_400
@@ -3628,8 +3632,8 @@ async def _call_newapi_image_api(
         or os.environ.get("NEWAPI_IMAGE_EDIT_REFERENCE_FORMAT")
         or "dc-media"
     ).strip().lower()
-    if reference_images and reference_image_format not in {"dc-media", "images"}:
-        return None, "", "Unsupported reference image format; use dc-media or images"
+    if reference_images and reference_image_format not in {"dc-media", "images", "data-url"}:
+        return None, "", "Unsupported reference image format; use dc-media, images, or data-url"
     aspect_ratio = str(image_config.get("aspect_ratio") or "1:1").strip().lower() or "1:1"
     image_size = normalize_image_size(str(image_config.get("image_size") or "1K"), "newapi")
     request_schema = image_config.get("request_schema") or {}
@@ -3684,44 +3688,68 @@ async def _call_newapi_image_api(
     if input_fidelity and reference_images:
         payload["input_fidelity"] = input_fidelity
 
+    if base_url:
+        endpoint = base_url.rstrip("/")
+    else:
+        from novelvideo.config import get_effective_newapi_gateway_config
+
+        endpoint = get_effective_newapi_gateway_config().base_url.rstrip("/")
+
+    relayed_urls: list[str] = []
+    used_data_uri_references = False
     if reference_images:
-        try:
-            relay_helper = _relay_reference_images_for_newapi
-            if relay_helper is _ORIGINAL_RELAY_REFERENCE_IMAGES_FOR_NEWAPI:
-                relayed_images = await relay_helper(
-                    reference_images,
-                    egress_context=context,
+        if reference_image_format == "data-url":
+            image_values = _encode_newapi_reference_data_uris(reference_images)
+            used_data_uri_references = True
+        else:
+            try:
+                relay_helper = _relay_reference_images_for_newapi
+                if relay_helper is _ORIGINAL_RELAY_REFERENCE_IMAGES_FOR_NEWAPI:
+                    relayed_urls = await relay_helper(
+                        reference_images,
+                        egress_context=context,
+                    )
+                else:
+                    relayed_urls = await relay_helper(reference_images)
+            except Exception as exc:
+                if context is not None and context.is_organization:
+                    # The organization path hides `exc` because an arbitrary
+                    # exception may carry a signed URL or a key. The relay's own
+                    # three failures are secret-free by construction, though, and
+                    # they need three different fixes — a port registration, a
+                    # retry, an object-storage policy — so name which one fired
+                    # (OI-45). Anything else stays opaque.
+                    code = getattr(type(exc), "code", None)
+                    reason = getattr(exc, "reason", None)
+                    if not isinstance(code, str):
+                        return None, "", "media relay upload failed"
+                    logger.warning(
+                        "organization media relay failed: code=%s reason=%s "
+                        "envelope=%s project=%s",
+                        code,
+                        reason or "-",
+                        context.envelope_id,
+                        context.project_id,
+                    )
+                    return None, "", f"media relay upload failed ({code})"
+                return None, "", f"media relay upload failed: {exc}"
+            if _has_unreachable_relay_host(endpoint, relayed_urls):
+                logger.info(
+                    "DramaClawAPI image relay host recently unreachable from upstream (%s); "
+                    "using inline data URIs directly",
+                    endpoint,
                 )
+                image_values = _encode_newapi_reference_data_uris(reference_images)
+                used_data_uri_references = True
             else:
-                relayed_images = await relay_helper(reference_images)
-            # DC-Media uses image: [URL]; Cockpit's JSON edit parser accepts
-            # images: [{image_url: URL}]. Select explicitly per deployment.
-            if reference_image_format == "images":
-                payload["images"] = [{"image_url": url} for url in relayed_images]
-            else:
-                payload["image"] = relayed_images
-        except Exception as exc:
-            if context is not None and context.is_organization:
-                # The organization path hides `exc` because an arbitrary
-                # exception may carry a signed URL or a key. The relay's own
-                # three failures are secret-free by construction, though, and
-                # they need three different fixes — a port registration, a
-                # retry, an object-storage policy — so name which one fired
-                # (OI-45). Anything else stays opaque.
-                code = getattr(type(exc), "code", None)
-                reason = getattr(exc, "reason", None)
-                if not isinstance(code, str):
-                    return None, "", "media relay upload failed"
-                logger.warning(
-                    "organization media relay failed: code=%s reason=%s "
-                    "envelope=%s project=%s",
-                    code,
-                    reason or "-",
-                    context.envelope_id,
-                    context.project_id,
-                )
-                return None, "", f"media relay upload failed ({code})"
-            return None, "", f"media relay upload failed: {exc}"
+                image_values = relayed_urls
+        # DC-Media uses image: [URL]; Cockpit's JSON edit parser accepts
+        # images: [{image_url: URL}]. Select explicitly per deployment.
+        _set_newapi_reference_images_payload(
+            payload,
+            image_values,
+            reference_image_format,
+        )
         request_path = "/images/edits"
     else:
         request_path = "/images/generations"
@@ -3738,12 +3766,6 @@ async def _call_newapi_image_api(
     )
     payload = enforce_newapi_media_geometry_contract(payload, media_type="image")
 
-    if base_url:
-        endpoint = base_url.rstrip("/")
-    else:
-        from novelvideo.config import get_effective_newapi_gateway_config
-
-        endpoint = get_effective_newapi_gateway_config().base_url.rstrip("/")
     request_context = _newapi_safe_request_context(
         endpoint=endpoint,
         request_path=request_path,
@@ -3833,25 +3855,63 @@ async def _call_newapi_image_api(
     try:
         reservation_id = await _reserve("newapi_image_api")
         await update_current_model_call_log(
-            request_payload=payload,
+            request_payload=_sanitize_newapi_payload_for_log(payload),
         )
 
         async with httpx.AsyncClient(
             timeout=NEWAPI_IMAGE_HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
         ) as client:
-            logger.info("DramaClawAPI image POST start: %s", request_context.get("endpoint"))
-            response = await client.post(
-                f"{endpoint}{request_path}",
-                headers=headers,
-                json=payload,
-            )
-            logger.info(
-                "DramaClawAPI image POST response: status=%s bytes=%s",
-                getattr(response, "status_code", "?"),
-                (getattr(response, "headers", None) or {}).get("content-length", "?"),
-            )
-            response.raise_for_status()
+            while True:
+                logger.info("DramaClawAPI image POST start: %s", request_context.get("endpoint"))
+                response = await client.post(
+                    f"{endpoint}{request_path}",
+                    headers=headers,
+                    json=payload,
+                )
+                logger.info(
+                    "DramaClawAPI image POST response: status=%s bytes=%s",
+                    getattr(response, "status_code", "?"),
+                    (getattr(response, "headers", None) or {}).get("content-length", "?"),
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    body = (exc.response.text or "")[:2000]
+                    if (
+                        reference_images
+                        and not used_data_uri_references
+                        and _is_upstream_reference_fetch_failure(
+                            exc.response.status_code,
+                            body,
+                        )
+                    ):
+                        _record_unreachable_relay_hosts(endpoint, relayed_urls)
+                        _set_newapi_reference_images_payload(
+                            payload,
+                            _encode_newapi_reference_data_uris(reference_images),
+                            reference_image_format,
+                        )
+                        used_data_uri_references = True
+                        request_context = _newapi_safe_request_context(
+                            endpoint=endpoint,
+                            request_path=request_path,
+                            model=model,
+                            payload=payload,
+                            prompt=prompt,
+                        )
+                        logger.warning(
+                            "DramaClawAPI image upstream failed to fetch relayed reference URL "
+                            "(status=%s); retrying with inline data URIs (%s)",
+                            exc.response.status_code,
+                            endpoint,
+                        )
+                        await update_current_model_call_log(
+                            request_payload=_sanitize_newapi_payload_for_log(payload),
+                        )
+                        continue
+                    raise
+                break
             response_headers = getattr(response, "headers", {}) or {}
             provider_request_id = _newapi_request_id_from_headers(response_headers)
             result = response.json()
@@ -4039,6 +4099,155 @@ def _reference_image_bytes(
     return bytes(image_ref)
 
 
+def _reference_image_ext(
+    image_ref: bytes | tuple[bytes, str] | tuple[str, bytes, str],
+) -> str:
+    """Extract normalized image extension from any accepted reference-image shape."""
+    if isinstance(image_ref, tuple):
+        if len(image_ref) == 3:
+            filename = str(image_ref[0] or "")
+            mime_type = str(image_ref[2] or "")
+            suffix = Path(filename).suffix.lstrip(".")
+            if suffix:
+                return suffix
+            if mime_type.startswith("image/"):
+                return mime_type.split("/", 1)[1]
+        if len(image_ref) == 2:
+            hint = str(image_ref[1] or "")
+            if hint.startswith("image/"):
+                return hint.split("/", 1)[1]
+            suffix = Path(hint).suffix.lstrip(".")
+            if suffix:
+                return suffix
+    return "png"
+
+
+def _set_newapi_reference_images_payload(
+    payload: dict[str, object],
+    image_values: list[str],
+    reference_image_format: str,
+) -> None:
+    """Populate payload reference-image field according to configured edit format."""
+    if reference_image_format == "images":
+        payload["images"] = [{"image_url": value} for value in image_values]
+    else:
+        payload["image"] = image_values
+
+
+def _encode_newapi_reference_data_uris(
+    reference_images: list[bytes | tuple[bytes, str] | tuple[str, bytes, str]],
+) -> list[str]:
+    """Encode reference images as compact inline JPEG/PNG data URIs."""
+    data_uris: list[str] = []
+    for image_ref in reference_images:
+        raw_bytes = _reference_image_bytes(image_ref)
+        raw_ext = _reference_image_ext(image_ref)
+        encoded_bytes, encoded_ext = _apply_image_transform(
+            raw_bytes,
+            ext=raw_ext,
+            image_transform=IMAGE_TRANSFORM_AI_REFERENCE_JPEG,
+        )
+        if encoded_bytes == raw_bytes and raw_ext:
+            clean_ext = str(encoded_ext or raw_ext).lower()
+            mime_subtype = "jpeg" if clean_ext in {"jpg", "jpeg"} else clean_ext
+            b64_payload = base64.b64encode(encoded_bytes).decode("ascii")
+            data_uris.append(f"data:image/{mime_subtype};base64,{b64_payload}")
+        else:
+            data_uris.append(bytes_to_data_url(encoded_bytes))
+    return data_uris
+
+
+def _is_upstream_reference_fetch_failure(status_code: int | None, body: str) -> bool:
+    """Return True when the upstream rejected an edit call before generation because downloading a reference URL failed."""
+    if status_code not in {400, 422}:
+        return False
+    lowered = str(body or "").lower()
+    if "fetch reference image" in lowered or "fail_to_fetch_task" in lowered:
+        return True
+    if "reference image" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in (
+            "network is unreachable",
+            "dial tcp",
+            "connection refused",
+            "no such host",
+            "i/o timeout",
+            "tls handshake timeout",
+        )
+    )
+
+
+def _relay_hosts_from_urls(urls: list[str]) -> list[str]:
+    hosts: list[str] = []
+    for url in urls:
+        parsed = urlparse(str(url or ""))
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            hosts.append(parsed.netloc.lower())
+    return hosts
+
+
+def _record_unreachable_relay_hosts(endpoint: str, urls: list[str]) -> None:
+    expires_at = time.monotonic() + _NEWAPI_UNREACHABLE_RELAY_TTL_SECONDS
+    for host in _relay_hosts_from_urls(urls):
+        _NEWAPI_UNREACHABLE_RELAY_HOSTS[(endpoint, host)] = expires_at
+
+
+def _has_unreachable_relay_host(endpoint: str, urls: list[str]) -> bool:
+    now = time.monotonic()
+    for host in _relay_hosts_from_urls(urls):
+        key = (endpoint, host)
+        expires_at = _NEWAPI_UNREACHABLE_RELAY_HOSTS.get(key)
+        if expires_at is None:
+            continue
+        if expires_at > now:
+            return True
+        _NEWAPI_UNREACHABLE_RELAY_HOSTS.pop(key, None)
+    return False
+
+
+def _sanitize_newapi_payload_for_log(payload: dict[str, object]) -> dict[str, object]:
+    """Return a shallow copy of payload with inline data URIs summarized for call logging."""
+    has_data_uri = False
+    for key in ("image", "images"):
+        val = payload.get(key)
+        if isinstance(val, list) and any(
+            (isinstance(item, str) and item.startswith("data:"))
+            or (
+                isinstance(item, dict)
+                and isinstance(item.get("image_url"), str)
+                and item["image_url"].startswith("data:")
+            )
+            for item in val
+        ):
+            has_data_uri = True
+            break
+    if not has_data_uri:
+        return payload
+    sanitized = dict(payload)
+    if isinstance(sanitized.get("image"), list):
+        sanitized["image"] = [
+            f"<data-uri:{len(item)}-chars>"
+            if isinstance(item, str) and item.startswith("data:")
+            else item
+            for item in sanitized["image"]
+        ]
+    if isinstance(sanitized.get("images"), list):
+        sanitized["images"] = [
+            {
+                **item,
+                "image_url": f"<data-uri:{len(item['image_url'])}-chars>",
+            }
+            if isinstance(item, dict)
+            and isinstance(item.get("image_url"), str)
+            and item["image_url"].startswith("data:")
+            else item
+            for item in sanitized["images"]
+        ]
+    return sanitized
+
+
 async def _call_newapi_image_api_with_egress(
     *,
     capability: str,
@@ -4169,25 +4378,6 @@ async def _relay_reference_images_for_newapi(
 
     context = _validate_egress_context(egress_context)
 
-    def _image_ext(image_ref) -> str:
-        if isinstance(image_ref, tuple):
-            if len(image_ref) == 3:
-                filename = str(image_ref[0] or "")
-                mime_type = str(image_ref[2] or "")
-                suffix = Path(filename).suffix.lstrip(".")
-                if suffix:
-                    return suffix
-                if mime_type.startswith("image/"):
-                    return mime_type.split("/", 1)[1]
-            if len(image_ref) == 2:
-                hint = str(image_ref[1] or "")
-                if hint.startswith("image/"):
-                    return hint.split("/", 1)[1]
-                suffix = Path(hint).suffix.lstrip(".")
-                if suffix:
-                    return suffix
-        return "png"
-
     if context is not None and context.is_organization:
         urls: list[str] = []
         for index, image_ref in enumerate(reference_images):
@@ -4201,7 +4391,7 @@ async def _relay_reference_images_for_newapi(
                     data,
                     object_id=object_id,
                     context=context,
-                    ext=_image_ext(image_ref),
+                    ext=_reference_image_ext(image_ref),
                     ttl=NEWAPI_MEDIA_INPUT_MIN_TTL_SECONDS,
                 )
             )
@@ -4216,7 +4406,7 @@ async def _relay_reference_images_for_newapi(
             urls.append(
                 upload_image_bytes(
                     _reference_image_bytes(image_ref),
-                    ext=_image_ext(image_ref),
+                    ext=_reference_image_ext(image_ref),
                     ttl=relay_ttl,
                     image_transform=IMAGE_TRANSFORM_AI_REFERENCE_JPEG,
                 )
@@ -4418,6 +4608,12 @@ class NanoBananaGridGenerator:
             List[int]
         ] = None,  # 仅这些 beat 使用导演参考
         director_control_frames_dir: str | Path | None = None,
+        locked_anchor_image_path: str | Path | None = None,
+        locked_anchor_beat_number: Optional[int] = None,
+        locked_spatial_mode: str = "",
+        locked_anchor_sketch_path: str | Path | None = None,
+        locked_target_sketch_path: str | Path | None = None,
+        locked_apply_paste_back: bool = True,
     ) -> GridGenerationResult:
         """生成网格图。
 
@@ -4961,6 +5157,59 @@ class NanoBananaGridGenerator:
                     audit_refs=submitted_refs,
                 )
 
+            anchor_img_str = str(locked_anchor_image_path or "").strip()
+            has_locked_anchor = bool(
+                rows == 1
+                and cols == 1
+                and anchor_img_str
+                and os.path.exists(anchor_img_str)
+            )
+            if has_locked_anchor:
+                anchor_part = self._load_image_as_part(anchor_img_str)
+                if anchor_part:
+                    contents.append(anchor_part)
+                    anchor_label = (
+                        f"Beat #{locked_anchor_beat_number}"
+                        if locked_anchor_beat_number
+                        else "the previous beat"
+                    )
+                    spatial_mode_norm = str(locked_spatial_mode or "").strip().lower()
+                    if sketch:
+                        lock_clause = (
+                            f"\n\n## FIXED-CAMERA SPATIAL LOCK (Anchor: {anchor_label})\n"
+                            f"The final attached reference image is the LOCKED CAMERA REFERENCE SKETCH from {anchor_label}.\n"
+                            "- Keep the exact camera angle, focal length, horizon line, and monochrome background architecture/props IDENTICAL to that reference sketch.\n"
+                            "- Keep each recurring character's standing coordinates, scale, and foot placement aligned with that reference sketch unless the beat explicitly requires relocation.\n"
+                            "- Update ONLY the character's pose, arm/head gesture, and facial expression for this beat while preserving the exact same marker colors."
+                        )
+                    else:
+                        lower_body_note = (
+                            "- Keep the character's lower body, legs, stance, and shoes locked to the anchor frame; update only upper-body/head/arm action to match the sketch.\n"
+                            if spatial_mode_norm == "upper_body"
+                            else "- Keep the character's ground contact, standing coordinates, and body scale aligned with the anchor frame while adopting the sketch pose.\n"
+                        )
+                        lock_clause = (
+                            f"\n\n## FIXED-CAMERA CONTINUITY LOCK (Anchor: {anchor_label})\n"
+                            f"The final attached reference image is the LOCKED CAMERA ANCHOR FRAME from {anchor_label}.\n"
+                            "- Preserve the exact camera framing, perspective, background geometry, props, lighting, and color grading from that anchor frame.\n"
+                            f"{lower_body_note}"
+                            "- Do NOT shift the camera, zoom, or rearrange background furniture/shelves."
+                        )
+                    prompt = f"{prompt}{lock_clause}"
+                    contents[0] = prompt
+                    submitted_refs.append(
+                        {
+                            "kind": "locked_anchor_sketch" if sketch else "locked_anchor_frame",
+                            "base_id": f"beat_{locked_anchor_beat_number or 'anchor'}",
+                            "path": anchor_img_str,
+                            "bytes": os.path.getsize(anchor_img_str),
+                        }
+                    )
+                    print(
+                        f"[NanoBananaPro] 注入固定机位空间锚点 ({'sketch' if sketch else 'render'}): "
+                        f"{anchor_img_str}"
+                    )
+
             if output_path:
                 grid_dir = Path(output_path).parent
                 prompts_dir = grid_dir / "prompts"
@@ -5262,6 +5511,66 @@ class NanoBananaGridGenerator:
                     print(f"[NanoBananaPro] Gap removal 后处理完成: {output_path}")
                 except Exception as e:
                     print(f"[NanoBananaPro] Gap removal 失败，保留原图: {e}")
+
+                # 5.2 固定机位空间锁定后处理：遮罩外强制贴回锚点原图背景
+                if (
+                    locked_apply_paste_back
+                    and has_locked_anchor
+                    and rows == 1
+                    and cols == 1
+                ):
+                    try:
+                        from PIL import Image as PILImage
+                        from novelvideo.generators.spatial_lock import (
+                            build_character_envelope_mask,
+                            composite_locked_background,
+                            composite_locked_sketch,
+                        )
+
+                        with PILImage.open(output_path) as gen_probe:
+                            gen_size = gen_probe.size
+                        anchor_sketch_for_mask = (
+                            str(locked_anchor_sketch_path or "").strip()
+                            or (anchor_img_str if sketch else "")
+                        )
+                        target_sketch_for_mask = (
+                            output_path
+                            if sketch
+                            else (
+                                str(locked_target_sketch_path or "").strip()
+                                or str(previous_grid_path or "").strip()
+                            )
+                        )
+                        envelope = build_character_envelope_mask(
+                            anchor_sketch_for_mask or None,
+                            target_sketch_for_mask or None,
+                            target_size=gen_size,
+                            sketch_colors=sketch_colors,
+                            lock_spatial_mode=locked_spatial_mode or "full_body",
+                        )
+                        if envelope is not None:
+                            if sketch:
+                                composite_locked_sketch(
+                                    anchor_img_str,
+                                    output_path,
+                                    envelope,
+                                    output_path=output_path,
+                                )
+                            else:
+                                composite_locked_background(
+                                    anchor_img_str,
+                                    output_path,
+                                    envelope,
+                                    output_path=output_path,
+                                    match_color=True,
+                                )
+                            with open(output_path, "rb") as f:
+                                image_bytes = f.read()
+                            print(
+                                f"[NanoBananaPro] 固定机位遮罩贴回完成 ({'sketch' if sketch else 'render'}): {output_path}"
+                            )
+                    except Exception as e:
+                        print(f"[NanoBananaPro] 固定机位遮罩贴回失败，保留原图: {e}")
 
             generation_time = time.time() - start_time
             print(f"[NanoBananaPro] 生成完成，耗时 {generation_time:.1f}s")
@@ -7814,6 +8123,96 @@ def _generation_beat_number(beat: dict, fallback_index: int) -> int:
     return fallback_index + 1
 
 
+def _single_panel_mode_key(mode_key: str, *, is_sketch: bool) -> str:
+    """Resolve a 1x1 mode_key matching the aspect ratio and sketch suffix of mode_key."""
+    cfg = REGEN_MODE_CONFIGS[mode_key]
+    if cfg.get("capacity") == 1:
+        return mode_key
+    target_ar = str(cfg.get("aspect_ratio") or "")
+    want_sketch = is_sketch or mode_key.endswith("_sketch")
+    for candidate, c_cfg in REGEN_MODE_CONFIGS.items():
+        if (
+            c_cfg.get("capacity") == 1
+            and c_cfg.get("aspect_ratio") == target_ar
+            and candidate.endswith("_sketch") == want_sketch
+        ):
+            return candidate
+    suffix = "_sketch" if want_sketch else ""
+    if target_ar in {"21-9", "4-3", "4-1"}:
+        return f"1x1_16-9{suffix}"
+    if target_ar in {"3-4"}:
+        return f"1x1_9-16{suffix}"
+    return f"1x1_1-1{suffix}"
+
+
+def _partition_selected_beat_jobs(
+    selected_beats: List[dict],
+    mode_key: str,
+    *,
+    capacity: int,
+    is_sketch: bool,
+    locked_anchors: dict[int, dict[str, Any]] | None,
+) -> list[tuple[str, list[dict]]]:
+    """Split locked-chain beats (locked beats + their selected anchors) into 1x1 jobs
+    while keeping contiguous unlocked runs batched up to ``capacity`` panels."""
+    if capacity <= 1 or not locked_anchors:
+        num_grids = math.ceil(len(selected_beats) / max(capacity, 1))
+        return [
+            (mode_key, selected_beats[i * capacity : (i + 1) * capacity])
+            for i in range(num_grids)
+        ]
+
+    selected_beat_numbers = {
+        _generation_beat_number(b, i) for i, b in enumerate(selected_beats)
+    }
+    chain_beat_numbers: set[int] = set()
+    for bn in selected_beat_numbers:
+        lock_cfg = locked_anchors.get(bn)
+        if not lock_cfg:
+            continue
+        chain_beat_numbers.add(bn)
+        anchor_bn = lock_cfg.get("anchor_beat_number")
+        if anchor_bn is not None:
+            try:
+                anchor_int = int(anchor_bn)
+            except (TypeError, ValueError):
+                anchor_int = 0
+            if anchor_int in selected_beat_numbers:
+                chain_beat_numbers.add(anchor_int)
+
+    if not chain_beat_numbers:
+        num_grids = math.ceil(len(selected_beats) / capacity)
+        return [
+            (mode_key, selected_beats[i * capacity : (i + 1) * capacity])
+            for i in range(num_grids)
+        ]
+
+    split_mk = _single_panel_mode_key(mode_key, is_sketch=is_sketch)
+    jobs: list[tuple[str, list[dict]]] = []
+    unlocked_buf: list[dict] = []
+
+    def _flush_unlocked() -> None:
+        nonlocal unlocked_buf
+        if not unlocked_buf:
+            return
+        chunk_mk = split_mk if len(unlocked_buf) == 1 else mode_key
+        jobs.append((chunk_mk, unlocked_buf))
+        unlocked_buf = []
+
+    for idx, beat in enumerate(selected_beats):
+        bn = _generation_beat_number(beat, idx)
+        if bn in chain_beat_numbers:
+            _flush_unlocked()
+            jobs.append((split_mk, [beat]))
+        else:
+            unlocked_buf.append(beat)
+            if len(unlocked_buf) >= capacity:
+                _flush_unlocked()
+
+    _flush_unlocked()
+    return jobs
+
+
 async def regenerate_selected_beats(
     selected_beats: List[dict],
     mode_key: str,
@@ -7835,6 +8234,7 @@ async def regenerate_selected_beats(
     force_image_size: Optional[str] = None,
     generator_config: Optional[dict] = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    locked_anchors: dict[int, dict[str, Any]] | None = None,
 ) -> List[GridGenerationResult]:
     """再生选中的 beats（支持 render 和 sketch 模式）。
 
@@ -7859,26 +8259,40 @@ async def regenerate_selected_beats(
     rows, cols, aspect_ratio, image_size = parse_regen_mode(mode_key)
     capacity = rows * cols
 
-    # 分割 beats
-    num_grids = math.ceil(len(selected_beats) / capacity)
-    grid_splits = [mode_key] * num_grids
-    print(
-        f"[RegenBeats] mode={mode_key}, beats={len(selected_beats)}, "
-        f"splits={grid_splits}, aspect_ratio={aspect_ratio}"
+    job_slices = _partition_selected_beat_jobs(
+        selected_beats,
+        mode_key,
+        capacity=capacity,
+        is_sketch=is_sketch,
+        locked_anchors=locked_anchors,
     )
+    grid_splits = [mk for mk, _ in job_slices]
+    has_locked_beats = bool(locked_anchors) and any(
+        mk != mode_key and len(chunk) == 1 for mk, chunk in job_slices
+    )
+    if has_locked_beats:
+        print(
+            f"[RegenBeats] 检测到固定机位锁定，锁定链拆分 1x1、其余保持批量: "
+            f"beats={len(selected_beats)}, splits={grid_splits}"
+        )
+    else:
+        print(
+            f"[RegenBeats] mode={mode_key}, beats={len(selected_beats)}, "
+            f"splits={grid_splits}, aspect_ratio={aspect_ratio}"
+        )
 
     jobs: list[
         tuple[int, str, list[dict], list[int], str, int, int, int, dict[int, str] | None]
     ] = []
     beat_offset = 0
     regen_id = uuid.uuid4().hex
+    generated_by_beat: dict[int, str] = {}
 
-    for grid_idx, split_mk in enumerate(grid_splits, start=1):
+    for grid_idx, (split_mk, grid_beats) in enumerate(job_slices, start=1):
         split_cfg = REGEN_MODE_CONFIGS[split_mk]
         g_rows, g_cols = split_cfg["rows"], split_cfg["cols"]
-        grid_beat_count = split_cfg["capacity"]
-        grid_beats = selected_beats[beat_offset : beat_offset + grid_beat_count]
-        beat_offset += grid_beat_count
+        beat_start_index = beat_offset
+        beat_offset += len(grid_beats)
 
         # 输出路径
         output_path = str(
@@ -7908,7 +8322,7 @@ async def regenerate_selected_beats(
                 grid_beats,
                 beat_numbers,
                 output_path,
-                beat_offset - grid_beat_count,
+                beat_start_index,
                 g_rows,
                 g_cols,
                 grid_beat_sketch_paths,
@@ -7934,6 +8348,43 @@ async def regenerate_selected_beats(
             Path(output_path).parent / f"temp_sub_sketch_{Path(output_path).stem}.jpg"
         )
         try:
+            lock_kwargs: dict[str, Any] = {}
+            if locked_anchors and len(beat_numbers) == 1:
+                bn = int(beat_numbers[0])
+                lock_cfg = locked_anchors.get(bn)
+                if lock_cfg:
+                    anchor_bn = lock_cfg.get("anchor_beat_number")
+                    anchor_bn_int = int(anchor_bn) if anchor_bn is not None else None
+                    anchor_img_path = (
+                        generated_by_beat.get(anchor_bn_int)
+                        if anchor_bn_int is not None
+                        else None
+                    ) or str(lock_cfg.get("anchor_image_path") or "")
+                    anchor_sketch_path = (
+                        generated_by_beat.get(anchor_bn_int)
+                        if is_sketch and anchor_bn_int is not None
+                        else None
+                    ) or str(lock_cfg.get("anchor_sketch_path") or "")
+                    target_sketch_path = str(lock_cfg.get("target_sketch_path") or "")
+                    if not target_sketch_path and grid_beat_sketch_paths:
+                        target_sketch_path = str(grid_beat_sketch_paths.get(bn) or "")
+                    if anchor_img_path and os.path.exists(anchor_img_path):
+                        lock_kwargs = {
+                            "locked_anchor_image_path": anchor_img_path,
+                            "locked_anchor_beat_number": anchor_bn_int,
+                            "locked_spatial_mode": str(lock_cfg.get("spatial_mode") or ""),
+                            "locked_anchor_sketch_path": anchor_sketch_path or None,
+                            "locked_target_sketch_path": target_sketch_path or None,
+                            "locked_apply_paste_back": bool(
+                                lock_cfg.get("apply_paste_back", True)
+                            ),
+                        }
+                    else:
+                        print(
+                            f"[RegenBeats] Beat {bn} 固定机位锚点图不可用 "
+                            f"(anchor_beat={anchor_bn_int}, path={anchor_img_path!r})，回退常规生成"
+                        )
+
             result = await generator.generate_grid(
                 beats=grid_beats,
                 character_map=character_map,
@@ -7954,6 +8405,7 @@ async def regenerate_selected_beats(
                 prop_refs_override=prop_refs_override,
                 sketch_aspect_padding=sketch_aspect_padding,
                 force_image_size=force_image_size,
+                **lock_kwargs,
             )
         finally:
             temp_sketch_path.unlink(missing_ok=True)
@@ -7963,6 +8415,8 @@ async def regenerate_selected_beats(
         result.grid_cols = g_cols
 
         if result.success:
+            if len(beat_numbers) == 1 and result.grid_image_path:
+                generated_by_beat[int(beat_numbers[0])] = result.grid_image_path
             print(f"[RegenBeats] Grid {grid_idx} 成功: {result.grid_image_path}")
         else:
             print(f"[RegenBeats] Grid {grid_idx} 失败: {result.error}")

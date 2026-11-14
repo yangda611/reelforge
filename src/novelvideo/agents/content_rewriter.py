@@ -138,6 +138,7 @@ REWRITE_PROMPT = """你是网文小说的短视频解说改写师。
 - 第一人称/第三人称保持一致
 - 开头几行先把人、事、冲突立起来，不要连续多行只铺气氛
 - 结尾 2-3 行要收在**反制成立 / 局势变化 / 新钩子**上，不要收在空泛狠话
+- 若输入中附带了`【上一集（第 N-1 集）结尾状态与跨集丝滑承接锚点】`，本集开篇前 1-2 行**必须丝滑承接**上一集结尾的场景空间、动作/视线余韵或悬念钩子，避免出现无厘头的断层跳跃
 - 只输出逐行文本，不要编号，不要解释，不要额外标注 narration/dialogue/speaker
 - 不要输出“半旁白半对白”的混合残句；对白要么完整保留为 `xxx说：“...”`，要么改成纯旁白总结，但不要两者夹杂
 
@@ -168,6 +169,7 @@ async def rewrite_episode_content(
     target_beats: int = 18,
     beat_chars_range: tuple[int, int] = (14, 20),
     narration_style: str = "first_person",
+    prev_episode_context: str = "",
 ) -> str:
     """将原文改写为供 literal 下游消费的逐行文本。"""
     source_text = (raw_content or "").strip()
@@ -175,6 +177,11 @@ async def rewrite_episode_content(
         return ""
 
     min_chars, max_chars = beat_chars_range
+    prev_ep_block = (
+        f"\n{prev_episode_context.strip()}\n"
+        if str(prev_episode_context or "").strip()
+        else ""
+    )
     task = f"""## 剧集信息
 - 标题: {episode_title or "未命名"}
 - 解说主角（第一人称里的“我”）: {protagonist_name or "未绑定"}
@@ -182,7 +189,7 @@ async def rewrite_episode_content(
 - 目标行数: {target_beats}
 - 每行字数: {min_chars}-{max_chars} 字
 - 改写目标: 生成适合短视频口播的网文主线解说，不是逐段摘要，也不是只摘爆点
-
+{prev_ep_block}
 ## 原文
 {source_text}
 

@@ -277,6 +277,47 @@ def _newapi_text_openai_provider(
     return _LifecycleManagedOpenAIProvider()
 
 
+def _apply_configured_reasoning_effort(
+    model_settings: Any,
+    *,
+    model_env: str | None = None,
+    is_managed_brainclaw: bool = False,
+) -> Any:
+    """Apply configured thinking level to outgoing NewAPI text/vision requests."""
+    from novelvideo.model_gateway_settings import (
+        REASONING_EFFORT_OFF,
+        get_effective_reasoning_effort,
+        get_explicit_llm_reasoning_effort,
+    )
+
+    if model_settings is not None and not isinstance(model_settings, dict):
+        return model_settings
+
+    explicit = get_explicit_llm_reasoning_effort(model_env)
+    if explicit is not None:
+        updated = dict(model_settings or {})
+        if explicit == REASONING_EFFORT_OFF:
+            updated.pop("openai_reasoning_effort", None)
+            if model_settings is None and not updated:
+                return None
+            return updated
+        updated["openai_reasoning_effort"] = explicit
+        return updated
+
+    if isinstance(model_settings, dict) and "openai_reasoning_effort" in model_settings:
+        return model_settings
+
+    if is_managed_brainclaw:
+        return model_settings
+
+    effort = get_effective_reasoning_effort(model_env)
+    if not effort:
+        return model_settings
+    updated = dict(model_settings or {})
+    updated["openai_reasoning_effort"] = effort
+    return updated
+
+
 def _newapi_text_openai_model(
     model_name: str,
     *,
@@ -285,6 +326,7 @@ def _newapi_text_openai_model(
     timeout_seconds: float,
     profile: Any,
     default_headers: dict[str, str] | None = None,
+    model_env: str | None = None,
 ):
     from contextlib import asynccontextmanager
 
@@ -292,6 +334,9 @@ def _newapi_text_openai_model(
     from novelvideo.utils.model_context_budget import TextContextBudget
 
     context_budget = TextContextBudget.from_env()
+    is_managed_brainclaw = model_name == "brainclaw" and bool(
+        default_headers and "X-BrainClaw-Profile" in default_headers
+    )
 
     class _AutoClosingOpenAIChatModel(OpenAIChatModel):
         async def _checked_settings(self, messages, settings, parameters):
@@ -336,8 +381,13 @@ def _newapi_text_openai_model(
             token = begin_request_outcomes()
             try:
                 async with self:
+                    effective_settings = _apply_configured_reasoning_effort(
+                        model_settings,
+                        model_env=model_env,
+                        is_managed_brainclaw=is_managed_brainclaw,
+                    )
                     checked = await self._checked_settings(
-                        messages, model_settings, model_request_parameters
+                        messages, effective_settings, model_request_parameters
                     )
                     result = await super().request(
                         messages, checked, model_request_parameters
@@ -368,8 +418,13 @@ def _newapi_text_openai_model(
             token = begin_request_outcomes()
             try:
                 async with self:
+                    effective_settings = _apply_configured_reasoning_effort(
+                        model_settings,
+                        model_env=model_env,
+                        is_managed_brainclaw=is_managed_brainclaw,
+                    )
                     checked = await self._checked_settings(
-                        messages, model_settings, model_request_parameters
+                        messages, effective_settings, model_request_parameters
                     )
                     async with super().request_stream(
                         messages, checked, model_request_parameters, *args, **kwargs
@@ -467,25 +522,38 @@ def get_newapi_text_pydantic_model(
         timeout_seconds=timeout_seconds,
         profile=profile,
         default_headers=default_headers,
+        model_env=model_env,
     )
 
 
-def get_newapi_structured_output_model_settings() -> dict:
-    """Disable reasoning for PydanticAI structured output requests.
+def get_newapi_structured_output_model_settings(
+    model_env: str | None = None,
+) -> dict[str, str]:
+    """Return configured reasoning settings for PydanticAI structured output requests.
 
     DramaClaw sends opaque ``DC-*`` aliases through an OpenAI-compatible
-    NewAPI endpoint.  PydanticAI cannot infer thinking capabilities from those
-    aliases, so its unified ``thinking=False`` setting is silently ignored.
-    Use the explicit OpenAI-compatible wire contract that existing deployments
-    already send when their task-level thinking setting is ``none``.
+    NewAPI endpoint.  Uses the user's configured thinking level (default
+    ``high``) via ``openai_reasoning_effort``, or omits it when set to ``off``.
     """
-    return {"openai_reasoning_effort": "none"}
+    from novelvideo.model_gateway_settings import get_effective_reasoning_effort
+
+    effort = get_effective_reasoning_effort(model_env)
+    if not effort:
+        return {}
+    return {"openai_reasoning_effort": effort}
 
 
-def get_newapi_structured_output_litellm_kwargs() -> dict:
-    """Disable reasoning for Cognee/Instructor calls routed through LiteLLM."""
+def get_newapi_structured_output_litellm_kwargs(
+    model_env: str | None = "COGNEE",
+) -> dict[str, Any]:
+    """Return configured reasoning kwargs for Cognee/Instructor calls via LiteLLM."""
+    from novelvideo.model_gateway_settings import get_effective_reasoning_effort
+
+    effort = get_effective_reasoning_effort(model_env)
+    if not effort:
+        return {}
     return {
-        "reasoning_effort": "none",
+        "reasoning_effort": effort,
         "allowed_openai_params": ["reasoning_effort"],
     }
 

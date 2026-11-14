@@ -88,21 +88,27 @@ class RecipeModelCompilation:
     executed_at: float
 
 
-def _recipe_compiler_reasoning_effort() -> str:
-    value = (
-        os.environ.get(
-            "FREEZONE_RECIPE_COMPILER_REASONING_EFFORT",
-            _DEFAULT_RECIPE_COMPILER_REASONING_EFFORT,
-        ).strip()
-        or _DEFAULT_RECIPE_COMPILER_REASONING_EFFORT
-    ).lower()
-    if value not in _RECIPE_COMPILER_REASONING_EFFORTS:
-        supported = ", ".join(sorted(_RECIPE_COMPILER_REASONING_EFFORTS))
-        raise RecipeRuntimeError(
-            "unsupported FREEZONE_RECIPE_COMPILER_REASONING_EFFORT="
-            f"{value!r}; expected one of: {supported}"
-        )
-    return value
+def _recipe_compiler_reasoning_effort() -> str | None:
+    env_value = os.environ.get(
+        "FREEZONE_RECIPE_COMPILER_REASONING_EFFORT", ""
+    ).strip().lower()
+    if env_value:
+        if env_value not in _RECIPE_COMPILER_REASONING_EFFORTS:
+            supported = ", ".join(sorted(_RECIPE_COMPILER_REASONING_EFFORTS))
+            raise RecipeRuntimeError(
+                "unsupported FREEZONE_RECIPE_COMPILER_REASONING_EFFORT="
+                f"{env_value!r}; expected one of: {supported}"
+            )
+        return env_value
+    from novelvideo.model_gateway_settings import (
+        REASONING_EFFORT_OFF,
+        get_explicit_llm_reasoning_effort,
+    )
+
+    explicit = get_explicit_llm_reasoning_effort("FREEZONE_RECIPE_COMPILER")
+    if explicit is not None:
+        return None if explicit == REASONING_EFFORT_OFF else explicit
+    return _DEFAULT_RECIPE_COMPILER_REASONING_EFFORT
 
 
 def _model_compilation(value: RecipeModelCompilation | str) -> RecipeModelCompilation:
@@ -315,13 +321,17 @@ async def _run_recipe_compiler(task: str) -> RecipeModelCompilation:
         output_type=str,
         name="Freezone Recipe Compiler",
     )
+    reasoning_effort = _recipe_compiler_reasoning_effort()
+    run_kwargs: dict[str, Any] = (
+        {"model_settings": {"openai_reasoning_effort": reasoning_effort}}
+        if reasoning_effort
+        else {}
+    )
     response = await agent.run(
         task,
         # The compiler route uses an always-reasoning model. Keep this at the
-        # lowest supported effort by default because compilation is bounded.
-        model_settings={
-            "openai_reasoning_effort": _recipe_compiler_reasoning_effort()
-        },
+        # lowest supported effort by default unless overridden in settings/env.
+        **run_kwargs,
     )
     compiled = str(response.output or "").strip()
     if not compiled:

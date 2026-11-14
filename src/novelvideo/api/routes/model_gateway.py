@@ -34,6 +34,7 @@ from novelvideo.model_gateway_settings import (
     probe_model_gateway,
     save_media_relay_config,
     save_agent_llm_config,
+    save_llm_reasoning_settings,
     save_official_media_catalog_auto_update,
     save_official_newapi_key,
     save_official_text_model,
@@ -211,6 +212,14 @@ class AgentLlmConfigBody(BaseModel):
     base_url: str | None = Field(default=None, alias="baseUrl")
     api_key: str | None = Field(default=None, alias="apiKey")
     model: str | None = None
+
+
+class LlmReasoningConfigBody(BaseModel):
+    default_effort: str | None = Field(default=None, alias="defaultEffort")
+    feature_efforts: dict[str, str | None] | None = Field(
+        default=None, alias="featureEfforts"
+    )
+    replace_features: bool = Field(default=False, alias="replaceFeatures")
 
 
 class MediaRelayConfigBody(BaseModel):
@@ -846,6 +855,38 @@ async def save_agent_gateway_config(body: AgentLlmConfigBody) -> dict[str, Any]:
         )
     else:
         save_agent_llm_config(mode=body.mode)
+
+    runtime = _refresh_runtime_after_gateway_write()
+    return {
+        "ok": True,
+        "data": build_model_gateway_status(
+            official_base_url=app_config.OFFICIAL_NEWAPI_BASE_URL,
+            official_api_key=app_config.NEWAPI_API_KEY,
+        ),
+        "runtime": runtime,
+    }
+
+
+@router.post("/reasoning")
+async def save_reasoning_config(body: LlmReasoningConfigBody) -> dict[str, Any]:
+    """Save default and/or per-feature LLM thinking levels for CE."""
+    try:
+        require_ce_gateway_management()
+    except PermissionError as exc:
+        raise _permission_error(exc) from exc
+    if body.default_effort is None and body.feature_efforts is None:
+        raise HTTPException(
+            status_code=400,
+            detail="defaultEffort or featureEfforts is required",
+        )
+    try:
+        save_llm_reasoning_settings(
+            default_effort=body.default_effort,
+            feature_efforts=body.feature_efforts,
+            replace_features=body.replace_features,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     runtime = _refresh_runtime_after_gateway_write()
     return {

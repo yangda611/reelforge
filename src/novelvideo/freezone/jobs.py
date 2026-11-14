@@ -845,7 +845,7 @@ async def _run_cmd(
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=7200,
         )
     else:
         if cwd is None:
@@ -868,7 +868,7 @@ async def _run_cmd(
             restricted_policy=policy,
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=7200,
         )
     if proc.returncode != 0:
         if egress_context is not None:
@@ -889,7 +889,7 @@ async def _try_run_cmd(cmd: list[str]) -> bool:
         cmd,
         capture_output=True,
         text=True,
-        timeout=1800,
+        timeout=7200,
     )
     return proc.returncode == 0
 

@@ -112,4 +112,18 @@ describe("useSelection", () => {
     expect(second.result.current.activeBeat).toBeNull();
     expect(second.result.current.state.mode).toBe("none");
   });
+
+  it("selectAll enters multi mode with all provided beats", () => {
+    const scope = { project: "demo", episode: 1 };
+    const { result } = renderHook(() => useSelection(scope));
+
+    act(() => result.current.handleCardClick(2));
+    act(() => result.current.selectAll([1, 2, 3, 2]));
+
+    expect(result.current.activeBeat).toBeNull();
+    expect(result.current.state.mode).toBe("multi");
+    expect(
+      (result.current.state as { checked: Set<number> }).checked,
+    ).toEqual(new Set([1, 2, 3]));
+  });
 });

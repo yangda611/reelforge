@@ -29,6 +29,9 @@ from novelvideo.api.schemas import (
 )
 from novelvideo.models import sync_beat_asset_refs
 from novelvideo.ports import get_task_backend, get_usage_meter
+from novelvideo.skills.cinematic_storyboard_skill import (
+    load_prev_episode_last_beat_from_store,
+)
 from novelvideo.task_identity import project_task_state_key
 from novelvideo.utils.source_language import detect_episode_asset_language
 from novelvideo.video_prompt_prerequisite import (
@@ -159,6 +162,9 @@ async def _generate_single_beat_video_prompt(
         episode=episode,
         cognee_store=store,
     )
+    prev_prompt = None
+    if isinstance(prev_beat, dict):
+        prev_prompt = str(prev_beat.get("video_prompt") or "").strip() or None
     result = await get_global_video_optimizer().optimize_single_beat(
         beat=beat,
         sketch_image_path=sketch_image_path,
@@ -166,7 +172,7 @@ async def _generate_single_beat_video_prompt(
         language=language,
         prev_beat=prev_beat,
         next_beat=next_beat,
-        prev_prompt=None,
+        prev_prompt=prev_prompt,
         total_beats=len(beats),
     )
     return str(result.get("prompt") or "").strip()
@@ -182,7 +188,7 @@ async def _generate_single_beat_keyframe_prompt(
 ) -> str:
     """为 1.x 首尾帧模式生成单 Beat 过渡提示词。"""
     from novelvideo.agents.keyframe_prompt_builder import get_keyframe_prompt_builder
-    from novelvideo.models import format_beat_narration
+    from novelvideo.models import beats_locked_fixed_camera, format_beat_narration
     from novelvideo.utils.path_resolver import PathResolver
 
     beat_num = int(beat.get("beat_number") or 0)
@@ -206,6 +212,7 @@ async def _generate_single_beat_keyframe_prompt(
     next_narration = str(next_beat.get("narration_segment") or "")
     speaker = str(beat.get("speaker") or "")
     narration_text = format_beat_narration(audio_type, speaker, narration)
+    locked_camera = beats_locked_fixed_camera(beat, next_beat=next_beat)
 
     return await get_keyframe_prompt_builder().build(
         first_frame_path=first_frame_path,
@@ -217,6 +224,7 @@ async def _generate_single_beat_keyframe_prompt(
         next_visual_description=str(next_beat.get("visual_description") or ""),
         audio_type=audio_type,
         dialogue_line=narration if audio_type == "dialogue" else "",
+        locked_camera=locked_camera,
         allow_fallback=False,
     )
 
@@ -270,6 +278,8 @@ async def _generate_and_save_beat_video_prompt(
         (beat for beat in beats if int(beat.get("beat_number") or 0) == beat_num - 1),
         None,
     )
+    if prev_beat is None and episode_num > 1 and beat_num <= 1:
+        prev_beat, _ = await load_prev_episode_last_beat_from_store(store, episode_num)
 
     if field == "keyframe_prompt":
         prompt = await _generate_single_beat_keyframe_prompt(
@@ -457,6 +467,45 @@ async def update_beat(
     return {"ok": True, "data": target}
 
 
+@router.post("/projects/{project}/episodes/{episode_num}/beats/plan-fixed-camera")
+async def plan_episode_fixed_camera_locks(
+    project: str,
+    episode_num: int,
+    user: dict = Depends(get_api_user),
+):
+    """AI 自动分析整集分镜，为同场景固定机位连续镜头写入 lock_camera_beat 与 lock_spatial_mode。"""
+    from novelvideo.agents.fixed_camera_planner import apply_fixed_camera_plan_for_episode
+
+    resolved = await resolve_project_scope(project, user, required_role="editor")
+    store = (
+        await make_sqlite_store_for_context(resolved.ctx)
+        if resolved.ctx
+        else await make_sqlite_store(resolved.username, resolved.project_name)
+    )
+    beats = await store.get_beats_as_dicts(episode_num)
+    if not beats:
+        return {"ok": False, "error": f"No beats found for episode {episode_num}"}
+
+    usage_meter = get_usage_meter()
+    ctx = getattr(resolved, "ctx", None)
+    project_id = str(getattr(ctx, "project_id", "") or "")
+    try:
+        usage_meter.set_llm_usage_context(
+            _requester_user_id_for_billing(resolved, user),
+            project_id=project_id,
+            resource_kind="script",
+            billing_metadata={"source": "sync_api", "endpoint": "plan_fixed_camera_locks"},
+        )
+        data = await apply_fixed_camera_plan_for_episode(store, episode_num)
+    except Exception as exc:
+        logger.exception("AI 固定机位规划失败: project=%s episode=%s", project, episode_num)
+        return {"ok": False, "error": f"AI fixed-camera planning failed: {exc}"}
+    finally:
+        usage_meter.clear_llm_usage_context()
+
+    return {"ok": True, "data": data}
+
+
 @router.post("/projects/{project}/episodes/{episode_num}/beats/{beat_num}/video-prompt/generate")
 async def generate_beat_video_prompt(
     project: str,
@@ -595,6 +644,8 @@ async def generate_seedance2_prompt(
         (beat for beat in beats if int(beat.get("beat_number") or 0) == beat_num - 1),
         None,
     )
+    if prev_beat is None and episode_num > 1 and beat_num <= 1:
+        prev_beat, _ = await load_prev_episode_last_beat_from_store(store, episode_num)
     next_beat = next(
         (beat for beat in beats if int(beat.get("beat_number") or 0) == beat_num + 1),
         None,
@@ -608,9 +659,13 @@ async def generate_seedance2_prompt(
         ),
     )
 
-    from novelvideo.seedance2_i2v.models import parse_seedance2_config
+    from novelvideo.seedance2_i2v.models import (
+        default_seedance2_ratio_for_state_dir,
+        parse_seedance2_config,
+    )
 
-    config = parse_seedance2_config(target.get("seedance2_config_json"))
+    default_ratio = default_seedance2_ratio_for_state_dir(Path(resolved.state_dir))
+    config = parse_seedance2_config(target.get("seedance2_config_json"), default_ratio=default_ratio)
     mode = getattr(config.mode, "value", str(config.mode))
     if mode == "first_last_frame" and next_beat is None:
         return {"ok": False, "error": "这是最后一个 Beat，无法使用首尾帧模式"}
@@ -715,7 +770,7 @@ async def generate_seedance2_prompt(
     try:
         target["seedance2_config_json"] = saved_json
         sync_beat_asset_refs(target)
-        updated_config = parse_seedance2_config(saved_json)
+        updated_config = parse_seedance2_config(saved_json, default_ratio=default_ratio)
     except Exception as exc:
         if reservation_id:
             try:
@@ -760,6 +815,8 @@ async def generate_seedance2_prompt(
             "seedance2_config_json": saved_json,
             "final_prompt": updated_config.final_prompt,
             "prompt_source": updated_config.prompt_source,
+            "duration": updated_config.duration,
+            "ratio": updated_config.ratio,
         },
     }
 

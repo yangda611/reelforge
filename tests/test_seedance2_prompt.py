@@ -1194,3 +1194,61 @@ async def test_seedance2_panel_forwards_prev_and_next_beats(monkeypatch, tmp_pat
 
     assert seen["prev_beat"]["beat_number"] == 1
     assert seen["next_beat"]["beat_number"] == 3
+
+
+async def test_generate_seedance2_prompt_extracts_recommended_duration_and_syncs_project_ratio(
+    monkeypatch, tmp_path
+):
+    from novelvideo.seedance2_i2v import panel_service
+    from novelvideo.seedance2_i2v.models import parse_seedance2_config
+    from novelvideo.seedance2_i2v.prompt import Seedance2PromptComposerOutput
+
+    state_dir = tmp_path / "state" / "alice" / "demo"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "project_config.json").write_text(
+        json.dumps({"aspect_ratio": "16:9"}),
+        encoding="utf-8",
+    )
+
+    class Store:
+        def __init__(self):
+            self.saved = []
+
+        async def update_beat_asset(self, **kwargs):
+            self.saved.append(kwargs)
+
+    async def fake_composer(**_kwargs):
+        return Seedance2PromptComposerOutput(
+            final_prompt="图片1中画面左侧收银台后方的人物低头持续敲击键盘，闭口保持沉默。",
+            recommended_duration=12,
+        )
+
+    store = Store()
+    monkeypatch.setattr(panel_service, "build_seedance2_project_assets", lambda **_kwargs: [])
+    saved_json = await panel_service.generate_seedance2_prompt_for_panel(
+        store=store,
+        state_dir=state_dir,
+        episode=1,
+        beat={
+            "beat_number": 1,
+            "audio_type": "narration",
+            "narration_segment": "△ 林默 OS：白天是写字楼里的架构师，夜里是全网冷门接口的守夜人。只要再抓十分钟，这批异常心跳包就能完整落盘。",
+            "visual_description": "收银台后人物敲击键盘。",
+            "seedance2_config_json": json.dumps(
+                {
+                    "mode": "multimodal_reference",
+                    "duration": 4,
+                    "ratio": "9:16",
+                }
+            ),
+        },
+        project_dir=tmp_path / "output",
+        composer=fake_composer,
+    )
+
+    config = parse_seedance2_config(saved_json)
+    assert config.ratio == "16:9"
+    assert config.duration == 12
+    assert config.ratio_user_set is False
+    assert config.duration_user_set is False
+    assert store.saved[-1]["seedance2_config_json"] == saved_json

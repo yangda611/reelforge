@@ -16,6 +16,7 @@ interface ViewTogglesProps {
   onToggle: (id: ViewToggleId) => void;
   selection: SelectionState;
   totalBeats: number;
+  onSelectAll?: () => void;
   onClearSelection: () => void;
   onBatchRegenSketch: () => void;
   onBatchRegenRender: () => void;
@@ -27,6 +28,7 @@ export function ViewToggles({
   onToggle,
   selection,
   totalBeats,
+  onSelectAll,
   onClearSelection,
   onBatchRegenSketch,
   onBatchRegenRender,
@@ -35,6 +37,7 @@ export function ViewToggles({
   const { t } = useTranslation();
   const checkedCount = selection.mode === "multi" ? selection.checked.size : 0;
   const hasSelection = checkedCount > 0;
+  const allSelected = totalBeats > 0 && checkedCount >= totalBeats;
 
   return (
     <div className="flex shrink-0 flex-col">
@@ -76,6 +79,15 @@ export function ViewToggles({
               <span className="tabular-nums text-[11px] text-foreground/70">
                 {t("episode.workbench.view.selectedCount", { count: checkedCount })}
               </span>
+              {onSelectAll && !allSelected && (
+                <button
+                  type="button"
+                  onClick={onSelectAll}
+                  className="inline-flex h-[22px] items-center rounded-[5px] border border-white/[0.08] bg-white/[0.03] px-2 text-[11px] font-medium text-foreground/80 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-foreground"
+                >
+                  {t("episode.workbench.view.selectAll")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onBatchRegenSketch}
@@ -99,9 +111,20 @@ export function ViewToggles({
               </button>
             </div>
           ) : (
-            <span className="ml-5 text-[11px] text-foreground/60">
-              {t("episode.workbench.view.selectionHint")}
-            </span>
+            <div className="ml-5 flex items-center gap-2">
+              {onSelectAll && totalBeats > 0 && (
+                <button
+                  type="button"
+                  onClick={onSelectAll}
+                  className="inline-flex h-[22px] items-center rounded-[5px] border border-white/[0.08] bg-white/[0.03] px-2 text-[11px] font-medium text-foreground/80 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-foreground"
+                >
+                  {t("episode.workbench.view.selectAll")}
+                </button>
+              )}
+              <span className="text-[11px] text-foreground/60">
+                {t("episode.workbench.view.selectionHint")}
+              </span>
+            </div>
           )}
         </div>
         <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/75">

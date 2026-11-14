@@ -353,7 +353,7 @@ def _compress_ply_to_sog(
     ply_path: Path,
     sog_path: Path | None = None,
     *,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 7200,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> Path:
     """Compress a generated PLY into PlayCanvas SOG format.
@@ -689,7 +689,7 @@ def run_pano_sharp(
     face_size: int = 768,
     internal_size: int = 1536,
     max_gaussians_per_face: int = 1_000_000,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 7200,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the package SHARP module to build a 360-derived PLY."""
@@ -852,7 +852,7 @@ def run_pano_sharp(
         _compress_ply_to_sog(
             generated_ply,
             dest_sog,
-            timeout_seconds=max(300, min(int(timeout_seconds), 1800)),
+            timeout_seconds=max(300, min(int(timeout_seconds), 7200)),
             progress_callback=progress_callback,
         )
     except Exception:
@@ -951,7 +951,7 @@ def run_single_face_sharp(
     face_size: int = 768,
     internal_size: int = 1536,
     max_gaussians_per_face: int = 1_000_000,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 7200,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run SHARP directly on one perspective image and save it as a source-specific PLY."""
@@ -1062,7 +1062,7 @@ def run_single_face_sharp(
         _compress_ply_to_sog(
             generated_ply,
             dest_sog,
-            timeout_seconds=max(300, min(int(timeout_seconds), 1800)),
+            timeout_seconds=max(300, min(int(timeout_seconds), 7200)),
             progress_callback=progress_callback,
         )
     except Exception:
@@ -1203,7 +1203,7 @@ def run_scene_360(
     reverse_master_path_override: str | Path | None = None,
     artifact_dir: str | Path | None = None,
     update_manifest: bool = True,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 7200,
     progress_callback: Callable[[float, str], None] | None = None,
     model_authority: Scene360CatalogModelAuthority | None = None,
     _manage_model_credit: bool = True,
@@ -1678,7 +1678,7 @@ def run_voxel_world_from_360(
     max_blocks: int = 80_000,
     max_abs_coord: int = 96,
     max_y: int = 64,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 7200,
     progress_callback: Callable[[float, str], None] | None = None,
     egress_context=None,
 ) -> dict[str, Any]:

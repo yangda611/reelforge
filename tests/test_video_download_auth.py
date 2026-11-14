@@ -199,3 +199,62 @@ async def test_public_only_download_rejects_private_redirect(
 
     assert content_requests == []
     assert not (tmp_path / "result.mp4").exists()
+
+
+async def test_public_resolver_allows_proxy_fake_ip_for_hostname_in_local_ce(
+    monkeypatch,
+) -> None:
+    class FakeLoop:
+        async def getaddrinfo(self, host, port, *, type, family):
+            return [(2, type, 6, "", ("198.18.1.13", port))]
+
+    monkeypatch.delenv("SUPERTALE_ENV", raising=False)
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.delenv("ST_EDITION", raising=False)
+    monkeypatch.setattr(
+        "novelvideo.utils.media_download.asyncio.get_running_loop", lambda: FakeLoop()
+    )
+
+    resolved = await _PublicResolver().resolve("ark-acg-cn-beijing.tos-cn-beijing.volces.com", 443)
+    assert resolved[0]["host"] == "198.18.1.13"
+
+
+@pytest.mark.parametrize(
+    ("host", "env"),
+    [
+        ("198.18.1.13", {}),
+        ("localhost", {}),
+        ("cdn.example", {"SUPERTALE_ENV": "production"}),
+        ("cdn.example", {"ST_CONTROL_PLANE_DSN": "postgresql://ee/control"}),
+        ("cdn.example", {"ST_EDITION": "ee"}),
+    ],
+)
+async def test_public_resolver_rejects_fake_ip_when_literal_localhost_or_ee(
+    monkeypatch, host: str, env: dict[str, str]
+) -> None:
+    class FakeLoop:
+        async def getaddrinfo(self, h, port, *, type, family):
+            return [(2, type, 6, "", ("198.18.1.13", port))]
+
+    monkeypatch.delenv("SUPERTALE_ENV", raising=False)
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.delenv("ST_EDITION", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(
+        "novelvideo.utils.media_download.asyncio.get_running_loop", lambda: FakeLoop()
+    )
+
+    with pytest.raises(VideoDeliveryError, match="VIDEO_DOWNLOAD_URL_INVALID"):
+        await _PublicResolver().resolve(host, 443)
+
+
+async def test_public_only_download_still_rejects_literal_fake_ip_url(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(VideoDeliveryError, match="VIDEO_DOWNLOAD_URL_INVALID"):
+        await download_to_path(
+            "http://198.18.1.13/video.mp4",
+            str(tmp_path / "result.mp4"),
+            public_only=True,
+        )

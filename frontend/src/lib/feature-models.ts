@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ClaymoreLab
 // 系统各功能使用的 LLM 映射定义。
 // 每个功能对应后端一个 *_MODEL 环境变量，前端允许用户为其覆盖模型。
-// 结构化任务由后端统一关闭推理，不提供逐功能思考强度配置。
+// 默认开启推理（高），支持全局与逐功能配置思考等级；设为「关闭」时请求不携带 reasoning_effort。
 
 export interface FeatureModelDef {
   /** 稳定 id，对应后端 *_MODEL 环境变量前缀，如 GLOBAL_VIDEO_OPTIMIZER。 */

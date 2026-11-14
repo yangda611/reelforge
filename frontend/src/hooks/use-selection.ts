@@ -19,6 +19,7 @@ export interface SelectionActions {
   handleCardClick: (beatNum: number) => void;
   toggleCheck: (beatNum: number) => void;
   selectSingle: (beatNum: number) => void;
+  selectAll: (beatNums: number[]) => void;
   clearSelection: () => void;
 }
 
@@ -118,6 +119,31 @@ export function useSelection(
   }, [scope, setPersistedSelection]);
 
 
+  const selectAll = useCallback((beatNums: number[]) => {
+    const unique = [...new Set(beatNums)];
+    if (scope) {
+      if (unique.length === 0) {
+        setPersistedSelection(scope, {
+          mode: "none",
+          activeBeat: null,
+        });
+        return;
+      }
+      setPersistedSelection(scope, {
+        mode: "multi",
+        checked: unique,
+        activeBeat: null,
+      });
+      return;
+    }
+    setActiveBeat(null);
+    setState(
+      unique.length === 0
+        ? { mode: "none" }
+        : { mode: "multi", checked: new Set(unique) },
+    );
+  }, [scope, setPersistedSelection]);
+
   const clearSelection = useCallback(() => {
     if (scope) {
       setPersistedSelection(scope, {
@@ -136,6 +162,7 @@ export function useSelection(
     handleCardClick,
     toggleCheck,
     selectSingle,
+    selectAll,
     clearSelection,
   };
 }

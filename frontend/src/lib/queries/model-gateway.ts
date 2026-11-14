@@ -10,6 +10,19 @@ import type { ErrorResponse, OkResponse } from "@/types/api";
 export type GatewayMode = "official" | "custom" | "hybrid";
 export type CustomLlmMode = "relayclaw_brainclaw" | "advanced";
 export type AgentLlmMode = "inherit" | "third_party";
+export type LlmReasoningEffort = "high" | "medium" | "low" | "minimal" | "off";
+export type FeatureReasoningEffort = LlmReasoningEffort | "inherit";
+
+export interface LlmReasoningConfig {
+  defaultEffort: LlmReasoningEffort;
+  featureEfforts: Record<string, LlmReasoningEffort>;
+}
+
+export interface SaveReasoningConfigInput {
+  defaultEffort?: LlmReasoningEffort;
+  featureEfforts?: Record<string, FeatureReasoningEffort>;
+  replaceFeatures?: boolean;
+}
 
 /** 官方中继地址；指向它时文本模型固定为 brainclaw，无需用户选择。 */
 export const OFFICIAL_RELAY_BASE_URL = "https://relayclaw.cdnfg.com/v1";
@@ -156,6 +169,7 @@ export interface ModelGatewayConfig {
   official: OfficialGatewayConfig;
   brainclaw?: GatewayEndpointPreview;
   custom: CustomGatewayConfig;
+  reasoning?: LlmReasoningConfig;
   provisioner?: ModelGatewayProvisionerConfig;
   mediaRelay?: MediaRelayConfig;
 }
@@ -819,6 +833,23 @@ export function useSaveCustomChannelsBatch() {
           timeout: 120_000,
         })
         .json<OkResponse<SaveCustomChannelsBatchResult> | ErrorResponse>(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
+    },
+  });
+}
+
+/** 保存全局及逐功能模型思考等级（CE 写入本地设置库）。 */
+export function useSaveReasoningConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SaveReasoningConfigInput) =>
+      api
+        .post("api/v1/model-gateway/reasoning", {
+          json: input,
+          timeout: 30_000,
+        })
+        .json<OkResponse<ModelGatewayConfig> | ErrorResponse>(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
     },

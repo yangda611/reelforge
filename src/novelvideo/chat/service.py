@@ -2299,19 +2299,24 @@ def _codex_model() -> str:
     )
 
 
-def _codex_reasoning_effort() -> str:
-    value = (
-        os.environ.get(
-            "CODEX_REASONING_EFFORT", _DEFAULT_CODEX_REASONING_EFFORT
-        ).strip()
-        or _DEFAULT_CODEX_REASONING_EFFORT
-    ).lower()
-    if value not in _CODEX_REASONING_EFFORT_VALUES:
-        supported = ", ".join(sorted(_CODEX_REASONING_EFFORT_VALUES))
-        raise RuntimeError(
-            f"Unsupported CODEX_REASONING_EFFORT={value!r}; expected one of: {supported}"
-        )
-    return value
+def _codex_reasoning_effort() -> str | None:
+    env_value = os.environ.get("CODEX_REASONING_EFFORT", "").strip().lower()
+    if env_value:
+        if env_value not in _CODEX_REASONING_EFFORT_VALUES:
+            supported = ", ".join(sorted(_CODEX_REASONING_EFFORT_VALUES))
+            raise RuntimeError(
+                f"Unsupported CODEX_REASONING_EFFORT={env_value!r}; expected one of: {supported}"
+            )
+        return env_value
+    from novelvideo.model_gateway_settings import (
+        REASONING_EFFORT_OFF,
+        get_explicit_llm_reasoning_effort,
+    )
+
+    explicit = get_explicit_llm_reasoning_effort("HERMES")
+    if explicit is not None:
+        return None if explicit == REASONING_EFFORT_OFF else explicit
+    return _DEFAULT_CODEX_REASONING_EFFORT
 
 
 def _claude_model() -> str | None:
@@ -4067,11 +4072,16 @@ def _codex_gateway_config_overrides(
     native_tool_search: bool = False,
 ) -> tuple[str, ...]:
     """Node-safe Codex config containing no usable Gateway credential."""
+    effort = _codex_reasoning_effort()
     overrides = [
         *_codex_gateway_provider_overrides(
             base_url,
         ),
-        f'model_reasoning_effort="{_codex_reasoning_effort()}"',
+        *(
+            [f'model_reasoning_effort="{effort}"']
+            if effort
+            else []
+        ),
         'web_search="disabled"',
         "features.apps=false",
         "features.hooks=false",

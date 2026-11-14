@@ -1429,9 +1429,15 @@ def _seedance2_status_response(
         for asset in assets
     ]
     try:
-        from novelvideo.seedance2_i2v.models import parse_seedance2_config
+        from novelvideo.seedance2_i2v.models import (
+            default_seedance2_ratio_for_state_dir,
+            parse_seedance2_config,
+        )
 
-        config = parse_seedance2_config(beat.get("seedance2_config_json") or "{}")
+        config = parse_seedance2_config(
+            beat.get("seedance2_config_json") or "{}",
+            default_ratio=default_seedance2_ratio_for_state_dir(Path(ctx["store"].state_dir)),
+        )
         returned_last_frame = _seedance2_returned_last_frame_status_payload(
             project_ctx=project_ctx,
             output_dir=output_dir,

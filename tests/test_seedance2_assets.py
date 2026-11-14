@@ -910,3 +910,48 @@ async def test_prepare_dialogue_uses_configured_voice_only_when_audio_enabled(tm
             again.seedance2_config_json, reference_images=["https://example.com/frame.png"],
         )
         assert "reference_audios" not in params
+
+
+def test_multimodal_first_frame_upscales_small_grid_render_above_300px(tmp_path):
+    from PIL import Image
+
+    from novelvideo.seedance2_i2v.assets import (
+        build_seedance2_project_assets,
+        read_seedance2_image_size,
+        validate_seedance2_reference_image,
+    )
+
+    project_dir = tmp_path / "output" / "alice" / "project"
+    frame = project_dir / "frames" / "ep001" / "beat_01.png"
+    scene = project_dir / "assets" / "scenes" / "便利店" / "master.png"
+    frame.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (418, 235), color=(20, 30, 40)).save(frame)
+    scene.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1024, 576), color=(50, 60, 70)).save(scene)
+
+    assert "Height must be between 300px" in validate_seedance2_reference_image(frame)
+
+    assets = build_seedance2_project_assets(
+        project_output=project_dir,
+        state_dir=tmp_path / "state" / "alice" / "project",
+        episode=1,
+        beat={
+            "beat_number": 1,
+            "scene_ref": {"scene_id": "便利店"},
+        },
+        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+    )
+
+    first_frame_asset = next(asset for asset in assets if asset.key == "first_frame")
+    assert first_frame_asset.selected is True
+    assert first_frame_asset.validation_error == ""
+    assert first_frame_asset.reference_label == "图片1"
+    assert first_frame_asset.path != frame
+    assert first_frame_asset.crop_source_path == frame
+    upscaled_size = read_seedance2_image_size(first_frame_asset.path)
+    assert upscaled_size is not None
+    assert upscaled_size[0] >= 300 and upscaled_size[1] >= 300
+    # Source grid render stays untouched
+    assert read_seedance2_image_size(frame) == (418, 235)
+    scene_asset = next(asset for asset in assets if asset.key == "scene:便利店")
+    assert scene_asset.reference_label == "图片2"

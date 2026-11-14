@@ -18,7 +18,7 @@ from novelvideo.task_backend.cancel import TaskCancelled, TaskTimedOut
 from novelvideo.task_backend.subprocesses import run_project_subprocess
 
 
-def _run_video_subprocess(cmd: list[str], *, timeout: int = 30 * 60) -> subprocess.CompletedProcess:
+def _run_video_subprocess(cmd: list[str], *, timeout: int = 2 * 60 * 60) -> subprocess.CompletedProcess:
     return run_project_subprocess(cmd, capture_output=True, text=True, timeout=timeout)
 
 

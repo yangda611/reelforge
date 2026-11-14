@@ -183,6 +183,15 @@ async def generate_rewrite(
         narrator_main_name = _resolve_narrator_main_name(store)
 
         from novelvideo.agents.content_rewriter import rewrite_episode_content
+        from novelvideo.skills.cinematic_storyboard_skill import (
+            load_prev_episode_script_context_from_store,
+        )
+
+        prev_episode_context = ""
+        if episode_num > 1:
+            prev_episode_context, _ = await load_prev_episode_script_context_from_store(
+                store, episode_num
+            )
 
         rewritten = await rewrite_episode_content(
             raw_content,
@@ -191,6 +200,7 @@ async def generate_rewrite(
             target_beats=body.target_beats,
             beat_chars_range=(body.beat_chars_min, body.beat_chars_max),
             narration_style=body.narration_style or "first_person",
+            prev_episode_context=prev_episode_context,
         )
         normalized = rewritten.strip()
         if normalized == raw_content:

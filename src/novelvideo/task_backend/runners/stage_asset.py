@@ -12,6 +12,7 @@ from novelvideo.egress_context import (
 )
 from novelvideo.project_context import ProjectContext
 from novelvideo.task_backend.cancel import (
+    DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS,
     raise_if_envelope_cancel_requested,
     remaining_timeout_seconds,
 )
@@ -242,7 +243,11 @@ def run_stage_asset(
             artifact_dir=Path(artifact_dir) if artifact_dir else None,
             update_manifest=bool(params.get("update_manifest", True)),
             timeout_seconds=local_runner_timeout(
-                int(params.get("timeout_seconds", 1800))
+                int(
+                    params.get(
+                        "timeout_seconds", DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
+                    )
+                )
             ),
             progress_callback=update,
             model_authority=model_authority,
@@ -350,7 +355,9 @@ def run_scene_pano_generation(
         update_manifest=bool(params.get("update_manifest", True)),
         timeout_seconds=remaining_timeout_seconds(
             envelope,
-            default_seconds=int(params.get("timeout_seconds", 1800)),
+            default_seconds=int(
+                params.get("timeout_seconds", DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS)
+            ),
         ),
         progress_callback=update,
         egress_context=_extract_trusted_egress_context(envelope),

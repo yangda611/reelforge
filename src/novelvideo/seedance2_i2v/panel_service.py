@@ -34,6 +34,7 @@ from novelvideo.seedance2_i2v.character_voice_storage import (
 from novelvideo.seedance2_i2v.models import (
     SEEDANCE2_PROMPT_GUIDANCE_TEMPLATE_KEYS,
     Seedance2I2VMode,
+    default_seedance2_ratio_for_state_dir,
     dump_seedance2_config,
     parse_seedance2_config,
 )
@@ -180,15 +181,25 @@ def _prepare_seedance2_video_panel_config(
     next_beat: dict[str, Any] | None,
     prop_menu: list[Any] | None,
 ) -> str:
-    config = parse_seedance2_config(beat.get("seedance2_config_json"))
+    default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
+    config = parse_seedance2_config(
+        beat.get("seedance2_config_json"),
+        default_ratio=default_ratio,
+    )
     if mode is not None:
         config.mode = Seedance2I2VMode(mode)
     if duration is not None:
-        config.duration = int(duration)
+        next_duration = int(duration)
+        if next_duration != config.duration:
+            config.duration_user_set = True
+        config.duration = next_duration
     if resolution is not None:
         config.resolution = str(resolution or "720p").strip()
     if ratio is not None:
-        config.ratio = str(ratio or "9:16").strip()
+        next_ratio = str(ratio or default_ratio or "9:16").strip()
+        if next_ratio != config.ratio:
+            config.ratio_user_set = True
+        config.ratio = next_ratio
     if generate_audio is not None:
         config.generate_audio = bool(generate_audio)
         config.generate_audio_user_set = True
@@ -296,7 +307,23 @@ async def generate_seedance2_prompt_for_panel(
     language: AssetLanguage | None = None,
     prop_menu: list[Any] | None = None,
 ) -> str:
-    config = parse_seedance2_config(beat.get("seedance2_config_json"))
+    default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
+    if prev_beat is None and episode > 1 and int(beat.get("beat_number") or 0) <= 1 and store is not None:
+        from novelvideo.skills.cinematic_storyboard_skill import (
+            load_prev_episode_last_beat_from_store,
+        )
+
+        prev_beat, _ = await load_prev_episode_last_beat_from_store(store, episode)
+    duration_floor = _seedance2_duration_floor(
+        project_dir=Path(project_dir),
+        episode=episode,
+        beat=beat,
+    )
+    config = parse_seedance2_config(
+        beat.get("seedance2_config_json"),
+        default_ratio=default_ratio,
+        default_duration=duration_floor,
+    )
     if prompt_guidance is not None:
         config.prompt_guidance = str(prompt_guidance or "").strip()
     if prompt_guidance_template_keys is not None:
@@ -351,6 +378,14 @@ async def generate_seedance2_prompt_for_panel(
         language=output_language,
     )
     config.final_prompt = mark_seedance2_prompt_references_for_editor(result.prompt)
+    if not config.duration_user_set:
+        recommended = getattr(result, "recommended_duration", None)
+        resolved_duration = (
+            max(duration_floor, int(recommended))
+            if isinstance(recommended, int) and recommended > 0
+            else duration_floor
+        )
+        config.duration = max(4, min(15, resolved_duration))
     config.prompt_source = "generated" if result.used_ai else "fallback"
     config.prompt_inputs_hash = inputs_hash
     config.prompt_updated_at = datetime.now().isoformat(timespec="seconds")
@@ -850,13 +885,18 @@ def build_seedance2_video_panel_state(
     prop_menu: list[Any] | None = None,
     language: AssetLanguage | None = None,
 ) -> Seedance2VideoPanelState:
-    config = parse_seedance2_config(beat.get("seedance2_config_json"))
+    default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
     duration_floor = _seedance2_duration_floor(
         project_dir=project_dir,
         episode=episode,
         beat=beat,
     )
-    duration = max(int(config.duration or 4), duration_floor)
+    config = parse_seedance2_config(
+        beat.get("seedance2_config_json"),
+        default_ratio=default_ratio,
+        default_duration=duration_floor,
+    )
+    duration = max(int(config.duration or duration_floor), duration_floor)
     assets = build_seedance2_project_assets(
         project_output=project_dir,
         episode=episode,

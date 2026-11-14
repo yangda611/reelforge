@@ -55,6 +55,7 @@ CP2 判定：脚本、场景/道具上下文足够推进草图；当前后端没
 
 **Step 10 固定主线**：
 - 用户先准备 `raw-content`
+- 若 `$EP > 1`（生成第 2 集及后续各集），在进入改写（`rewrite/generate`）、剧本生成（`script/generate`）与草图/视频提示词阶段前，必须先检查上一集 `$((EP - 1))` 的结尾剧本与最后几个 Beat（`GET /projects/{project}/episodes/$((EP - 1))/beats`），并按 `references/cinematic-storyboard-skills.md` 执行 15 套景别组合、防连续同景别跳切与 6 大转场锚点，确保第 `$EP` 集开篇与上一集结尾丝滑过渡
 - 若需要解说改写，先 `POST /rewrite/generate`，启动后立即收口；不要同一轮继续 `script/generate`
 - 只有改写稿已完成/已存在时，才调用当前后端实际存在的 `POST /script/generate`；启动后立即收口
 - 剧本生成完成后可进入 Step 11（场景/道具上下文），再进入 Step 12 草图
@@ -82,7 +83,7 @@ CP2 判定：脚本、场景/道具上下文足够推进草图；当前后端没
 
 **Step 12.3**：草图完成后的下一轮再做检测。无身份图时检测无效。
 
-**Step 12.5**：`{"language":"en"}` 默认英文 SuperPower 模式，决定 video_mode + motion prompt
+**Step 12.5**：`{"language":"en"}` 默认英文 SuperPower 模式，决定 video_mode + motion prompt；相邻 Beat 运镜与转场（及 `$EP > 1` 时 Beat 1 承接上一集结尾末拍）必须遵循 `references/cinematic-storyboard-skills.md`。
 
 **Step 14 音频生成**：使用 `dramaclaw_generate_audio`，即当前 `audio/generate` [ASYNC: `audio_generation_indextts2`]。旧 `/tts/generate` 已移除，不要调用。
 

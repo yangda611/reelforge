@@ -83,3 +83,32 @@ def test_dump_seedance2_config_round_trips_normalized_config():
     assert config.mode == Seedance2I2VMode.FIRST_LAST_FRAME
     assert config.duration == 6
     assert config.reference_image_paths == ["frames/a.png", "frames/b.png"]
+
+
+def test_parse_seedance2_config_syncs_unflagged_ratio_and_duration_with_defaults():
+    from novelvideo.seedance2_i2v.models import default_seedance2_ratio_for_project_aspect
+
+    assert default_seedance2_ratio_for_project_aspect("16:9") == "16:9"
+    assert default_seedance2_ratio_for_project_aspect("2:3") == "9:16"
+    assert default_seedance2_ratio_for_project_aspect("9:16") == "9:16"
+
+    healed = parse_seedance2_config(
+        {"ratio": "9:16", "duration": 4, "final_prompt": "hello"},
+        default_ratio="16:9",
+        default_duration=9,
+    )
+    assert healed.ratio == "16:9"
+    assert healed.duration == 9
+
+    explicit = parse_seedance2_config(
+        {
+            "ratio": "9:16",
+            "ratio_user_set": True,
+            "duration": 6,
+            "duration_user_set": True,
+        },
+        default_ratio="16:9",
+        default_duration=9,
+    )
+    assert explicit.ratio == "9:16"
+    assert explicit.duration == 6

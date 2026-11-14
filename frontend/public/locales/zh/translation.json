@@ -4042,6 +4042,7 @@
       "preview": "预览",
       "view": {
         "display": "显示",
+        "selectAll": "全选",
         "selectedCount": "已选 {{count}}",
         "clear": "清除",
         "totalShots": "共{{count}}个镜头",
@@ -4479,6 +4480,21 @@
         "lockedLightTooltip": "锁图光：使用场景图自带光线，不重新打光。",
         "lockedLightLabel": "锁图光"
       },
+      "spatialLock": {
+        "label": "固定机位空间锁定",
+        "idleHint": "未锁定：重绘/渲染与相邻镜自由运镜",
+        "activeHint": "锚定 #B{{n}} 底图与地面站位，生成视频保持稳定三脚架机位",
+        "modeOff": "不锁定",
+        "modeFullBody": "锁定机位·全身",
+        "modeUpperBody": "锁定机位·仅改上半身",
+        "anchorLabel": "锚定源镜头",
+        "anchorItem": "锚定 #B{{n}}",
+        "lockedToast": "已锁定到 #B{{n}} 机位与底图空间",
+        "unlockedToast": "已取消固定机位锁定",
+        "saveFailed": "保存固定机位设置失败",
+        "videoBannerLockedTo": "固定机位连续镜头（锚定 #B{{n}}）：已自动锁定三脚架视角与景别，视频提示词与过渡优先保持画面稳定拼接。",
+        "videoBannerFeedNext": "本镜为下一固定机位镜头（#B{{n}}）的底图锚点：建议在结尾保持稳定落点（首尾帧模式可无缝过渡到 #B{{n}}）。"
+      },
       "renderGrid": {
         "title": "渲染网格",
         "titleWithCount": "渲染网格（共{{count}}个网格）",
@@ -4546,6 +4562,11 @@
         "reassignColorsDesc": "这会按当前脚本中的身份重新分配本集草图颜色。已有草图中的旧颜色标记可能与新配色不一致。",
         "reassignColorsTooltip": "根据脚本身份重新分配颜色（幂等）",
         "reassignColorsSuccess": "已重新分配 {{count}} 个身份、{{propCount}} 个道具的颜色",
+        "aiCameraLock": "AI 机位锁定",
+        "aiCameraLockTooltip": "自动分析整集连续同机位分镜并设置固定机位空间锁定",
+        "aiCameraLockRunning": "正在分析固定机位锁定…",
+        "aiCameraLockEmpty": "当前集未识别到适合锁定的连续固定机位镜头",
+        "aiCameraLockSuccess": "已完成 AI 机位锁定规划：共锁定 {{count}} 个镜头（{{beats}}）",
         "genAudioTitle": "生成全集音频？",
         "genAudioDesc": "将为所有缺少音频的 beat 生成 TTS 配音。",
         "genAudio": "生成全集音频",
@@ -8344,6 +8365,25 @@
         "save": "保存 Agent 配置",
         "saved": "Agent 模型配置已保存，新会话将使用最新配置。"
       },
+      "reasoning": {
+        "title": "全局思考等级",
+        "description": "为已配置的模型开启推理并设置默认思考等级（默认高）。若上游模型不支持推理参数，可全局或按功能改为关闭。",
+        "saved": "思考等级已保存，下次模型调用生效。",
+        "levels": {
+          "high": "高（默认）",
+          "medium": "中",
+          "low": "低",
+          "minimal": "极低",
+          "off": "关闭（不传推理参数）"
+        },
+        "shortLevels": {
+          "high": "高",
+          "medium": "中",
+          "low": "低",
+          "minimal": "极低",
+          "off": "关闭"
+        }
+      },
       "custom": {
         "description": "CE 使用本机 SQLite NewAPI。ReelForge 会自动连接数据库、创建运行令牌并启用本地渠道。",
         "init": "初始化本地 NewAPI",
@@ -8486,14 +8526,19 @@
         "colProvider": "已配置渠道",
         "colUpstreamModel": "上游模型名",
         "colModel": "上游模型名",
+        "colReasoning": "思考等级",
+        "reasoningInherit": "跟随默认（{{default}}）",
         "upstreamModelPlaceholder": "填写上游模型名，如 qwen-plus",
         "save": "保存映射",
         "saveRow": "保存",
         "savedOne": "已保存该功能渠道。",
         "applyToAll": "应用到全部",
         "bulkModelPlaceholder": "批量填写上游模型名，如 qwen-plus",
-        "bulkMissingModel": "请先填写要批量应用的上游模型名。",
+        "bulkMissingModel": "请先填写要批量应用的上游模型名，或选择要批量应用的思考等级。",
+        "bulkReasoningKeep": "思考等级（保持）",
+        "bulkReasoningInherit": "跟随全局默认",
         "bulkApplied": "已填充 {{count}} 个模型草稿，请点击保存映射写入 NewAPI。",
+        "bulkReasoningApplied": "已为 {{count}} 个功能更新思考等级。",
         "saveHint": "按供应商分组写入 NewAPI 渠道。",
         "saved": "已保存 {{count}} 个渠道。",
         "savedPartial": "保存完成：成功 {{succeeded}} 个，失败 {{failed}} 个。",

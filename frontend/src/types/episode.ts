@@ -3,6 +3,10 @@
 export interface SceneRef {
   scene_id: string;
   variant_id?: string;
+  render_anchor_id?: string;
+  render_anchor_source_id?: string;
+  lock_camera_beat?: number | null;
+  lock_spatial_mode?: "" | "full_body" | "upper_body";
 }
 
 export interface EpisodeSceneMenuItem {

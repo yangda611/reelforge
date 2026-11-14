@@ -428,7 +428,11 @@ async def _run_selected_regen_async(
         RenderIdentityDetectionRequired,
         render_ai_detection_error,
     )
-    from novelvideo.models import beat_scene_id
+    from novelvideo.models import (
+        beat_lock_camera_beat,
+        beat_lock_spatial_mode,
+        beat_scene_id,
+    )
     from novelvideo.task_identity import selection_scope
     from novelvideo.utils.path_resolver import PathResolver
 
@@ -627,6 +631,62 @@ async def _run_selected_regen_async(
             progress=0.2 + 0.45 * ratio,
         )
 
+    locked_anchors: dict[int, dict[str, Any]] = {}
+    selected_num_set = {int(bn) for bn in selected_beat_numbers}
+    for beat in selected_beats:
+        try:
+            bn = int(beat.get("beat_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if bn <= 0:
+            continue
+        anchor_bn = beat_lock_camera_beat(beat)
+        if anchor_bn is None:
+            continue
+        spatial_mode = beat_lock_spatial_mode(beat)
+        anchor_sketch = (
+            str(beat_sketch_paths_override.get(anchor_bn) or "")
+            if beat_sketch_paths_override
+            else ""
+        )
+        if not anchor_sketch:
+            candidate_anchor_sketch = paths.sketch(anchor_bn)
+            if candidate_anchor_sketch.exists():
+                anchor_sketch = str(candidate_anchor_sketch)
+        target_sketch = (
+            str(beat_sketch_paths_override.get(bn) or "")
+            if beat_sketch_paths_override
+            else ""
+        )
+        if not target_sketch:
+            candidate_target_sketch = paths.sketch(bn)
+            if candidate_target_sketch.exists():
+                target_sketch = str(candidate_target_sketch)
+
+        if is_sketch:
+            anchor_image_path = anchor_sketch
+        else:
+            candidate_anchor_frame = paths.frame(anchor_bn)
+            anchor_image_path = (
+                str(candidate_anchor_frame) if candidate_anchor_frame.exists() else ""
+            )
+
+        locked_anchors[bn] = {
+            "anchor_beat_number": anchor_bn,
+            "anchor_image_path": anchor_image_path,
+            "spatial_mode": spatial_mode,
+            "anchor_sketch_path": anchor_sketch,
+            "target_sketch_path": target_sketch,
+            "apply_paste_back": True,
+        }
+        if not anchor_image_path and anchor_bn not in selected_num_set:
+            log(
+                f"提示: Beat {bn} 固定机位锚点 Beat {anchor_bn} 尚无成图，将回退常规生成"
+            )
+
+    if locked_anchors:
+        log(f"固定机位空间锁定已启用: beats={sorted(locked_anchors.keys())}")
+
     results = await regenerate_selected_beats(
         selected_beats=selected_beats,
         mode_key=mode_key,
@@ -640,6 +700,7 @@ async def _run_selected_regen_async(
         is_sketch=is_sketch,
         generator_config=generator_config,
         progress_callback=report_generation_progress,
+        locked_anchors=locked_anchors or None,
         **force_kwargs,
     )
 

@@ -154,6 +154,7 @@ export function BeatsTabContent() {
     handleCardClick,
     toggleCheck,
     selectSingle,
+    selectAll,
     clearSelection,
   } = useSelection({ project, episode: epNum });
 
@@ -344,6 +345,10 @@ export function BeatsTabContent() {
     }
     return formatCreditCost(sketchPlanCost.cost);
   }, [sketchPlanCost.cost, sketchPlanCost.originalCost]);
+
+  const handleSelectAll = useCallback(() => {
+    selectAll(beats.map((beat) => beat.beat_number));
+  }, [beats, selectAll]);
 
   const openSketchPlan = useCallback(() => {
     if (checkedBeatNums.length === 0) return;
@@ -717,6 +722,7 @@ export function BeatsTabContent() {
                 onToggle={toggleView}
                 selection={selection}
                 totalBeats={beats.length}
+                onSelectAll={handleSelectAll}
                 onClearSelection={clearSelection}
                 onBatchRegenSketch={openSketchPlan}
                 onBatchRegenRender={openRenderPlan}

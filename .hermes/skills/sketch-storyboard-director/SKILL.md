@@ -122,6 +122,16 @@ This writes:
 17. Optionally also write a concise human-readable note file:
    - `verify_reports/epXXX/storyboard_director_notes.md`
 
+## Mandatory Cinematic Storyboard Skills (必用三大分镜运镜转场法则)
+
+Before labeling any beats in Step 10–12:
+1. **Cross-Episode Continuity (`episode_num > 1`)**: If directing Episode `N > 1`, first read Episode `N - 1`'s ending beats from SQLite / API so Beat 1 smoothly continues the previous finale's eyeline, posture, screen direction, prop state, or cliffhanger visual anchor.
+2. **15 Shot-Scale Combinations & Anti-Jump-Cut (`docs/skills/ai-shot-scale-combinations/SKILL.md`)**:
+   - Check consecutive beat density: **NEVER allow 3+ consecutive eye-level medium shots with near-identical framing in the same scene** (unless explicitly locked-camera).
+   - Break repetitive dialogue coverage by alternating shot scales across the 15 combinations (`远/全/中/近/特`), inserting hand/eye/prop close-ups, or shifting camera axis/elevation while preserving 180-degree spatial logic.
+3. **6 Seamless Shot Transitions (`docs/skills/ai-shot-transition/SKILL.md`) & Camera Compatibility (`docs/skills/ai-camera-motion/SKILL.md`)**:
+   - Frame adjacent panels for clean transitions (Action Match start/end poses, Form/Composition Match, Eyeline Match across reaction shots, or visible Foreground Occlusion framing). Keep sketch frames static & visually unambiguous so downstream Azhe 5-variable video motion has clean foreground/midground/background depth separation.
+
 ## Rules
 
 - Assume QC has already passed.

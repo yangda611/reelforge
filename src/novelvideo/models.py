@@ -158,6 +158,14 @@ class SceneRef(BaseModel):
         default="",
         description="当 render_anchor_id=selected_background 时记录截图来源，如 master/reverse/director_env_only",
     )
+    lock_camera_beat: int | None = Field(
+        default=None,
+        description="固定机位空间锚定的源 Beat 编号（通常为上一镜 beat_number）",
+    )
+    lock_spatial_mode: str = Field(
+        default="",
+        description="固定机位锁定模式：'' | 'full_body' | 'upper_body'",
+    )
 
 
 class SceneMenuItem(BaseModel):
@@ -188,9 +196,26 @@ class PropMenuItem(BaseModel):
     marker_color: str = Field(default="", description="草图阶段道具身份标记颜色")
 
 
+def _coerce_lock_camera_beat(value: Any) -> int | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _coerce_lock_spatial_mode(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"full_body", "upper_body"}:
+        return text
+    return ""
+
+
 def _coerce_scene_ref(value: Any) -> SceneRef | None:
     if isinstance(value, SceneRef):
-        return value if value.scene_id else None
+        return value if (value.scene_id or value.lock_camera_beat) else None
     if isinstance(value, dict):
         scene_id = str(value.get("scene_id", "") or value.get("base_id", "")).strip()
         variant_id = str(value.get("variant_id", "") or "").strip()
@@ -207,14 +232,22 @@ def _coerce_scene_ref(value: Any) -> SceneRef | None:
             or value.get("background_ref_source_id", "")
             or ""
         ).strip()
+        lock_camera_beat = _coerce_lock_camera_beat(value.get("lock_camera_beat"))
+        lock_spatial_mode = _coerce_lock_spatial_mode(value.get("lock_spatial_mode"))
+        if lock_camera_beat and not lock_spatial_mode:
+            lock_spatial_mode = "full_body"
+        if not lock_camera_beat:
+            lock_spatial_mode = ""
         return (
             SceneRef(
                 scene_id=scene_id,
                 variant_id=variant_id,
                 render_anchor_id=render_anchor_id,
                 render_anchor_source_id=render_anchor_source_id,
+                lock_camera_beat=lock_camera_beat,
+                lock_spatial_mode=lock_spatial_mode,
             )
-            if scene_id
+            if (scene_id or lock_camera_beat)
             else None
         )
     return None
@@ -319,6 +352,52 @@ def beats_share_scene(first: Any, second: Any) -> bool:
     first_desc = _beat_scene_description(first)
     second_desc = _beat_scene_description(second)
     return bool(first_desc and second_desc and first_desc == second_desc)
+
+
+def _beat_num_from_any(beat: Any) -> int | None:
+    if isinstance(beat, dict):
+        return _coerce_lock_camera_beat(beat.get("beat_number"))
+    return _coerce_lock_camera_beat(getattr(beat, "beat_number", None))
+
+
+def beat_lock_camera_beat(value: Any) -> int | None:
+    """Return the locked anchor beat number when fixed-camera spatial lock is active."""
+    scene_ref = beat_scene_ref(value)
+    if scene_ref and scene_ref.lock_camera_beat:
+        curr_num = _beat_num_from_any(value)
+        if curr_num is None or scene_ref.lock_camera_beat != curr_num:
+            return scene_ref.lock_camera_beat
+    return None
+
+
+def beat_lock_spatial_mode(value: Any) -> str:
+    """Return 'full_body' or 'upper_body' when locked, else ''."""
+    anchor = beat_lock_camera_beat(value)
+    if not anchor:
+        return ""
+    scene_ref = beat_scene_ref(value)
+    mode = _coerce_lock_spatial_mode(scene_ref.lock_spatial_mode if scene_ref else "")
+    return mode or "full_body"
+
+
+def beats_locked_fixed_camera(
+    beat: Any,
+    *,
+    prev_beat: Any = None,
+    next_beat: Any = None,
+) -> bool:
+    """Return True when this beat participates in a fixed-camera spatial lock chain."""
+    if beat_lock_camera_beat(beat):
+        return True
+    curr_num = _beat_num_from_any(beat)
+    if curr_num is not None and next_beat is not None:
+        if beat_lock_camera_beat(next_beat) == curr_num:
+            return True
+    if prev_beat is not None:
+        prev_num = _beat_num_from_any(prev_beat)
+        if prev_num is not None and beat_lock_camera_beat(beat) == prev_num:
+            return True
+    return False
 
 
 def resolve_scene_record_name(

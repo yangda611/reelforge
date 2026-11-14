@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from pydantic import BaseModel, Field
+
 from novelvideo.brainclaw_contract import BrainClawProfile
 from novelvideo.models import (
+    beat_lock_camera_beat,
     beat_scene_ref,
+    beats_locked_fixed_camera,
     beats_share_scene,
     real_detected_identities,
     real_detected_props,
@@ -32,9 +37,33 @@ class Seedance2PromptGeneration:
     used_ai: bool
     draft_prompt: str
     error: str = ""
+    recommended_duration: int | None = None
 
 
-Seedance2PromptComposer = Callable[..., Awaitable[str]]
+class Seedance2PromptComposerOutput(BaseModel):
+    """Structured output from the Seedance 2.0 prompt composer."""
+
+    final_prompt: str = Field(
+        ...,
+        description="Final Seedance 2.0 prompt body without API parameters or meta commentary",
+    )
+    recommended_duration: int = Field(
+        default=5,
+        ge=4,
+        le=15,
+        description=(
+            "Optimal clip duration in integer seconds (4-15): 4-5s for crisp action/reaction/insert cuts, "
+            "6-9s for medium dialogue or action+reaction beats, 10-15s for sustained continuous performance, "
+            "long takes, or full voiceover/monologue beats."
+        ),
+    )
+
+
+from novelvideo.skills.cinematic_storyboard_skill import (
+    SEEDANCE2_CINEMATIC_SKILL_DIRECTIVES,
+)
+
+Seedance2PromptComposer = Callable[..., Awaitable[str | Seedance2PromptComposerOutput | dict[str, Any]]]
 
 
 SEEDANCE2_PROMPT_GUIDANCE_TEMPLATES: dict[str, dict[AssetLanguage, str]] = {
@@ -65,22 +94,40 @@ SEEDANCE2_PROMPT_GUIDANCE_TEMPLATES: dict[str, dict[AssetLanguage, str]] = {
 }
 
 
-SEEDANCE2_COMPOSER_SYSTEM_PROMPT = """You write image-to-video prompts for Seedance 2.0.
-Use the fixed asset manifest, storyboard context, user guidance, and rule-based draft to write the final Seedance 2.0 prompt.
-Asset order is fixed. Only use existing reference tokens such as 图片1 and 音频1 from the asset manifest.
-Never add or reorder image/audio reference numbers, and do not output @ symbols.
-Do not force every asset into the prompt; reference only assets that materially help the current shot.
-Duration, resolution, aspect ratio, and human-review controls are API parameters and must not appear in the prompt.
+SEEDANCE2_COMPOSER_SYSTEM_PROMPT = """You write cinema-grade image-to-video prompts and duration budgets for Seedance 2.0.
+Use the fixed asset manifest, storyboard context, user guidance, and rule-based draft to write `final_prompt` and select `recommended_duration` (4-15 integer seconds).
+
+Asset & Anti-Fluff Discipline:
+- Asset order is fixed. Only use existing reference tokens such as 图片1 and 音频1 from the asset manifest; never add or reorder numbers, and never output @ symbols.
+- Do not force every asset into the prompt; reference only assets that materially help the current shot (when 图片1 is the current beat render frame, anchor composition, lighting, and initial pose from 图片1; use character/scene anchors for identity and spatial consistency).
+- Never re-describe static character appearance (hairstyle, fixed outfit color, facial traits) already carried by referenced images; focus strictly on physical performance, facial micro-expressions, spatial displacement, prop state changes, light interaction, and camera choreography.
+- Zero meta-language and zero empty buzzwords: forbid quality hype words ("8K", "masterpiece", "电影感/杰作"), forbid API parameters (durations/seconds, 720p, 16:9/9:16), and forbid negative meta-labels like "no BGM / no subtitles" unless describing real diegetic soundscape.
+
+Spatial Physics, Eyeline & Prop Causality:
+- Whenever characters, props, or directional motion interact, use dual spatial anchoring: [screen frame position (left/center/right, foreground/midground/background)] + [in-scene relative orientation / body facing] consistent with 图片1.
+- Ground every shot with clear eyeline target, hand task, and prop state chain (initial hold/placement -> action transformation -> cut-out state).
+- Choose shot scale and camera movement purely by narrative cause (reveal, pressure, reaction, intimacy), avoiding purposeless sweeping camera moves.
+
+Audio, Lip-Sync & Voiceover Separation:
+- On-screen spoken dialogue (`dialogue` or spoken line): preserve exact verbatim lines (never summarize/truncate) with concrete vocal texture, pace, breath, and synced mouth/jaw articulation; bind `音频N` when present.
+- Off-screen narration / interior monologue OS (`narration` or silent thought): forbid lip movement on silent subjects; depict absorbed gaze, posture stillness, or ongoing manual action paired with voiceover audio (`音频N` if present).
+- Ground audio in natural diegetic foley (rain on glass, door chime, keyboard clicks, footsteps, paper rustle) without adding background music cues.
+
+Shot Pacing & Recommended Duration (4-15s):
+- Seedance 2.0 supports 4-15s clips; match `recommended_duration` dynamically instead of defaulting every shot to 4s:
+  * 4-5s: crisp establishing pulse, tactile prop insert, shock reaction, or short kinetic beat.
+  * 6-9s: standard dialogue exchange, action-to-reaction beat, or deliberate medium reveal.
+  * 10-15s: sustained long take, multi-phase blocking, uninterrupted monologue/OS narration over continuous work, or slow atmospheric tension build (use 12-15s when continuity benefits).
+- Structure longer shots (8-15s) into smooth 2-3 sequential visual/performance phases across the clip so motion never finishes early and stalls. Never write duration numbers inside `final_prompt`.
 
 Cinematic Continuity & Smooth Transition Rules:
 - Always start from the visible starting state of the primary image reference (such as 图片1) and evolve strictly forward; never contradict the initial pose or invent backward actions.
-- Keep motion continuous and unidirectional across the full clip rather than stopping early or oscillating back and forth. When the requested clip duration is longer (e.g. 8s or more in request_params_for_context_only), structure a smooth 2-3 stage visual and camera progression instead of static holding (never print duration numbers in the prompt).
+- Keep motion continuous and unidirectional across the full clip rather than stopping early or oscillating back and forth. When the requested clip duration is longer (e.g. 8s or more in request_params_for_context_only or `recommended_duration >= 8`), structure a smooth 2-3 stage visual and camera progression instead of static holding (never print duration numbers in the prompt).
 - When adjacent_beats context is present, design smooth transitions without relying on last-frame chaining:
   1. Entry: preserve compatible screen direction, eyeline polarity, and camera momentum from prev_beat when consistent with the starting image.
   2. Exit toward next_beat (in the final phase of the shot): when same_scene_with_next is true, bridge smoothly using Action Match (end mid-follow-through toward the next opening motion), Eyeline / Visual Lead (settle gaze or camera push onto the element next_beat reveals), Foreground Occlusion (only with elements already visible in the scene/frame), or Same-Direction Camera Sweep.
-  3. Scene cuts (same_scene_with_next is false): do not force whip pans or invent ungrounded particles/objects; finish cleanly on a stable framing anchor or complementary composition for a crisp cut.
-
-Output the final prompt directly without explaining the generation process."""
+  3. Locked Fixed Camera pairs (when adjacent_beats marks locked_with_prev, locked_with_next, or beat.scene_ref.lock_camera_beat is set): keep the camera strictly stationary on a locked tripod (zero push-in, pan, tilt, whip-pan, or zoom) so the background anchor and character standing alignment splice seamlessly across cuts; carry continuity exclusively via uninterrupted subject motion, gesture, gaze, and subtle ambient dynamics.
+  4. Scene cuts (same_scene_with_next is false): do not force whip pans or invent ungrounded particles/objects; finish cleanly on a stable framing anchor or complementary composition for a crisp cut.""" + SEEDANCE2_CINEMATIC_SKILL_DIRECTIVES
 
 
 def detect_seedance2_prompt_language(beat: dict[str, Any]) -> AssetLanguage:
@@ -656,6 +703,7 @@ def build_seedance2_prompt_draft(
     prompt_guidance_template_keys: list[str] | tuple[str, ...] | None = None,
     manual_prompt_reference: str = "",
     language: AssetLanguage = "zh",
+    locked_camera: bool = False,
 ) -> str:
     """Build a model-facing draft prompt without API-only video params."""
 
@@ -702,6 +750,13 @@ def build_seedance2_prompt_draft(
             lines.append(overlay)
         if guidance:
             lines.append(_clean_sentence(guidance, language))
+        if locked_camera or beat_lock_camera_beat(beat) is not None:
+            lines.append(
+                _clean_sentence(
+                    "Keep the camera locked steady on a tripod with no push, pan, or zoom while subject action and ambient motion continue smoothly",
+                    language,
+                )
+            )
         if manual:
             lines.append(
                 _clean_sentence(
@@ -725,6 +780,13 @@ def build_seedance2_prompt_draft(
         lines.append(overlay)
     if guidance:
         lines.append(_clean_sentence(guidance, language))
+    if locked_camera or beat_lock_camera_beat(beat) is not None:
+        lines.append(
+            _clean_sentence(
+                "固定三脚架机位保持构图静止，不做推拉摇移变焦，仅通过人物动作与环境细节自然流畅衔接",
+                language,
+            )
+        )
     if manual:
         lines.append(
             _clean_sentence(
@@ -799,16 +861,30 @@ def _build_adjacent_beats_context(
     next_beat: dict[str, Any] | None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
+    lock_target = beat_lock_camera_beat(beat)
+    if lock_target is not None:
+        context["locked_camera_beat"] = lock_target
     if prev_beat:
         context["same_scene_with_prev"] = beats_share_scene(prev_beat, beat)
-        context["prev_beat"] = {
+        if beats_locked_fixed_camera(beat, prev_beat=prev_beat):
+            context["locked_with_prev"] = True
+        prev_entry: dict[str, Any] = {
             "beat_number": prev_beat.get("beat_number"),
             "visual_description": _text(prev_beat.get("visual_description"))[:220],
             "scene_description": _text(prev_beat.get("scene_description")),
             "prompt_ending": _extract_beat_prompt_tail(prev_beat),
         }
+        if prev_beat.get("_from_previous_episode") is not None:
+            prev_entry["from_previous_episode"] = prev_beat.get("_from_previous_episode")
+            cliffhanger = _text(prev_beat.get("_prev_episode_cliffhanger"))
+            if cliffhanger:
+                prev_entry["prev_episode_cliffhanger"] = cliffhanger
+            context["cross_episode_transition"] = True
+        context["prev_beat"] = prev_entry
     if next_beat:
         context["same_scene_with_next"] = beats_share_scene(beat, next_beat)
+        if beats_locked_fixed_camera(beat, next_beat=next_beat):
+            context["locked_with_next"] = True
         context["next_beat"] = {
             "beat_number": next_beat.get("beat_number"),
             "visual_description": _text(next_beat.get("visual_description"))[:220],
@@ -835,6 +911,9 @@ def build_seedance2_prompt_composer_task(
         "mode": Seedance2I2VMode(mode).value,
         "asset_manifest": build_seedance2_asset_manifest(assets),
         "beat": {
+            "audio_type": beat.get("audio_type") or "",
+            "estimated_duration": beat.get("estimated_duration"),
+            "audio_duration_seconds": beat.get("audio_duration_seconds"),
             "visual_description": beat.get("visual_description") or "",
             "scene_ref": beat.get("scene_ref") or {},
             "scene_description": beat.get("scene_description") or "",
@@ -860,8 +939,16 @@ def build_seedance2_prompt_composer_task(
     adjacent_beats = _build_adjacent_beats_context(beat, prev_beat, next_beat)
     if adjacent_beats:
         payload["adjacent_beats"] = adjacent_beats
+    is_locked_camera = beats_locked_fixed_camera(
+        beat, prev_beat=prev_beat, next_beat=next_beat
+    )
     language_rule = asset_language_instruction(language)
     if language == "en":
+        locked_line = (
+            "- FIXED-CAMERA LOCK: keep the camera completely steady on a locked tripod (no push-in, pan, tilt, whip-pan, or zoom) so background alignment stays identical across cuts; bridge solely through subject motion and ambient dynamics.\n"
+            if is_locked_camera
+            else ""
+        )
         return (
             "Write the final Seedance 2.0 image-to-video prompt from the JSON below.\n\n"
             "Hard requirements:\n"
@@ -872,11 +959,19 @@ def build_seedance2_prompt_composer_task(
             "- Do not describe the request JSON or output @.\n"
             "- Keep duration, resolution, ratio, generate_audio, return_last_frame, and human_review out of the prompt.\n"
             "- Preserve spoken dialogue verbatim while action directions may be rewritten naturally.\n"
+            "- Avoid repeating static character traits covered by reference images and avoid empty buzzwords ('8K', 'masterpiece', 'cinematic feel'). For character/prop interactions, use dual spatial anchoring (frame position + in-scene relative orientation), explicit eyeline, hand task, and prop state transitions. Keep lips still for off-screen voiceover/OS.\n"
+            "- Choose `recommended_duration` dynamically in integer seconds (4-15s) to fit pacing: 4-5s for crisp reactions/inserts, 6-9s for dialogue/action-reaction beats, 10-15s for continuous long takes or full voiceover beats (never write duration numbers inside `final_prompt`).\n"
             "- Start strictly forward from the starting image state; when adjacent_beats is present, bridge smoothly from prev_beat (compatible flow/direction) and shape the ending motion/eyeline/framing as a natural lead into next_beat (clean cut if same_scene_with_next is false; never invent ungrounded elements).\n"
+            f"{locked_line}"
             f"- {language_rule}\n"
             "- Output only the final prompt.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
         )
+    locked_line_zh = (
+        "- 固定机位锁定：保持三脚架固定机位与背景透视完全稳定，禁止推拉、摇移、甩镜或变焦，仅通过人物动作延续、视线与环境微动衔接相邻镜头。\n"
+        if is_locked_camera
+        else ""
+    )
     return (
         "请根据下面 JSON 写出最终 Seedance 2.0 图生视频 prompt。\n\n"
         "硬性要求：\n"
@@ -891,11 +986,99 @@ def build_seedance2_prompt_composer_task(
         "- 如果用户写作要求和资产清单、道具 fallback 冲突，以资产清单和 fallback 为准。\n"
         "- dialogue 或 narration_segment 属于对白时，请根据语义区分动作说明和实际说出的台词；"
         "动作可自然改写，但实际台词必须逐字完整保留，不能删减或概括。\n"
+        "- 禁止复述参考图中已固定的外貌服饰，禁止“8K/电影感/杰作”等空泛画质词，禁止在正文里写出“无背景音乐/无字幕”等元标签（直接写写实环境声）。\n"
+        "- 当画面有角色互动或方向运动时，使用“画面位置+场景内相对朝向”双重空间锚定，写清视线落点、手部动作与道具交接变化；若 `audio_type` 为 `narration`/内心独白 OS，人物必须保持闭口专注，禁止张嘴对口型。\n"
+        "- 在 `recommended_duration` 字段中按镜头节奏动态给出 4-15 秒整数推荐时长（短切反应/空镜特写 4-5 秒，常规对话/动作交互 6-9 秒，持续长镜头/多阶段调度/完整独白旁白 10-15 秒），多阶段镜头应写明前后流畅演进，严禁把秒数写进 `final_prompt`。\n"
         "- 必须严格从首帧参考图的起始状态向后演进；若存在 adjacent_beats，在不违背当前首帧的前提下承接 prev_beat 的运动/视线方向，并在结尾设计自然过渡落点（同场景优先动作延续、视线引导、已有前景遮挡或同向扫镜；跨场次保持构图呼应或干净收束，严禁凭空编造画面外物体）。\n"
+        f"{locked_line_zh}"
         "- 只输出最终 prompt，不要解释。\n\n"
         f"输出语言：{language_rule}\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
     )
+
+
+def _clamp_seedance2_duration(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return max(4, min(15, parsed))
+
+
+def recommend_seedance2_duration(
+    beat: dict[str, Any],
+    *,
+    prompt_text: str = "",
+    audio_duration: float | None = None,
+) -> int:
+    """Estimate a 4-15s Seedance 2.0 clip duration from dialogue, narration, and action pacing."""
+    candidates: list[float] = [4.0]
+    for raw_sec in (
+        beat.get("estimated_duration"),
+        audio_duration if audio_duration is not None else beat.get("audio_duration_seconds"),
+    ):
+        try:
+            parsed = float(raw_sec or 0)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        if parsed > 0:
+            candidates.append(parsed)
+
+    spoken = _beat_spoken_text(beat)
+    if spoken:
+        # Remove bracketed stage directions / OS prefix for speech timing estimate
+        clean_spoken = re.sub(r"（[^）]*）|\([^)]*\)|^\s*[△▲]?\s*[^\s：:]{1,20}(?:\s*OS)?[：:]\s*", "", spoken).strip()
+        cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", clean_spoken))
+        if cjk_chars > 0:
+            candidates.append(cjk_chars / 4.2 + 1.0)
+        else:
+            words = len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", clean_spoken))
+            if words > 0:
+                candidates.append(words / 2.2 + 1.0)
+
+    action_text = _text(prompt_text) or _text(beat.get("visual_description"))
+    if action_text:
+        clauses = [part.strip() for part in re.split(r"[，,。；;！？!?]+", action_text) if part.strip()]
+        if len(clauses) >= 5 or len(action_text) >= 120:
+            candidates.append(8.0)
+        elif len(clauses) >= 3 or len(action_text) >= 55:
+            candidates.append(6.0)
+        elif len(clauses) >= 2:
+            candidates.append(5.0)
+
+    target = int(math.ceil(max(candidates)))
+    return max(4, min(15, target))
+
+
+def _extract_composer_output(output: Any) -> tuple[str, int | None]:
+    if isinstance(output, Seedance2PromptComposerOutput):
+        return normalize_seedance2_editor_prompt(output.final_prompt), _clamp_seedance2_duration(
+            output.recommended_duration
+        )
+    if isinstance(output, dict):
+        return normalize_seedance2_editor_prompt(
+            output.get("final_prompt") or output.get("prompt") or ""
+        ), _clamp_seedance2_duration(output.get("recommended_duration"))
+    if hasattr(output, "final_prompt"):
+        return normalize_seedance2_editor_prompt(
+            getattr(output, "final_prompt", "")
+        ), _clamp_seedance2_duration(getattr(output, "recommended_duration", None))
+
+    text = str(output or "").strip()
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and "final_prompt" in parsed:
+                return normalize_seedance2_editor_prompt(
+                    parsed.get("final_prompt") or ""
+                ), _clamp_seedance2_duration(parsed.get("recommended_duration"))
+        except json.JSONDecodeError:
+            pass
+    return normalize_seedance2_editor_prompt(text), None
 
 
 def create_seedance2_prompt_composer_agent(language: AssetLanguage = "zh"):
@@ -913,12 +1096,12 @@ def create_seedance2_prompt_composer_agent(language: AssetLanguage = "zh"):
             f"{SEEDANCE2_COMPOSER_SYSTEM_PROMPT}\n\n"
             f"## Output Language\n{asset_language_instruction(language)}"
         ),
-        output_type=str,
+        output_type=Seedance2PromptComposerOutput,
         name="Seedance 2.0 Prompt Composer",
     )
 
 
-async def compose_seedance2_prompt_with_agent(
+async def compose_seedance2_prompt_bundle_with_agent(
     *,
     mode: Seedance2I2VMode | str,
     beat: dict[str, Any],
@@ -931,7 +1114,7 @@ async def compose_seedance2_prompt_with_agent(
     prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
-) -> str:
+) -> tuple[str, int | None]:
     agent = create_seedance2_prompt_composer_agent(language)
     result = await agent.run(
         build_seedance2_prompt_composer_task(
@@ -948,9 +1131,39 @@ async def compose_seedance2_prompt_with_agent(
             language=language,
         )
     )
-    prompt = normalize_seedance2_editor_prompt(result.output)
+    prompt, recommended_duration = _extract_composer_output(result.output)
     if not prompt:
         raise ValueError("AI composer returned an empty prompt")
+    return prompt, recommended_duration
+
+
+async def compose_seedance2_prompt_with_agent(
+    *,
+    mode: Seedance2I2VMode | str,
+    beat: dict[str, Any],
+    assets: list[Any] | None,
+    text_overlay: dict[str, Any] | None,
+    prompt_guidance: str,
+    draft_prompt: str,
+    request_params: dict[str, Any] | None = None,
+    manual_prompt_reference: str = "",
+    prev_beat: dict[str, Any] | None = None,
+    next_beat: dict[str, Any] | None = None,
+    language: AssetLanguage = "zh",
+) -> str:
+    prompt, _recommended_duration = await compose_seedance2_prompt_bundle_with_agent(
+        mode=mode,
+        beat=beat,
+        assets=assets,
+        text_overlay=text_overlay,
+        prompt_guidance=prompt_guidance,
+        draft_prompt=draft_prompt,
+        request_params=request_params,
+        manual_prompt_reference=manual_prompt_reference,
+        prev_beat=prev_beat,
+        next_beat=next_beat,
+        language=language,
+    )
     return prompt
 
 
@@ -982,9 +1195,11 @@ async def generate_seedance2_prompt(
         prompt_guidance=localized_guidance,
         manual_prompt_reference=manual_prompt_reference,
         language=language,
+        locked_camera=beats_locked_fixed_camera(
+            beat, prev_beat=prev_beat, next_beat=next_beat
+        ),
     )
     try:
-        compose = composer or compose_seedance2_prompt_with_agent
         compose_kwargs: dict[str, Any] = {
             "mode": mode,
             "beat": beat,
@@ -1000,15 +1215,23 @@ async def generate_seedance2_prompt(
             compose_kwargs["prev_beat"] = prev_beat
         if next_beat is not None:
             compose_kwargs["next_beat"] = next_beat
-        prompt = await compose(**compose_kwargs)
-        prompt = normalize_seedance2_editor_prompt(prompt)
+        if composer is not None:
+            raw_output = await composer(**compose_kwargs)
+            prompt, recommended_duration = _extract_composer_output(raw_output)
+        else:
+            prompt, recommended_duration = await compose_seedance2_prompt_bundle_with_agent(
+                **compose_kwargs
+            )
         if not prompt:
             raise ValueError("AI composer returned an empty prompt")
+        if recommended_duration is None:
+            recommended_duration = recommend_seedance2_duration(beat, prompt_text=prompt)
         return Seedance2PromptGeneration(
             prompt=prompt,
             used_ai=True,
             draft_prompt=draft_prompt,
             error="",
+            recommended_duration=recommended_duration,
         )
     except Exception as exc:
         return Seedance2PromptGeneration(
@@ -1016,4 +1239,5 @@ async def generate_seedance2_prompt(
             used_ai=False,
             draft_prompt=draft_prompt,
             error=str(exc),
+            recommended_duration=recommend_seedance2_duration(beat, prompt_text=draft_prompt),
         )

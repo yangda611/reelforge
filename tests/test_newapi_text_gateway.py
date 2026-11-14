@@ -19,13 +19,15 @@ def test_identity_planner_uses_split_newapi_model_envs(monkeypatch):
     assert calls == [("IDENTITY_PLANNER_CAST_MODEL", None)]
 
 
-def test_structured_output_model_settings_force_reasoning_off(monkeypatch):
+def test_structured_output_model_settings_default_to_high_reasoning(monkeypatch):
     from novelvideo.agents.identity_planner import IdentityPlanner
 
-    assert IdentityPlanner._identity_model_settings() == {"openai_reasoning_effort": "none"}
+    assert IdentityPlanner._identity_model_settings() == {
+        "openai_reasoning_effort": "high"
+    }
 
 
-def test_opaque_newapi_alias_sends_reasoning_effort_none(monkeypatch):
+def test_opaque_newapi_alias_sends_configured_reasoning_effort_default_high(monkeypatch):
     import asyncio
     import json
 
@@ -104,7 +106,7 @@ def test_opaque_newapi_alias_sends_reasoning_effort_none(monkeypatch):
 
     assert result.output == StructuredResult(value="ok")
     assert len(requests) == 1
-    assert requests[0]["reasoning_effort"] == "none"
+    assert requests[0]["reasoning_effort"] == "high"
 
 
 def test_plain_text_brainclaw_recipe_request_preserves_routing_headers_and_omits_reasoning(

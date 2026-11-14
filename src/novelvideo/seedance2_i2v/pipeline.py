@@ -19,6 +19,7 @@ from novelvideo.seedance2_i2v.assets import (
 )
 from novelvideo.seedance2_i2v.models import (
     Seedance2I2VMode,
+    default_seedance2_ratio_for_state_dir,
     dump_seedance2_config,
     parse_seedance2_config,
 )
@@ -190,9 +191,13 @@ def collect_seedance2_video_prereq_errors(
     """Return missing/invalid Seedance 2.0 project references before video generation."""
 
     project_output = Path(project_output)
+    default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
     errors: list[Seedance2VideoPrereqError] = []
     for index, beat in enumerate(beats):
-        config = parse_seedance2_config(beat.get("seedance2_config_json"))
+        config = parse_seedance2_config(
+            beat.get("seedance2_config_json"),
+            default_ratio=default_ratio,
+        )
         next_beat = beats[index + 1] if index + 1 < len(beats) else None
         assets = build_seedance2_project_assets(
             project_output=project_output,
@@ -277,7 +282,11 @@ async def prepare_seedance2_generation_inputs(
     """Prepare prompt, config, and media references for one Seedance 2.0 beat."""
 
     project_output = Path(project_output)
-    config = parse_seedance2_config(beat.get("seedance2_config_json"))
+    default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
+    config = parse_seedance2_config(
+        beat.get("seedance2_config_json"),
+        default_ratio=default_ratio,
+    )
 
     if video_mode == "keyframe" and config.mode != Seedance2I2VMode.FIRST_LAST_FRAME:
         config.mode = Seedance2I2VMode.FIRST_LAST_FRAME

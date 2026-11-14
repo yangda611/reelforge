@@ -604,6 +604,14 @@ vi.mock("@/lib/queries/video", () => ({
 }));
 
 vi.mock("@/lib/queries/scripts", () => ({
+  useScript: () => ({
+    data: {
+      ok: true,
+      data: {
+        beats: [],
+      },
+    },
+  }),
   useUpdateBeat: () => ({
     mutateAsync: updateBeatMock,
     isPending: false,
@@ -1303,7 +1311,16 @@ describe("VideoPane Seedance2 inspector", () => {
   it("uses the Seedance2 configured ratio for multimodal image asset crops", async () => {
     const user = userEvent.setup();
     useAspectRatioStore.getState().setOrientation("demo", "landscape");
-    renderPane();
+    const defaultBeat = makeBeat();
+    const configured = JSON.parse(defaultBeat.seedance2_config_json ?? "{}");
+    renderPane(
+      makeBeat({
+        seedance2_config_json: JSON.stringify({
+          ...configured,
+          ratio_user_set: true,
+        }),
+      }),
+    );
     expandSeedance2References();
 
     await user.click(screen.getAllByRole("button", { name: "裁剪" })[0]);
@@ -1354,6 +1371,7 @@ describe("VideoPane Seedance2 inspector", () => {
           mode_user_set: true,
           final_prompt: "wide video prompt",
           ratio: "16:9",
+          ratio_user_set: true,
         }),
       }),
     );
@@ -1457,6 +1475,7 @@ describe("VideoPane Seedance2 inspector", () => {
           mode_user_set: true,
           final_prompt: "wide video prompt",
           ratio: "9:16",
+          ratio_user_set: true,
         }),
       }),
     );
@@ -1543,6 +1562,59 @@ describe("VideoPane Seedance2 inspector", () => {
     const payload = updateBeatMock.mock.calls[0][0];
     const config = JSON.parse(payload.data.seedance2_config_json);
     expect(config.ratio).toBe("16:9");
+  });
+
+  it("heals legacy unflagged 9:16 ratio and 4s duration to landscape project aspect and estimate", () => {
+    useAspectRatioStore.getState().setOrientation("demo", "landscape");
+    renderPane(
+      makeBeat({
+        estimated_duration: 11,
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          duration: 4,
+          resolution: "720p",
+          ratio: "9:16",
+          prompt_source: "generated",
+          final_prompt: "legacy generated prompt",
+        }),
+      }),
+    );
+
+    expect(screen.getByLabelText("时长")).toHaveValue(11);
+    expect(screen.getByRole("combobox", { name: "画幅" })).toHaveTextContent("16:9");
+  });
+
+  it("applies AI-recommended duration when generating Seedance2 prompt", async () => {
+    const user = userEvent.setup();
+    useAspectRatioStore.getState().setOrientation("demo", "landscape");
+    generateSeedance2PromptMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          duration: 12,
+          duration_user_set: false,
+          resolution: "720p",
+          ratio: "16:9",
+          ratio_user_set: false,
+          prompt_source: "generated",
+          final_prompt: "图片1中林默坐在收银台后敲击键盘，持续保持沉默工作状态。",
+        }),
+      },
+    });
+    renderPane(
+      makeBeat({
+        estimated_duration: 4,
+        seedance2_config_json: "{}",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "AI 优化" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("时长")).toHaveValue(12);
+    });
+    expect(screen.getByRole("combobox", { name: "画幅" })).toHaveTextContent("16:9");
   });
 
   it("inserts the highlighted @ mention candidate when pressing Enter", async () => {

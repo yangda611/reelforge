@@ -21,11 +21,14 @@ class TaskCancelled(Exception):
     """
 
 
+DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS = 2 * 60 * 60
+
+
 class TaskTimedOut(Exception):
     """Raised when a project task exceeds its cooperative execution deadline."""
 
     def __init__(self, *, timeout_seconds: int | None = None) -> None:
-        self.timeout_seconds = timeout_seconds or 30 * 60
+        self.timeout_seconds = timeout_seconds or DEFAULT_PROJECT_TASK_TIMEOUT_SECONDS
         super().__init__(self.timeout_seconds)
 
 

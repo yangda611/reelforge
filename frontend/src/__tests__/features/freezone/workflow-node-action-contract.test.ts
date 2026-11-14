@@ -45,7 +45,7 @@ describe("dynamic workflow node action contract", () => {
       "utf8",
     );
 
-    expect(source).toContain("DEFAULT_NODE_ACTION_TIMEOUT_MS = 30 * 60 * 1000");
+    expect(source).toContain("DEFAULT_NODE_ACTION_TIMEOUT_MS = 2 * 60 * 60 * 1000");
   });
 
   it("reports image node action success only after the generated assets settle", () => {

@@ -426,6 +426,88 @@ def validate_seedance2_reference_image(path: Path) -> str:
     return ""
 
 
+MIN_SEEDANCE2_UPSCALED_SHORTEST_SIDE = 320
+
+
+def _ensure_seedance2_min_dimension_image(
+    source_path: Path,
+    *,
+    paths: PathResolver,
+    beat_num: int,
+    slot: str,
+) -> Path:
+    """Upscale grid-split render frames below 300px without mutating source frames."""
+    if not source_path.exists():
+        return source_path
+    size = read_seedance2_image_size(source_path)
+    if not size:
+        return source_path
+    width, height = size
+    if width <= 0 or height <= 0:
+        return source_path
+    if width >= MIN_REFERENCE_DIMENSION and height >= MIN_REFERENCE_DIMENSION:
+        return source_path
+    aspect_ratio = width / height
+    if not (MIN_REFERENCE_ASPECT_RATIO <= aspect_ratio <= MAX_REFERENCE_ASPECT_RATIO):
+        return source_path
+
+    scale = MIN_SEEDANCE2_UPSCALED_SHORTEST_SIDE / float(min(width, height))
+    target_width = max(MIN_REFERENCE_DIMENSION, int(round(width * scale)))
+    target_height = max(MIN_REFERENCE_DIMENSION, int(round(height * scale)))
+    if (
+        target_width > MAX_REFERENCE_DIMENSION
+        or target_height > MAX_REFERENCE_DIMENSION
+        or not (
+            MIN_REFERENCE_ASPECT_RATIO
+            <= (target_width / target_height)
+            <= MAX_REFERENCE_ASPECT_RATIO
+        )
+    ):
+        return source_path
+
+    safe_slot = "last_frame" if slot == "last_frame" else "first_frame"
+    derived_dir = paths.video_input_frame(beat_num, slot=safe_slot).parent
+    derived_path = derived_dir / f"{safe_slot}_min300.png"
+    meta_path = derived_path.with_suffix(".json")
+    expected_sig = paths._source_signature(source_path)
+    if expected_sig is not None and derived_path.exists() and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+        if (
+            str(meta.get("source_path") or "") == str(expected_sig["source_path"])
+            and int(meta.get("source_mtime_ns") or -1) == expected_sig["source_mtime_ns"]
+            and int(meta.get("source_size") or -1) == expected_sig["source_size"]
+            and not validate_seedance2_reference_image(derived_path)
+        ):
+            return derived_path
+
+    try:
+        from PIL import Image
+
+        with Image.open(source_path) as image:
+            resampling = getattr(Image, "Resampling", Image).LANCZOS
+            resized = image.convert("RGBA" if "A" in image.getbands() else "RGB").resize(
+                (target_width, target_height),
+                resampling,
+            )
+            derived_dir.mkdir(parents=True, exist_ok=True)
+            resized.save(derived_path, format="PNG")
+    except Exception:
+        return source_path
+
+    if expected_sig is not None:
+        try:
+            meta_path.write_text(
+                json.dumps({"version": 1, **expected_sig}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    return derived_path
+
+
 def validate_seedance2_reference_audio(path: Path) -> tuple[str, str]:
     try:
         duration = probe_voice_sample_duration_seconds(path)
@@ -941,13 +1023,16 @@ def build_seedance2_project_assets(
 
     paths = PathResolver(project_output, episode)
     first_frame_source = paths.frame(beat_num)
-    first_frame_path = (
-        paths.valid_video_input_frame(
-            beat_num,
-            slot="first_frame",
-            source_path=first_frame_source,
-        )
-        or first_frame_source
+    first_frame_override = paths.valid_video_input_frame(
+        beat_num,
+        slot="first_frame",
+        source_path=first_frame_source,
+    )
+    first_frame_path = first_frame_override or _ensure_seedance2_min_dimension_image(
+        first_frame_source,
+        paths=paths,
+        beat_num=beat_num,
+        slot="first_frame",
     )
     if mode == Seedance2I2VMode.FIRST_FRAME:
         add_image(
@@ -964,13 +1049,16 @@ def build_seedance2_project_assets(
     if mode == Seedance2I2VMode.FIRST_LAST_FRAME:
         last_frame_beat_num = next_beat_num or beat_num + 1
         last_frame_source = paths.frame(last_frame_beat_num)
-        last_frame_path = (
-            paths.valid_video_input_frame(
-                beat_num,
-                slot="last_frame",
-                source_path=last_frame_source,
-            )
-            or last_frame_source
+        last_frame_override = paths.valid_video_input_frame(
+            beat_num,
+            slot="last_frame",
+            source_path=last_frame_source,
+        )
+        last_frame_path = last_frame_override or _ensure_seedance2_min_dimension_image(
+            last_frame_source,
+            paths=paths,
+            beat_num=beat_num,
+            slot="last_frame",
         )
         add_image(
             key="first_frame",
@@ -997,6 +1085,7 @@ def build_seedance2_project_assets(
         selected=True,
         request_field="reference_images",
         note="多参考模式下作为参考图发送，不作为严格首帧。",
+        crop_source_path=first_frame_source,
     )
 
     resolved_characters = (

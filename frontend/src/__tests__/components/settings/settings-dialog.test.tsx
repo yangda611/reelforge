@@ -2,6 +2,7 @@
 // Copyright (c) 2026 ClaymoreLab
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import ky from "ky";
@@ -23,6 +24,7 @@ const modelGatewayMocks = vi.hoisted(() => ({
   saveBrainClaw: vi.fn(),
   saveMediaRelay: vi.fn(),
   saveOfficial: vi.fn(),
+  saveReasoning: vi.fn(),
   setCustomLlmMode: vi.fn(),
 }));
 const freezoneAgentConfigMocks = vi.hoisted(() => ({
@@ -94,6 +96,10 @@ vi.mock("@/lib/queries/model-gateway", () => ({
   useEnableBrainClaw: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSaveOfficialConfig: () => ({
     mutateAsync: modelGatewayMocks.saveOfficial,
+    isPending: false,
+  }),
+  useSaveReasoningConfig: () => ({
+    mutateAsync: modelGatewayMocks.saveReasoning,
     isPending: false,
   }),
   useSaveAgentLlmConfig: () => ({
@@ -410,6 +416,7 @@ beforeEach(() => {
   modelGatewayMocks.saveBrainClaw.mockReset();
   modelGatewayMocks.saveMediaRelay.mockReset();
   modelGatewayMocks.saveOfficial.mockReset();
+  modelGatewayMocks.saveReasoning.mockReset();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.success).mockClear();
   modelGatewayMocks.setCustomLlmMode.mockReset();
@@ -941,6 +948,126 @@ describe("SettingsDialog pages", () => {
     expect(screen.getByText("业务模型映射")).toBeInTheDocument();
     expect(screen.getByText("Embedding 模型")).toBeInTheDocument();
     expect(screen.getByText("媒体模型")).toBeInTheDocument();
+  });
+
+  it("defaults global thinking level to high and saves updates", async () => {
+    modelGatewayMocks.config = {
+      mode: "official",
+      effective: {
+        mode: "official",
+        source: "database",
+        baseUrl: "https://relayclaw.cdnfg.com/v1",
+        apiKeyPreview: "sk-o...cret",
+        configured: true,
+      },
+      llmEffective: {
+        mode: "official",
+        source: "database",
+        baseUrl: "https://relayclaw.cdnfg.com/v1",
+        apiKeyPreview: "sk-o...cret",
+        configured: true,
+        model: "brainclaw",
+      },
+      official: {
+        source: "database",
+        baseUrl: "https://relayclaw.cdnfg.com/v1",
+        apiKeyPreview: "sk-o...cret",
+        configured: true,
+        environment: {
+          baseUrl: "https://relayclaw.cdnfg.com/v1",
+          apiKeyPreview: "",
+          configured: false,
+        },
+      },
+      custom: {
+        llmMode: "advanced",
+        baseUrl: "",
+        apiKeyPreview: "",
+        configured: false,
+      },
+      reasoning: {
+        defaultEffort: "high",
+        featureEfforts: {},
+      },
+    };
+    modelGatewayMocks.saveReasoning.mockResolvedValue({
+      ok: true,
+      data: modelGatewayMocks.config,
+    });
+
+    const user = userEvent.setup();
+    renderSettingsDialog();
+
+    const trigger = screen.getByRole("combobox", { name: "全局思考等级" });
+    expect(trigger).toHaveTextContent("高（默认）");
+
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "中" }));
+
+    await waitFor(() => {
+      expect(modelGatewayMocks.saveReasoning).toHaveBeenCalledWith({
+        defaultEffort: "medium",
+      });
+    });
+  });
+
+  it("shows per-feature thinking level selector and saves feature overrides", async () => {
+    modelGatewayMocks.config = {
+      mode: "custom",
+      effective: {
+        mode: "custom",
+        source: "database",
+        baseUrl: "http://local-newapi:3000/v1",
+        apiKeyPreview: "sk-c...cret",
+        configured: true,
+      },
+      llmEffective: {
+        mode: "custom",
+        source: "database",
+        baseUrl: "http://local-newapi:3000/v1",
+        apiKeyPreview: "sk-c...cret",
+        configured: true,
+        model: "",
+      },
+      official: {
+        source: "none",
+        baseUrl: "",
+        apiKeyPreview: "",
+        configured: false,
+        environment: { baseUrl: "", apiKeyPreview: "", configured: false },
+      },
+      custom: {
+        llmMode: "advanced",
+        baseUrl: "http://local-newapi:3000/v1",
+        apiKeyPreview: "sk-c...cret",
+        configured: true,
+      },
+      reasoning: {
+        defaultEffort: "high",
+        featureEfforts: {},
+      },
+    };
+    modelGatewayMocks.saveReasoning.mockResolvedValue({
+      ok: true,
+      data: modelGatewayMocks.config,
+    });
+
+    const user = userEvent.setup();
+    renderSettingsDialog();
+
+    const cogneeTrigger = screen.getByRole("combobox", {
+      name: "① 内容理解与知识抽取（LLM） 思考等级",
+    });
+    expect(cogneeTrigger).toHaveTextContent("跟随默认（高）");
+
+    await user.click(cogneeTrigger);
+    await user.click(await screen.findByRole("option", { name: "关闭" }));
+
+    await waitFor(() => {
+      expect(modelGatewayMocks.saveReasoning).toHaveBeenCalledWith({
+        featureEfforts: { COGNEE: "off" },
+      });
+    });
   });
 
   it("limits EE settings to Freezone Skills with Recipes under advanced management", () => {

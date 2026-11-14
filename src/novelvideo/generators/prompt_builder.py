@@ -2070,6 +2070,7 @@ Show the STARTING pose, NOT the ending result."""
         lines.append("2. Only CHARACTER POSE/EXPRESSION changes between same-scene panels")
         lines.append("3. Camera angle may change, but architectural elements stay in same position")
         lines.append("4. Lighting source and color temperature stay consistent within a scene")
+        lines.append("5. SHOT SCALE & TRANSITION DISCIPLINE: Progress shot scales deliberately (Extreme Long / Full / Medium / Close-Up / ECU per the 15 shot-scale combinations). NEVER repeat 3+ consecutive same-angle medium shots in one scene; break monotonous dialogue with insert close-ups (hands, eyes, key props), preserve 180-degree screen axis and prop-in-hand continuity, and embed visual transition anchors (action match pose, eyeline lead, or foreground depth framing).")
 
         return "\n".join(lines)
 
@@ -2122,6 +2123,9 @@ Show the STARTING pose, NOT the ending result."""
         lines.append("BACKGROUND CONTINUITY RULES:")
         lines.append(
             "- Maintain consistent line weight, shading density, and perspective depth within same scene"
+        )
+        lines.append(
+            "- SHOT SCALE & TRANSITION DISCIPLINE: Progress shot scales deliberately (Extreme Long / Full / Medium / Close-Up / ECU per the 15 shot-scale combinations). NEVER repeat 3+ consecutive same-angle medium shots in one scene; alternate camera angle or insert detail close-ups (hands/eyes/props), keep 180-degree axis and prop continuity, and carry visual transition anchors across adjacent panels."
         )
 
         return "\n".join(lines)

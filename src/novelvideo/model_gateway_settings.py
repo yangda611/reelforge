@@ -56,6 +56,23 @@ VALID_CUSTOM_LLM_MODES = {
 AGENT_LLM_MODE_INHERIT = "inherit"
 AGENT_LLM_MODE_THIRD_PARTY = "third_party"
 VALID_AGENT_LLM_MODES = {AGENT_LLM_MODE_INHERIT, AGENT_LLM_MODE_THIRD_PARTY}
+REASONING_EFFORT_HIGH = "high"
+REASONING_EFFORT_MEDIUM = "medium"
+REASONING_EFFORT_LOW = "low"
+REASONING_EFFORT_MINIMAL = "minimal"
+REASONING_EFFORT_OFF = "off"
+REASONING_EFFORT_INHERIT = "inherit"
+DEFAULT_LLM_REASONING_EFFORT = REASONING_EFFORT_HIGH
+VALID_LLM_REASONING_EFFORTS = (
+    REASONING_EFFORT_HIGH,
+    REASONING_EFFORT_MEDIUM,
+    REASONING_EFFORT_LOW,
+    REASONING_EFFORT_MINIMAL,
+    REASONING_EFFORT_OFF,
+)
+VALID_LLM_REASONING_EFFORT_SET = frozenset(VALID_LLM_REASONING_EFFORTS)
+LLM_REASONING_EFFORT_KEY = "llm_reasoning_effort"
+LLM_FEATURE_REASONING_EFFORTS_KEY = "llm_feature_reasoning_efforts"
 PLACEHOLDER_API_KEYS = {
     "your_newapi_token",
     "your_model_api_key",
@@ -344,6 +361,164 @@ def save_official_text_model(model: str) -> None:
     on every call. An empty value clears the stored model.
     """
     _write_many({"official_text_model": str(model or "").strip()})
+
+
+def normalize_feature_reasoning_key(feature_key: str | None) -> str:
+    """Normalize a feature identifier or env var name (stripping trailing ``_MODEL``)."""
+    raw = str(feature_key or "").strip().upper()
+    if raw.endswith("_MODEL"):
+        raw = raw[:-6]
+    return raw
+
+
+def normalize_reasoning_effort(
+    value: str | None,
+    *,
+    default: str = DEFAULT_LLM_REASONING_EFFORT,
+) -> str:
+    """Normalize a stored or env reasoning effort value, falling back to ``default``."""
+    raw = str(value or "").strip().lower()
+    if raw in VALID_LLM_REASONING_EFFORT_SET:
+        return raw
+    return default
+
+
+def validate_reasoning_effort(
+    value: str | None,
+    *,
+    allow_inherit: bool = False,
+) -> str:
+    """Validate an explicit reasoning effort choice from API/UI input."""
+    raw = str(value or "").strip().lower()
+    if allow_inherit and raw in {"", REASONING_EFFORT_INHERIT}:
+        return REASONING_EFFORT_INHERIT
+    if raw in VALID_LLM_REASONING_EFFORT_SET:
+        return raw
+    supported = ", ".join(VALID_LLM_REASONING_EFFORTS)
+    raise ValueError(f"unsupported reasoning effort {value!r}; expected one of: {supported}")
+
+
+def _decode_feature_reasoning_efforts(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    efforts: dict[str, str] = {}
+    for key, item in raw.items():
+        feature = normalize_feature_reasoning_key(str(key or ""))
+        if not feature or feature == "MODEL_NAME":
+            continue
+        clean = str(item or "").strip().lower()
+        if clean in VALID_LLM_REASONING_EFFORT_SET:
+            efforts[feature] = clean
+    return efforts
+
+
+def _env_reasoning_effort() -> str:
+    return normalize_reasoning_effort(
+        os.environ.get("LLM_REASONING_EFFORT"),
+        default=DEFAULT_LLM_REASONING_EFFORT,
+    )
+
+
+def get_llm_reasoning_settings() -> dict[str, Any]:
+    """Return the persisted default and per-feature LLM thinking level settings."""
+    env_default = _env_reasoning_effort()
+    if not _uses_ce_gateway_settings():
+        return {"defaultEffort": env_default, "featureEfforts": {}}
+    settings = _read_all()
+    default_effort = normalize_reasoning_effort(
+        settings.get(LLM_REASONING_EFFORT_KEY),
+        default=env_default,
+    )
+    feature_efforts = _decode_feature_reasoning_efforts(
+        settings.get(LLM_FEATURE_REASONING_EFFORTS_KEY)
+    )
+    return {
+        "defaultEffort": default_effort,
+        "featureEfforts": feature_efforts,
+    }
+
+
+def save_llm_reasoning_settings(
+    *,
+    default_effort: str | None = None,
+    feature_efforts: dict[str, str | None] | None = None,
+    replace_features: bool = False,
+) -> dict[str, Any]:
+    """Persist default and/or per-feature LLM thinking levels in CE settings.db."""
+    values: dict[str, str] = {}
+    if default_effort is not None:
+        values[LLM_REASONING_EFFORT_KEY] = validate_reasoning_effort(default_effort)
+
+    if feature_efforts is not None:
+        current = get_llm_reasoning_settings()["featureEfforts"]
+        next_features: dict[str, str] = {} if replace_features else dict(current)
+        for key, item in feature_efforts.items():
+            feature = normalize_feature_reasoning_key(key)
+            if not feature or feature == "MODEL_NAME":
+                continue
+            validated = validate_reasoning_effort(item, allow_inherit=True)
+            if validated == REASONING_EFFORT_INHERIT:
+                next_features.pop(feature, None)
+            else:
+                next_features[feature] = validated
+        values[LLM_FEATURE_REASONING_EFFORTS_KEY] = json.dumps(
+            next_features, ensure_ascii=False, separators=(",", ":")
+        )
+
+    if values:
+        _write_many(values)
+    return get_llm_reasoning_settings()
+
+
+def get_feature_reasoning_effort_override(feature_key: str | None) -> str | None:
+    """Return an explicit per-feature thinking level override (including ``'off'``), or None."""
+    feature = normalize_feature_reasoning_key(feature_key)
+    if not feature or feature == "MODEL_NAME":
+        return None
+    settings = get_llm_reasoning_settings()
+    return settings["featureEfforts"].get(feature)
+
+
+def get_explicit_llm_reasoning_effort(feature_key: str | None = None) -> str | None:
+    """Return a saved CE override (per-feature or saved global) without falling back to the high default.
+
+    Returns ``None`` when no explicit thinking-level preference has been saved,
+    letting callers with dedicated defaults (such as env-configured Codex or Recipe
+    compiler) keep their existing behavior until the user sets one.
+    """
+    if not _uses_ce_gateway_settings():
+        return None
+    settings = _read_all()
+    feature = normalize_feature_reasoning_key(feature_key)
+    if feature and feature != "MODEL_NAME":
+        feature_efforts = _decode_feature_reasoning_efforts(
+            settings.get(LLM_FEATURE_REASONING_EFFORTS_KEY)
+        )
+        if feature in feature_efforts:
+            return feature_efforts[feature]
+    raw_default = str(settings.get(LLM_REASONING_EFFORT_KEY) or "").strip().lower()
+    if raw_default in VALID_LLM_REASONING_EFFORT_SET:
+        return raw_default
+    return None
+
+
+def get_effective_reasoning_effort(feature_key: str | None = None) -> str | None:
+    """Resolve the active OpenAI ``reasoning_effort`` value, or ``None`` when turned off."""
+    override = get_feature_reasoning_effort_override(feature_key)
+    selected = (
+        override
+        if override is not None
+        else get_llm_reasoning_settings()["defaultEffort"]
+    )
+    if selected == REASONING_EFFORT_OFF:
+        return None
+    return selected
 
 
 def save_custom_newapi_gateway(
@@ -2145,6 +2320,7 @@ def build_model_gateway_status(
             "tokenName": settings.get("custom_newapi_token_name", ""),
             "tokenId": settings.get("custom_newapi_token_id", ""),
         },
+        "reasoning": get_llm_reasoning_settings(),
     }
 
 

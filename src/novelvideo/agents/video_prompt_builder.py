@@ -16,6 +16,9 @@ from novelvideo.utils.debug_context import (
     create_debug_context,
     validate_episode_consistency,
 )
+from novelvideo.skills.cinematic_storyboard_skill import (
+    VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN,
+)
 from novelvideo.utils.source_language import asset_language_instruction
 
 
@@ -46,12 +49,12 @@ The first frame is video time `t=0`; the model cannot go backward to show action
 ❌ Inventing environmental dynamics (dust, fog, particles, wind-blown leaves) not visible in the frame
 ❌ Abstract emotion labels (sad, haunting, desperate, hopeful, anxious, melancholy) → show via body language (clenched fists, averted gaze, hunched shoulders)
 ❌ Non-visual senses (smell, temperature, humidity, taste, tactile) — the model generates only what is visible (and audible)
-❌ Static camera words (holds, stays, remains, static, locked, fixed) — camera must always move
+❌ Static camera words (holds, stays, remains, static, locked, fixed) — UNLESS `[LOCKED FIXED CAMERA]` is specified in the task
 ❌ Static primary verbs (freezes, stares, stands, waits, remains, holds still) as the main action — these produce frozen video
 ❌ Reversing or oscillating motion (steps forward then back, leans in then pulls away, nods then shakes head)
 
 ## Camera & Smooth Transition
-- Every prompt MUST include a camera direction with displacement or zoom (push-in, dolly, pan, tilt, track, crane, zoom)
+- Unless `[LOCKED FIXED CAMERA]` is specified, every prompt MUST include a camera direction with displacement or zoom (push-in, dolly, pan, tilt, track, crane, zoom). When `[LOCKED FIXED CAMERA]` IS specified, keep the camera steady on a locked tripod (zero pan/push/zoom) so background framing matches adjacent fixed-camera shots, and animate only continuous subject & ambient motion.
 - Describe the camera endpoint: what the frame looks like when camera motion finishes, shaping the final 1–1.5s into an intentional transition bridge when adjacent-beat context is available (action follow-through, eyeline lead, passing a visible foreground element, same-direction camera sweep, or clean framing endpoint for a crisp scene cut — without inventing ungrounded objects)
 - Match detail to shot scale: close-up → micro details; wide shot → broad arcs
 
@@ -71,7 +74,7 @@ If the textual visual_description implies an action moment that the first frame 
 
 ## Output
 Output the motion prompt directly. No explanation. No markdown.
-"""
+""" + VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN
 
 
 def create_video_prompt_builder_agent(language: str = "zh") -> Agent:
@@ -163,6 +166,7 @@ class VideoPromptBuilder:
         color_map_text: str = "",
         audio_type: str = "narration",
         dialogue_line: str = "",
+        locked_camera: bool = False,
     ) -> str:
         """构建视频运动提示词。
 
@@ -214,6 +218,7 @@ class VideoPromptBuilder:
             audio_type=audio_type,
             dialogue_line=dialogue_line,
             language=language,
+            locked_camera=locked_camera,
         )
 
         language_label = "English" if language == "en" else "中文"
@@ -298,6 +303,7 @@ class VideoPromptBuilder:
         audio_type,
         dialogue_line,
         language="zh",
+        locked_camera: bool = False,
     ) -> str:
         """构建英文 task 模板 (SuperPower)。"""
         if language == "en":
@@ -324,6 +330,13 @@ class VideoPromptBuilder:
         if audio_type == "dialogue" and dialogue_line:
             dialogue_hint = '\n⚠️ This Beat is DIALOGUE — speaking is the primary motion. Describe lips moving, gestures while talking. Dialogue text is appended by the system; only describe physical action.\n'
 
+        locked_camera_rule = ""
+        if locked_camera:
+            locked_camera_rule = (
+                "\n7. **[LOCKED FIXED CAMERA]**: Hold the camera stationary on a locked tripod "
+                "(NO zoom, push-in, pan, or tilt); preserve background framing and convey continuity solely through continuous character and ambient motion."
+            )
+
         if has_image and color_map_text:
             return f"""Generate I2V motion prompt in {output_label} (target: {word_target}, {sentence_target}):
 
@@ -343,7 +356,7 @@ class VideoPromptBuilder:
 3. ⚠️ **Motion must fill {duration:.1f}s** — chain of 2-3 connected forward actions.
 4. Target: {word_target}
 5. If the textual visual_description implies an action moment the first frame has not yet reached, start from the next compatible action.
-6. NO character names → use appearance descriptions from the color mapping
+6. NO character names → use appearance descriptions from the color mapping{locked_camera_rule}
 
 ## Output Language
 {language_instruction}
@@ -365,7 +378,7 @@ Output the motion prompt in {output_label} directly.
 3. ⚠️ **Motion must fill {duration:.1f}s** — describe continuous, progressive motion to avoid finishing too early.
 4. Target: {word_target}
 5. If the textual visual_description implies an action moment the first frame has not yet reached, start from the next compatible action.
-6. NO character names → use visual descriptions ("the woman in gray"); distinguish multiple characters by visual features
+6. NO character names → use visual descriptions ("the woman in gray"); distinguish multiple characters by visual features{locked_camera_rule}
 
 ## Output Language
 {language_instruction}
@@ -387,7 +400,7 @@ Output the motion prompt in {output_label} directly.
 4. ⚠️ **Motion must fill {duration:.1f}s** — describe continuous, progressive motion to avoid finishing too early.
 5. Target: {word_target}
 6. If the textual visual_description implies an action moment the first frame has not yet reached, start from the next compatible action.
-7. NO character names → use visual descriptions ("the woman in black"); distinguish multiple characters by visual features
+7. NO character names → use visual descriptions ("the woman in black"); distinguish multiple characters by visual features{locked_camera_rule}
 
 ## Output Language
 {language_instruction}

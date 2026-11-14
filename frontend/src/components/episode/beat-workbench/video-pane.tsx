@@ -21,6 +21,7 @@ import {
   Image as ImageIcon,
   Library,
   Loader2,
+  Lock,
   Mic,
   RefreshCw,
   Scissors,
@@ -75,7 +76,7 @@ import {
 } from "@/components/episode/beat-workbench/seedance2-mentions";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useUpdateBeat } from "@/lib/queries/scripts";
+import { useScript, useUpdateBeat } from "@/lib/queries/scripts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -214,8 +215,10 @@ interface Seedance2ConfigDraft {
   mode: "first_frame" | "first_last_frame" | "multimodal_reference";
   mode_user_set: boolean;
   duration: number;
+  duration_user_set: boolean;
   resolution: Seedance2Resolution;
   ratio: "9:16" | "16:9" | "1:1" | "4:3" | "3:4" | "21:9" | "2:3" | "3:2";
+  ratio_user_set: boolean;
   generate_audio: boolean;
   generate_audio_user_set: boolean;
   return_last_frame: boolean;
@@ -367,6 +370,21 @@ export function VideoPane({
     }
     return labels;
   }, [videoBackends]);
+  const scriptQuery = useScript(project, episode);
+  const lockedToAnchorBeat =
+    typeof beat.scene_ref?.lock_camera_beat === "number" &&
+    beat.scene_ref.lock_camera_beat > 0
+      ? beat.scene_ref.lock_camera_beat
+      : null;
+  const nextLockedBeatNumber = useMemo(() => {
+    const beats = scriptQuery.data?.data?.beats ?? [];
+    const match = beats.find(
+      (b) =>
+        b.beat_number !== beat.beat_number &&
+        b.scene_ref?.lock_camera_beat === beat.beat_number,
+    );
+    return match ? match.beat_number : null;
+  }, [scriptQuery.data, beat.beat_number]);
   const selectedBackend = videoBackends.find((b) => b.value === defaultBackend);
   const showSeedance2Config = selectedBackend?.is_seedance2 === true;
   const showHappyHorseConfig = selectedBackend?.is_happyhorse === true;
@@ -1035,6 +1053,8 @@ export function VideoPane({
       const parsedDraft = parseSeedance2Config(
         res.data.seedance2_config_json,
         seedance2DefaultRatioForProjectAspect(spec.renderAspect),
+        suggestedVideoDuration,
+        seedance2VideoDurationBounds,
       );
       const nextDraft = showGrokVideoConfig
         ? normalizeGrokVideoDraftForBackend(
@@ -1073,6 +1093,24 @@ export function VideoPane({
   };
   const updateSeedance2Mode = (mode: Seedance2ConfigDraft["mode"]) => {
     const next = { ...seedance2DraftRef.current, mode, mode_user_set: true };
+    seedance2DraftRef.current = next;
+    setSeedance2Draft(next);
+  };
+  const updateSeedance2Duration = (duration: number) => {
+    const next = {
+      ...seedance2DraftRef.current,
+      duration,
+      duration_user_set: true,
+    };
+    seedance2DraftRef.current = next;
+    setSeedance2Draft(next);
+  };
+  const updateSeedance2Ratio = (ratio: Seedance2ConfigDraft["ratio"]) => {
+    const next = {
+      ...seedance2DraftRef.current,
+      ratio,
+      ratio_user_set: true,
+    };
     seedance2DraftRef.current = next;
     setSeedance2Draft(next);
   };
@@ -1599,6 +1637,31 @@ export function VideoPane({
           </div>
         )}
       </div>
+
+      {(lockedToAnchorBeat !== null || nextLockedBeatNumber !== null) && (
+        <div className="col-span-2 flex flex-col gap-1 rounded-[8px] border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-foreground/90">
+          {lockedToAnchorBeat !== null && (
+            <div className="flex items-center gap-2">
+              <Lock className="size-3.5 shrink-0 text-primary" />
+              <span>
+                {t("episode.workbench.spatialLock.videoBannerLockedTo", {
+                  n: lockedToAnchorBeat,
+                })}
+              </span>
+            </div>
+          )}
+          {nextLockedBeatNumber !== null && (
+            <div className="flex items-center gap-2">
+              <Lock className="size-3.5 shrink-0 text-primary" />
+              <span>
+                {t("episode.workbench.spatialLock.videoBannerFeedNext", {
+                  n: nextLockedBeatNumber,
+                })}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {!showPromptConfig && (
         <div
@@ -2299,8 +2362,7 @@ export function VideoPane({
                 max={seedance2VideoDurationBounds.max}
                 value={seedance2Draft.duration}
                 onChange={(e) =>
-                  updateSeedance2Draft(
-                    "duration",
+                  updateSeedance2Duration(
                     clampDuration(e.target.value, seedance2VideoDurationBounds),
                   )
                 }
@@ -2354,8 +2416,7 @@ export function VideoPane({
               <Select
                 value={seedance2Draft.ratio}
                 onValueChange={(v) =>
-                  updateSeedance2Draft(
-                    "ratio",
+                  updateSeedance2Ratio(
                     showGrokVideoConfig
                       ? normalizeGrokVideoRatio(v)
                       : showHappyHorseConfig
@@ -3330,17 +3391,33 @@ function defaultSeedance2Config(
       : {};
   const modeUserSet = raw.mode_user_set === true;
   const rawMode = normalizeSeedance2Mode(raw.mode);
+  const durationUserSet = raw.duration_user_set === true;
+  const ratioUserSet = raw.ratio_user_set === true;
   const parsedDuration = Number(raw.duration);
-  const duration = Number.isFinite(parsedDuration) && parsedDuration > 0
-    ? parsedDuration
-    : defaultDuration;
+  const hasGeneratedDuration =
+    raw.duration_user_set === false &&
+    String(raw.prompt_source ?? "").trim().length > 0 &&
+    Number.isFinite(parsedDuration) &&
+    parsedDuration > 0;
+  const duration =
+    durationUserSet && Number.isFinite(parsedDuration) && parsedDuration > 0
+      ? parsedDuration
+      : hasGeneratedDuration
+      ? parsedDuration
+      : Number.isFinite(parsedDuration) && parsedDuration > 0 && parsedDuration !== 4
+      ? parsedDuration
+      : defaultDuration;
   return {
     raw,
     mode: !modeUserSet && raw.mode === "first_frame" ? "multimodal_reference" : rawMode,
     mode_user_set: modeUserSet,
     duration: clampDuration(duration, durationBounds),
+    duration_user_set: durationUserSet,
     resolution: normalizeSeedance2Resolution(raw.resolution),
-    ratio: normalizeSeedance2Ratio(raw.ratio, defaultRatio),
+    ratio: ratioUserSet
+      ? normalizeSeedance2Ratio(raw.ratio, defaultRatio)
+      : defaultRatio,
+    ratio_user_set: ratioUserSet,
     generate_audio_user_set: raw.generate_audio_user_set === true,
     generate_audio: !(raw.generate_audio === false && raw.generate_audio_user_set === true),
     return_last_frame: raw.return_last_frame === true,
@@ -3705,8 +3782,10 @@ function sameSeedance2Config(
     left.mode === right.mode &&
     left.mode_user_set === right.mode_user_set &&
     left.duration === right.duration &&
+    left.duration_user_set === right.duration_user_set &&
     left.resolution === right.resolution &&
     left.ratio === right.ratio &&
+    left.ratio_user_set === right.ratio_user_set &&
     left.generate_audio === right.generate_audio &&
     left.generate_audio_user_set === right.generate_audio_user_set &&
     left.return_last_frame === right.return_last_frame &&
@@ -3738,8 +3817,10 @@ function serializeSeedance2Config(
     mode: draft.mode,
     mode_user_set: draft.mode_user_set,
     duration: draft.duration,
+    duration_user_set: draft.duration_user_set,
     resolution: draft.resolution,
     ratio: draft.ratio,
+    ratio_user_set: draft.ratio_user_set,
     generate_audio: draft.generate_audio,
     generate_audio_user_set: draft.generate_audio_user_set,
     return_last_frame: draft.return_last_frame,

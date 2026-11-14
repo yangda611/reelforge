@@ -76,7 +76,7 @@ async def test_await_with_cancel_watch_times_out_from_deadline():
             deadline_monotonic=0.0,
         )
 
-    assert exc_info.value.timeout_seconds == 30 * 60
+    assert exc_info.value.timeout_seconds == 2 * 60 * 60
 
 
 def test_raise_if_envelope_cancel_requested_checks_deadline():
@@ -117,12 +117,12 @@ def test_remaining_timeout_seconds_raises_when_deadline_expired():
         )
 
 
-def test_project_task_timeout_defaults_to_30_minutes_without_celery(monkeypatch):
+def test_project_task_timeout_defaults_to_2_hours_without_celery(monkeypatch):
     from novelvideo.task_backend import run_core
 
     monkeypatch.delenv("ST_PROJECT_TASK_TIMEOUT_S", raising=False)
 
-    assert run_core._project_task_timeout_seconds() == 30 * 60
+    assert run_core._project_task_timeout_seconds() == 2 * 60 * 60
 
 
 def test_project_task_timeout_reads_ce_neutral_env(monkeypatch):
@@ -160,7 +160,7 @@ def test_run_project_task_core_injects_deadline_for_runner(monkeypatch):
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(run_core, "_clear_project_task_metrics_context", lambda: None)
-    monkeypatch.setattr(run_core, "_project_task_timeout_seconds", lambda: 30 * 60)
+    monkeypatch.setattr(run_core, "_project_task_timeout_seconds", lambda: 2 * 60 * 60)
     register_project_task_runner("timeout_probe", fake_runner)
 
     manager = _FakeTaskManager()
@@ -175,7 +175,7 @@ def test_run_project_task_core_injects_deadline_for_runner(monkeypatch):
 
     assert result == {"ok": True}
     assert captured["__run_task_id"] == "task_1"
-    assert captured["__timeout_seconds"] == 30 * 60
+    assert captured["__timeout_seconds"] == 2 * 60 * 60
     assert isinstance(captured["__deadline_monotonic"], float)
 
 

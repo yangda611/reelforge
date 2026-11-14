@@ -731,7 +731,7 @@ class MockTTSGenerator:
                     ],
                     capture_output=True,
                     check=True,
-                    timeout=30 * 60,
+                    timeout=2 * 60 * 60,
                 )
             except (TaskCancelled, TaskTimedOut):
                 raise

@@ -3894,6 +3894,7 @@
       "preview": "Xem trước",
       "view": {
         "display": "Hiển thị",
+        "selectAll": "Chọn tất cả",
         "selectedCount": "Đã chọn {{count}}",
         "clear": "Bỏ chọn",
         "totalShots": "{{count}} cú máy",
@@ -4331,6 +4332,21 @@
         "lockedLightTooltip": "Khoá ánh sáng: dùng đúng ánh sáng vốn có của ảnh bối cảnh; không đổi sáng.",
         "lockedLightLabel": "Khoá ánh sáng"
       },
+      "spatialLock": {
+        "label": "Khoá không gian máy quay cố định",
+        "idleHint": "Không khoá: khung hình và chuyển động máy tự do",
+        "activeHint": "Neo nền và vị trí đứng theo #B{{n}}; video giữ máy quay chân đế cố định",
+        "modeOff": "Không khoá",
+        "modeFullBody": "Khoá máy · Toàn thân",
+        "modeUpperBody": "Khoá máy · Chỉ sửa nửa thân trên",
+        "anchorLabel": "Beat neo",
+        "anchorItem": "Neo #B{{n}}",
+        "lockedToast": "Đã khoá máy quay và không gian nền theo #B{{n}}",
+        "unlockedToast": "Đã bỏ khoá máy quay cố định",
+        "saveFailed": "Lưu thiết lập khoá máy quay cố định thất bại",
+        "videoBannerLockedTo": "Chuỗi máy quay cố định (neo #B{{n}}): giữ khung hình chân đế ổn định để chuyển cảnh mượt mà.",
+        "videoBannerFeedNext": "Cú máy này là điểm neo cho beat cố định kế tiếp (#B{{n}}): giữ chuyển động cuối mượt (chế độ đầu-cuối nối khớp liền mạch)."
+      },
       "renderGrid": {
         "title": "Lưới render",
         "titleWithCount": "Lưới render ({{count}} lưới)",
@@ -4398,6 +4414,11 @@
         "reassignColorsDesc": "Thao tác này sẽ gán lại màu cho phác thảo của tập này dựa trên các tạo hình hiện có trong kịch bản. Phác thảo hiện có có thể hiển thị dấu màu không nhất quán.",
         "reassignColorsTooltip": "Gán lại màu dựa trên tạo hình trong kịch bản (chạy lại nhiều lần vẫn cho kết quả như nhau)",
         "reassignColorsSuccess": "Đã gán lại màu cho {{count}} tạo hình và {{propCount}} đạo cụ",
+        "aiCameraLock": "Khóa máy quay AI",
+        "aiCameraLockTooltip": "Tự động phân tích và khóa không gian máy quay cố định cho các beat liên tiếp cùng bối cảnh",
+        "aiCameraLockRunning": "Đang phân tích khóa máy quay cố định…",
+        "aiCameraLockEmpty": "Không tìm thấy cảnh liên tiếp nào cần khóa máy quay cố định trong tập này",
+        "aiCameraLockSuccess": "Đã lập kế hoạch khóa máy quay cho {{count}} beat ({{beats}})",
         "genAudioTitle": "Tạo toàn bộ âm thanh?",
         "genAudioDesc": "Tạo lồng tiếng TTS cho mọi beat còn thiếu âm thanh.",
         "genAudio": "Tạo toàn bộ âm thanh",
@@ -7982,6 +8003,25 @@
         "fetchFailed": "Không thể lấy danh sách model. Hãy đồng bộ kênh và kiểm tra hỗ trợ của nhà cung cấp, hoặc nhập tên thủ công.",
         "syncFirst": "Đồng bộ key và Base URL của kênh trước khi lấy danh sách model."
       },
+      "reasoning": {
+        "title": "Mức suy luận toàn cục",
+        "description": "Bật suy luận cho các model đã cấu hình với mức mặc định (Cao). Chuyển toàn cục hoặc theo từng tính năng sang Tắt nếu model từ chối tham số suy luận.",
+        "saved": "Đã lưu mức suy luận cho các lượt gọi model tiếp theo.",
+        "levels": {
+          "high": "Cao (Mặc định)",
+          "medium": "Trung bình",
+          "low": "Thấp",
+          "minimal": "Tối thiểu",
+          "off": "Tắt (không gửi tham số)"
+        },
+        "shortLevels": {
+          "high": "Cao",
+          "medium": "Vừa",
+          "low": "Thấp",
+          "minimal": "Tối thiểu",
+          "off": "Tắt"
+        }
+      },
       "featureModels": {
         "title": "Ánh xạ model theo nghiệp vụ",
         "description": "Gán model từ nhà cung cấp cho các tính năng hiểu văn bản, tạo nội dung và hiểu hình ảnh. Tính năng chưa gán sẽ dùng mặc định của backend.",
@@ -8052,14 +8092,19 @@
         "colProvider": "Kênh đã cấu hình",
         "colUpstreamModel": "Model phía nhà cung cấp",
         "colModel": "Model phía nhà cung cấp",
+        "colReasoning": "Suy luận",
+        "reasoningInherit": "Mặc định ({{default}})",
         "upstreamModelPlaceholder": "Nhập model phía nhà cung cấp, vd. qwen-plus",
         "save": "Lưu ánh xạ",
         "saveRow": "Lưu",
         "savedOne": "Đã lưu kênh cho tính năng này.",
         "applyToAll": "Áp dụng cho tất cả",
         "bulkModelPlaceholder": "Điền hàng loạt model phía nhà cung cấp, vd. qwen-plus",
-        "bulkMissingModel": "Hãy nhập model phía nhà cung cấp cần áp dụng trước.",
+        "bulkMissingModel": "Hãy nhập model hoặc chọn mức suy luận cần áp dụng trước.",
+        "bulkReasoningKeep": "Suy luận (giữ nguyên)",
+        "bulkReasoningInherit": "Theo mặc định chung",
         "bulkApplied": "Đã điền {{count}} bản nháp model. Bấm Lưu ánh xạ để ghi chúng vào NewAPI.",
+        "bulkReasoningApplied": "Đã cập nhật mức suy luận cho {{count}} tính năng.",
         "saveHint": "Ghi các kênh NewAPI, nhóm theo từng nhà cung cấp.",
         "saved": "Đã lưu {{count}} kênh.",
         "savedPartial": "Xong: {{succeeded}} thành công, {{failed}} thất bại.",

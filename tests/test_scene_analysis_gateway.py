@@ -105,7 +105,7 @@ async def test_analysis_sends_image_and_business_alias_to_gateway(
     )
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["max_completion_tokens"] == tokens
-    assert payload["reasoning_effort"] == "none"
+    assert payload["reasoning_effort"] == "high"
     assert factory_calls[0][:2] == (model_env, alias)
     assert factory_calls[0][2]["capability"] == "vision.analyze"
 

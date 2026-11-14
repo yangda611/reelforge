@@ -246,13 +246,16 @@ def test_gemini_direct_does_not_inherit_newapi_endpoint(monkeypatch):
     assert "LLM_ENDPOINT" not in os.environ
 
 
-def test_cognee_litellm_structured_output_disables_reasoning(monkeypatch, tmp_path):
+def test_cognee_litellm_structured_output_uses_configured_reasoning_default_high(
+    monkeypatch, tmp_path
+):
     import asyncio
     from types import SimpleNamespace
 
     import litellm
 
     from novelvideo.cognee.store import CogneeStore
+    from novelvideo.model_gateway_settings import save_llm_reasoning_settings
 
     calls: list[dict] = []
 
@@ -262,7 +265,11 @@ def test_cognee_litellm_structured_output_disables_reasoning(monkeypatch, tmp_pa
             choices=[SimpleNamespace(message=SimpleNamespace(content='{"assignments":{}}'))]
         )
 
+    from novelvideo import config
+
     monkeypatch.setattr(litellm, "acompletion", fake_completion)
+    monkeypatch.setattr(config, "STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
     store = CogneeStore(
         "structured-output-test",
         output_dir=str(tmp_path / "output"),
@@ -273,5 +280,13 @@ def test_cognee_litellm_structured_output_disables_reasoning(monkeypatch, tmp_pa
 
     assert result == {}
     assert len(calls) == 1
-    assert calls[0]["reasoning_effort"] == "none"
+    assert calls[0]["reasoning_effort"] == "high"
     assert calls[0]["allowed_openai_params"] == ["reasoning_effort"]
+
+    calls.clear()
+    save_llm_reasoning_settings(feature_efforts={"COGNEE": "off"})
+    asyncio.run(store._assign_events_to_episodes([], 1))
+
+    assert len(calls) == 1
+    assert "reasoning_effort" not in calls[0]
+    assert "allowed_openai_params" not in calls[0]

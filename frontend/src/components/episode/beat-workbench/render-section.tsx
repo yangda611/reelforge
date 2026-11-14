@@ -77,6 +77,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CreditCostInline } from "@/components/credit-cost-inline";
+import { FixedCameraLockControl } from "./fixed-camera-lock-control";
 import {
   CROP_DIALOG_SAVE_BUTTON_CLASS,
   MEDIA_PRIMARY_ACTION_BUTTON_CLASS,
@@ -652,6 +653,8 @@ export function RenderSection({
           </div>
         </div>
       </section>
+
+      <FixedCameraLockControl beat={beat} project={project} episode={episode} />
 
       <RenderBackgroundReferencePanel
         anchor={currentBackground}

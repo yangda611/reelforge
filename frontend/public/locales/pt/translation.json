@@ -4011,6 +4011,7 @@
       "preview": "Pré-visualizar",
       "view": {
         "display": "Mostrar",
+        "selectAll": "Selecionar tudo",
         "selectedCount": "{{count}} selecionadas",
         "clear": "Limpar",
         "totalShots": "{{count}} planos",
@@ -4448,6 +4449,21 @@
         "lockedLightTooltip": "Iluminação bloqueada: utiliza a iluminação da própria imagem da cena; sem Relight.",
         "lockedLightLabel": "Iluminação bloqueada"
       },
+      "spatialLock": {
+        "label": "Bloqueio espacial de câmara fixa",
+        "idleHint": "Desbloqueado: enquadramento e movimento livres",
+        "activeHint": "Ancorado no plano de fundo de #B{{n}}; o vídeo mantém tripé estável",
+        "modeOff": "Desbloqueado",
+        "modeFullBody": "Câmara fixa · Corpo inteiro",
+        "modeUpperBody": "Câmara fixa · Apenas tronco",
+        "anchorLabel": "Beat âncora",
+        "anchorItem": "Âncora #B{{n}}",
+        "lockedToast": "Câmara e espaço bloqueados em #B{{n}}",
+        "unlockedToast": "Bloqueio de câmara fixa removido",
+        "saveFailed": "Falha ao guardar bloqueio de câmara fixa",
+        "videoBannerLockedTo": "Sequência de câmara fixa (ancorada em #B{{n}}): enquadramento em tripé estável para cortes contínuos.",
+        "videoBannerFeedNext": "Este plano serve de âncora para o beat seguinte (#B{{n}}): mantenha o final estável (o modo primeiro/último fotograma liga sem saltos)."
+      },
       "renderGrid": {
         "title": "Grelha de Render",
         "titleWithCount": "Grelha de Render ({{count}} grelhas)",
@@ -4515,6 +4531,11 @@
         "reassignColorsDesc": "Esta ação reatribui as cores dos esboços deste episódio com base nas identidades atuais do guião. Os esboços existentes podem apresentar marcadores de cor inconsistentes.",
         "reassignColorsTooltip": "Reatribuir cores com base nas identidades do guião (idempotente)",
         "reassignColorsSuccess": "Cores reatribuídas para {{count}} identidades e {{propCount}} adereços",
+        "aiCameraLock": "Bloqueio de câmara IA",
+        "aiCameraLockTooltip": "Analisar automaticamente o episódio para bloquear o enquadramento espacial de planos consecutivos",
+        "aiCameraLockRunning": "A analisar bloqueios de câmara fixa…",
+        "aiCameraLockEmpty": "Não foram encontrados planos consecutivos adequados para bloqueio de câmara fixa neste episódio",
+        "aiCameraLockSuccess": "Bloqueio de câmara planeado para {{count}} plano(s) ({{beats}})",
         "genAudioTitle": "Gerar todo o áudio?",
         "genAudioDesc": "Gerar locução TTS para todos os beats sem áudio.",
         "genAudio": "Gerar todo o áudio",
@@ -8477,6 +8498,25 @@
         "fetchFailed": "Não foi possível obter os modelos. Sincronize o canal e verifique o suporte da lista de modelos a montante ou introduza um nome manualmente.",
         "syncFirst": "Sincronize a chave do canal e o URL base antes de obter os modelos."
       },
+      "reasoning": {
+        "title": "Nível de raciocínio global",
+        "description": "Ativa o raciocínio nos modelos configurados com um nível predefinido (Alto por omissão). Altere globalmente ou por funcionalidade para Desligado se o modelo a montante rejeitar o parâmetro.",
+        "saved": "Nível de raciocínio guardado para as próximas chamadas de modelo.",
+        "levels": {
+          "high": "Alto (Predefinido)",
+          "medium": "Médio",
+          "low": "Baixo",
+          "minimal": "Mínimo",
+          "off": "Desligado (omitir parâmetro)"
+        },
+        "shortLevels": {
+          "high": "Alto",
+          "medium": "Médio",
+          "low": "Baixo",
+          "minimal": "Mínimo",
+          "off": "Desligado"
+        }
+      },
       "featureModels": {
         "title": "Mapeamento de modelos por funcionalidade",
         "description": "Atribua modelos a montante às funcionalidades de compreensão de texto, geração de conteúdo e compreensão visual. As funcionalidades não definidas utilizam as predefinições do backend.",
@@ -8547,14 +8587,19 @@
         "colProvider": "Canal configurado",
         "colUpstreamModel": "Modelo upstream",
         "colModel": "Modelo upstream",
+        "colReasoning": "Raciocínio",
+        "reasoningInherit": "Predef. ({{default}})",
         "upstreamModelPlaceholder": "Introduza o modelo upstream, por exemplo, qwen-plus",
         "save": "Guardar mapeamento",
         "saveRow": "Guardar",
         "savedOne": "O canal desta funcionalidade foi guardado.",
         "applyToAll": "Aplicar a todos",
         "bulkModelPlaceholder": "Preencher em massa o modelo upstream, por exemplo, qwen-plus",
-        "bulkMissingModel": "Introduza primeiro o modelo upstream a aplicar.",
+        "bulkMissingModel": "Introduza primeiro o modelo upstream ou selecione um nível de raciocínio a aplicar.",
+        "bulkReasoningKeep": "Raciocínio (manter)",
+        "bulkReasoningInherit": "Seguir predefinição global",
         "bulkApplied": "Foram preenchidos {{count}} rascunhos de modelos. Clique em Guardar mapeamento para os gravar na NewAPI.",
+        "bulkReasoningApplied": "Nível de raciocínio atualizado para {{count}} funcionalidade(s).",
         "saveHint": "Grava os canais da NewAPI agrupados por fornecedor.",
         "saved": "Canais guardados: {{count}}.",
         "savedPartial": "Concluído: {{succeeded}} com êxito, {{failed}} com falha.",

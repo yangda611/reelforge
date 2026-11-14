@@ -200,10 +200,33 @@ async def _run_script_writer_scoped(
                 logs=[f"自动配色失败（不影响脚本）: {exc}"],
             )
 
+        try:
+            from novelvideo.agents.fixed_camera_planner import (
+                apply_fixed_camera_plan_for_episode,
+            )
+
+            lock_plan = await apply_fixed_camera_plan_for_episode(store, episode)
+            locked_beats = list(lock_plan.get("locked_beats") or [])
+            if locked_beats:
+                manager.update_progress_for_project(
+                    ctx,
+                    "script_writer",
+                    episode,
+                    logs=[f"已自动规划 {len(locked_beats)} 个固定机位锁定镜头: {locked_beats}"],
+                )
+        except Exception as exc:  # noqa: BLE001
+            manager.update_progress_for_project(
+                ctx,
+                "script_writer",
+                episode,
+                logs=[f"自动固定机位规划失败（不影响脚本）: {exc}"],
+            )
+
+        refreshed_beats = await store.get_beats_as_dicts(episode)
         result = {
             "episode": episode,
             "beats": len(script.beats),
-            "beats_data": [beat.model_dump() for beat in script.beats],
+            "beats_data": refreshed_beats or [beat.model_dump() for beat in script.beats],
             "review_passed": workflow.last_review_passed,
             "review_summary": workflow.last_review_summary,
             "degraded_lines": list(

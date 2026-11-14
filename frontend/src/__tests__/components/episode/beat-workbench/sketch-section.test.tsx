@@ -63,11 +63,16 @@ vi.mock("@/lib/queries/scripts", () => ({
     data: {
       ok: true,
       data: {
+        beats: [],
         sketch_colors: {
           "陆辰_青年时期": "#00ffff CYAN",
         },
       },
     },
+  }),
+  useUpdateBeat: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ ok: true, data: {} }),
+    isPending: false,
   }),
 }));
 
