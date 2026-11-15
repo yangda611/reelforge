@@ -21,11 +21,18 @@ export function ChannelModelInput(props: ChannelModelInputProps) {
   const { t } = useTranslation();
   const query = useChannelModels({
     provider: props.provider,
+    channelId: props.channelId,
+    baseUrl: props.baseUrl,
+    apiKey: props.apiKey,
     newApiBaseUrl: props.newApiBaseUrl,
     database: props.database,
   });
   const models = query.data?.data.models ?? [];
-  const canFetch = Boolean(props.provider && props.newApiBaseUrl && props.provider !== "comfyui");
+  const canFetch = Boolean(
+    props.provider
+      && props.provider !== "comfyui"
+      && (props.channelId || props.baseUrl || props.apiKey || props.newApiBaseUrl),
+  );
 
   return (
     <Combobox.Root
@@ -100,6 +107,9 @@ export function ChannelModelsButton(props: ChannelModelsInput & { disabled?: boo
   const { t } = useTranslation();
   const query = useChannelModels({
     provider: props.provider,
+    channelId: props.channelId,
+    baseUrl: props.baseUrl,
+    apiKey: props.apiKey,
     newApiBaseUrl: props.newApiBaseUrl,
     database: props.database,
   });

@@ -280,8 +280,31 @@ def get_freezone_text_writer_agent() -> Agent:
 
 def resolve_freezone_text_writer_model() -> str:
     """返回当前自由文本生成逻辑模型名，供结果与审计记录使用。"""
-    from novelvideo.config import get_newapi_text_model_name
+    from novelvideo.config import (
+        get_effective_newapi_text_model_name,
+        get_newapi_text_model_name,
+    )
+    from novelvideo.model_gateway_settings import (
+        get_effective_llm_config,
+        invoke_effective_llm_config,
+    )
+    from novelvideo.shared.runtime_env import uses_local_ce_runtime
 
+    if uses_local_ce_runtime():
+        llm_config = invoke_effective_llm_config(
+            get_effective_llm_config,
+            feature_key="FREEZONE_TEXT_WRITER",
+        )
+        if getattr(llm_config, "source", "") == "custom_direct":
+            return get_effective_newapi_text_model_name(
+                "FREEZONE_TEXT_WRITER_MODEL",
+                FREEZONE_TEXT_WRITER_MODEL,
+            )
+        if (
+            not getattr(llm_config, "is_brainclaw", False)
+            and str(getattr(llm_config, "model", "") or "").strip()
+        ):
+            return str(llm_config.model).strip()
     return get_newapi_text_model_name(
         "FREEZONE_TEXT_WRITER_MODEL",
         FREEZONE_TEXT_WRITER_MODEL,

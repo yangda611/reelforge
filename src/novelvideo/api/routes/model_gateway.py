@@ -23,15 +23,20 @@ from novelvideo.model_gateway_settings import (
     build_gateway_media_catalog,
     build_media_relay_status,
     build_model_gateway_status,
+    build_newapi_provider_channels_status,
+    fetch_direct_channel_models,
     get_bundled_media_catalog_entries,
     get_effective_llm_config,
+    get_feature_model_mappings,
     get_model_gateway_settings,
     get_effective_media_relay_config,
     get_official_media_catalog_update_status,
+    is_direct_multi_channel_mode,
     normalize_relay_base_url,
     normalize_api_key,
     parse_comfyui_channel_workflows,
     probe_model_gateway,
+    save_feature_model_mappings,
     save_media_relay_config,
     save_agent_llm_config,
     save_llm_reasoning_settings,
@@ -48,6 +53,7 @@ from novelvideo.model_gateway_settings import (
     save_newapi_provider_channels,
     get_newapi_provider_channel,
     get_newapi_provider_channels,
+    set_direct_multi_channel_mode,
     set_model_gateway_mode,
     set_custom_llm_mode,
     test_official_gateway,
@@ -75,9 +81,11 @@ from novelvideo.newapi_provisioner import (
     ensure_admin_access_token,
     fetch_provider_channel_models,
     get_provisioner_config,
+    list_builtin_channel_types,
     list_channel_types,
     mask_token,
     NewApiSetupCredentials,
+    provisioner_enabled,
     ServiceControlEgressDenied,
     require_provisioner_enabled,
     upsert_channel,
@@ -173,7 +181,7 @@ def _comfyui_media_model_config(
     return current
 
 
-def require_ce_gateway_management() -> None:
+def require_ce_edition_management() -> None:
     """Reject CE-local gateway mutations from an EE-composed process."""
     try:
         require_legacy_local_service_operation()
@@ -181,6 +189,11 @@ def require_ce_gateway_management() -> None:
         raise PermissionError(exc.code) from None
     if not is_ce_effective():
         raise ServiceControlEgressDenied()
+
+
+def require_ce_gateway_management() -> None:
+    """Reject CE-local NewAPI provisioner mutations from EE or disabled processes."""
+    require_ce_edition_management()
     require_provisioner_enabled()
 
 
@@ -302,8 +315,10 @@ class CreateChannelsBatchBody(BaseModel):
 class ProviderChannelConfigBody(BaseModel):
     id: str | None = None
     provider: str
+    name: str | None = None
     type: int | None = None
     upstream_key: str | None = Field(default=None, alias="upstreamKey")
+    clear_key: bool = Field(default=False, alias="clearKey")
     base_url: str | None = Field(default=None, alias="baseUrl")
     priority: int | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
@@ -329,8 +344,27 @@ class ProviderChannelModelsBody(BaseModel):
     type: int | None = None
 
 
+class DirectChannelModelsBody(BaseModel):
+    channel_id: str | None = Field(default=None, alias="channelId")
+    provider: str = ""
+    base_url: str | None = Field(default=None, alias="baseUrl")
+    api_key: str | None = Field(default=None, alias="apiKey")
+
+
+class FeatureModelMappingBody(BaseModel):
+    provider: str = ""
+    channel_id: str | None = Field(default=None, alias="channelId")
+    upstream_model: str = Field(alias="upstreamModel")
+
+
+class SaveFeatureModelsBody(BaseModel):
+    models: dict[str, FeatureModelMappingBody] = Field(default_factory=dict)
+    merge: bool = False
+
+
 class MediaModelConfigBody(BaseModel):
     provider: str
+    channel_id: str | None = Field(default=None, alias="channelId")
     upstream_model: str | None = Field(default=None, alias="upstreamModel")
     media_type: str | None = Field(default=None, alias="mediaType")
     label: str | None = None
@@ -343,12 +377,14 @@ class SaveMediaModelsBody(BaseModel):
     new_api_base_url: str | None = Field(default=None, alias="newApiBaseUrl")
     database: NewApiDatabaseBody | None = None
     models: dict[str, MediaModelConfigBody] = Field(default_factory=dict)
+    replace_catalog: bool | None = Field(default=None, alias="replaceCatalog")
 
 
 class SaveEmbeddingModelBody(BaseModel):
     new_api_base_url: str | None = Field(default=None, alias="newApiBaseUrl")
     database: NewApiDatabaseBody | None = None
     provider: str
+    channel_id: str | None = Field(default=None, alias="channelId")
     upstream_model: str = Field(alias="upstreamModel")
     dimension: int
     batch_size: int | None = Field(default=None, alias="batchSize")
@@ -363,6 +399,8 @@ def _get_provisioner_config_from_request(
     new_api_base_url: str | None,
     database: NewApiDatabaseBody | None,
 ):
+    if new_api_base_url is None and database is None:
+        return get_provisioner_config()
     return get_provisioner_config(
         new_api_base_url,
         sql_dsn=database.sql_dsn if database else None,
@@ -420,10 +458,35 @@ def _build_channel_payload_from_spec(
     )
 
 
+def _try_newapi_admin_config(
+    new_api_base_url: str | None = None,
+    database: NewApiDatabaseBody | None = None,
+) -> tuple[Any, str] | None:
+    if not provisioner_enabled():
+        return None
+    has_explicit_target = bool(
+        (new_api_base_url or "").strip() or database is not None
+    )
+    if not has_explicit_target and is_direct_multi_channel_mode():
+        return None
+    cfg = _get_provisioner_config_from_request(new_api_base_url, database)
+    try:
+        admin = ensure_admin_access_token(cfg)
+    except Exception:
+        if not has_explicit_target:
+            return None
+        raise
+    return cfg, admin
+
+
 def _build_media_model_channel_specs(
     models: dict[str, MediaModelConfigBody],
+    *,
+    allow_empty: bool = False,
 ) -> tuple[list[ChannelSpec], dict[str, dict[str, Any]]]:
     if not models:
+        if allow_empty:
+            return [], {}
         raise ValueError("models must be a non-empty JSON object")
 
     grouped: dict[str, dict[str, str]] = {}
@@ -434,7 +497,12 @@ def _build_media_model_channel_specs(
             raise ValueError("models contains an empty model name")
         if model in OFFICIAL_ONLY_MEDIA_MODEL_NAMES:
             raise ValueError(f"media model {model} is official-channel only")
+        channel_id = str(item.channel_id or "").strip().lower()
         provider = str(item.provider or "").strip().lower()
+        if channel_id and not provider:
+            matched_channel = get_newapi_provider_channel(channel_id)
+            if matched_channel:
+                provider = matched_channel["provider"]
         if not provider:
             raise ValueError(f"provider is required for media model {model}")
         upstream_model = (item.upstream_model or "").strip() or model
@@ -455,7 +523,7 @@ def _build_media_model_channel_specs(
             model_config.setdefault("request", default_media_model_request(media_type))
             validate_media_model_catalog_config(model_config, media_type)
         grouped.setdefault(provider, {})[model] = upstream_model
-        normalized[model] = {
+        normalized_entry: dict[str, Any] = {
             "provider": provider,
             "upstreamModel": "" if upstream_model == model else upstream_model,
             "mediaType": media_type,
@@ -464,6 +532,9 @@ def _build_media_model_channel_specs(
             "sortOrder": int(item.sort_order),
             "config": model_config,
         }
+        if channel_id:
+            normalized_entry["channelId"] = channel_id
+        normalized[model] = normalized_entry
 
     specs = [
         ChannelSpec(
@@ -479,7 +550,12 @@ def _build_media_model_channel_specs(
 def _build_embedding_model_channel_spec(
     body: SaveEmbeddingModelBody,
 ) -> tuple[ChannelSpec, dict[str, Any]]:
+    channel_id = str(body.channel_id or "").strip().lower()
     provider = str(body.provider or "").strip().lower()
+    if channel_id and not provider:
+        matched_channel = get_newapi_provider_channel(channel_id)
+        if matched_channel:
+            provider = matched_channel["provider"]
     upstream_model = str(body.upstream_model or "").strip()
     dimension = int(body.dimension)
     batch_size = int(body.batch_size or 0)
@@ -491,7 +567,7 @@ def _build_embedding_model_channel_spec(
         raise ValueError("dimension must be positive")
     if body.batch_size is not None and batch_size <= 0:
         raise ValueError("batchSize must be positive")
-    normalized = {
+    normalized: dict[str, Any] = {
         "provider": provider,
         "upstreamModel": upstream_model,
         "dimension": dimension,
@@ -501,11 +577,22 @@ def _build_embedding_model_channel_spec(
         "sendDimensions": True,
         "internalModel": "DC-cognee-embedding",
     }
+    if channel_id:
+        normalized["channelId"] = channel_id
     if batch_size > 0:
         normalized["batchSize"] = batch_size
+    matched_key = ""
+    matched_base_url = ""
+    if channel_id:
+        matched_channel = get_newapi_provider_channel(channel_id)
+        if matched_channel:
+            matched_key = matched_channel.get("upstreamKey", "") or ""
+            matched_base_url = matched_channel.get("baseUrl", "") or ""
     return (
         ChannelSpec(
             provider=provider,
+            upstreamKey=matched_key or None,
+            baseUrl=matched_base_url or None,
             modelMapping={"DC-cognee-embedding": upstream_model},
         ),
         normalized,
@@ -704,7 +791,7 @@ async def check_official_media_catalog() -> dict[str, Any]:
 @router.post("/official/enable")
 async def enable_official_gateway() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     status = build_model_gateway_status(
@@ -731,7 +818,7 @@ async def enable_official_gateway() -> dict[str, Any]:
 @router.post("/custom/enable")
 async def enable_custom_gateway() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     status = build_model_gateway_status(
@@ -757,7 +844,7 @@ async def enable_custom_gateway() -> dict[str, Any]:
 @router.post("/hybrid/enable")
 async def enable_hybrid_gateway() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     status = build_model_gateway_status(
@@ -784,7 +871,7 @@ async def enable_hybrid_gateway() -> dict[str, Any]:
 @router.post("/official/config")
 async def save_official_gateway_config(body: OfficialGatewayBody) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     api_key = normalize_api_key(body.new_api_api_key)
@@ -825,7 +912,7 @@ async def save_official_gateway_config(body: OfficialGatewayBody) -> dict[str, A
 async def save_agent_gateway_config(body: AgentLlmConfigBody) -> dict[str, Any]:
     """Save the CE Agent route independently from media gateway selection."""
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     if body.mode not in {AGENT_LLM_MODE_INHERIT, AGENT_LLM_MODE_THIRD_PARTY}:
@@ -871,7 +958,7 @@ async def save_agent_gateway_config(body: AgentLlmConfigBody) -> dict[str, Any]:
 async def save_reasoning_config(body: LlmReasoningConfigBody) -> dict[str, Any]:
     """Save default and/or per-feature LLM thinking levels for CE."""
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     if body.default_effort is None and body.feature_efforts is None:
@@ -905,7 +992,7 @@ async def save_custom_brainclaw_config(
 ) -> dict[str, Any]:
     """Save the BrainClaw endpoint for Custom mode (does not switch the active mode)."""
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     current = build_model_gateway_status(
@@ -949,7 +1036,7 @@ async def save_custom_brainclaw_config(
 @router.post("/custom/brainclaw/enable")
 async def enable_custom_brainclaw() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     status = build_model_gateway_status(
@@ -975,7 +1062,7 @@ async def enable_custom_brainclaw() -> dict[str, Any]:
 @router.post("/custom/llm-mode")
 async def save_custom_llm_routing_mode(body: CustomLlmModeBody) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     if body.mode not in {
@@ -1007,7 +1094,7 @@ async def save_custom_llm_routing_mode(body: CustomLlmModeBody) -> dict[str, Any
 @router.post("/media-relay/config")
 async def save_media_relay_settings(body: MediaRelayConfigBody) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     provider = body.provider.strip().lower()
@@ -1208,18 +1295,21 @@ async def init_custom_newapi(body: NewApiInitBody = NewApiInitBody()) -> dict[st
 
 
 @router.post("/custom/newapi/provider-channels")
+@router.put("/custom/newapi/provider-channels")
 async def save_custom_newapi_provider_channels(
     body: SaveProviderChannelsBody,
 ) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
         saved = save_newapi_provider_channels(
             [
                 {
                     "id": channel.id,
                     "provider": channel.provider,
+                    "name": channel.name or "",
                     "type": channel.type or 0,
                     "upstreamKey": channel.upstream_key or "",
+                    "clearKey": bool(channel.clear_key),
                     "baseUrl": channel.base_url or "",
                     "priority": channel.priority,
                     "settings": channel.settings,
@@ -1278,8 +1368,12 @@ async def save_custom_newapi_provider_channels(
                         ),
                     }
             save_newapi_media_model_mappings(media_mappings)
+        elif not provisioner_enabled():
+            set_direct_multi_channel_mode(True)
         media_models = get_newapi_media_model_mappings()
         embedding_model = get_newapi_embedding_model_config()
+        feature_models = get_feature_model_mappings()
+        _refresh_runtime_after_gateway_write()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     except ValueError as exc:
@@ -1290,26 +1384,10 @@ async def save_custom_newapi_provider_channels(
     return {
         "ok": True,
         "data": {
-            "channels": [
-                {
-                    "id": channel["id"],
-                    "provider": channel["provider"],
-                    "type": channel.get("type", 0),
-                    "configured": bool(channel["upstreamKey"])
-                    or (
-                        channel["provider"] == "comfyui"
-                        and bool(channel["baseUrl"])
-                        and bool(channel.get("settings"))
-                    ),
-                    "upstreamKeyPreview": mask_token(channel["upstreamKey"]),
-                    "baseUrl": channel["baseUrl"],
-                    "priority": channel.get("priority", 0),
-                    "settings": channel.get("settings", {}),
-                }
-                for channel in saved
-            ],
+            "channels": build_newapi_provider_channels_status(),
             "mediaModels": media_models,
             "embeddingModel": embedding_model or None,
+            "featureModels": feature_models,
         },
     }
 
@@ -1317,15 +1395,17 @@ async def save_custom_newapi_provider_channels(
 @router.delete("/custom/newapi/comfyui")
 async def clear_custom_newapi_comfyui() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
-        cfg = get_provisioner_config()
-        admin = ensure_admin_access_token(cfg)
-        deleted = delete_channel_by_name(
-            cfg,
-            admin,
-            name="DC-comfyui",
-            channel_type=63,
-        )
+        require_ce_edition_management()
+        deleted: Any = None
+        admin_ctx = _try_newapi_admin_config()
+        if admin_ctx is not None:
+            cfg, admin = admin_ctx
+            deleted = delete_channel_by_name(
+                cfg,
+                admin,
+                name="DC-comfyui",
+                channel_type=63,
+            )
         channels = save_newapi_provider_channels(
             [
                 channel
@@ -1340,12 +1420,14 @@ async def clear_custom_newapi_comfyui() -> dict[str, Any]:
                 if mapping.get("provider") != "comfyui"
             }
         )
+        runtime = _refresh_runtime_after_gateway_write()
         return {
             "ok": True,
             "data": {
                 "channelDeleted": deleted,
                 "channels": channels,
                 "mediaModels": mappings,
+                "runtime": runtime,
             },
         }
     except PermissionError as exc:
@@ -1357,19 +1439,91 @@ async def clear_custom_newapi_comfyui() -> dict[str, Any]:
 @router.get("/custom/newapi/channel-types")
 async def get_custom_newapi_channel_types() -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
-        cfg = get_provisioner_config()
-        # Token discovery may wait for an uninitialized local NewAPI. Keep all
-        # blocking HTTP/SQLite work off the ASGI event loop so official gateway
-        # saves and application startup remain responsive.
-        items = await asyncio.to_thread(
-            lambda: list_channel_types(cfg, ensure_admin_access_token(cfg))
-        )
+        require_ce_edition_management()
+        if not provisioner_enabled():
+            items = list_builtin_channel_types()
+        else:
+            cfg = get_provisioner_config()
+            try:
+                items = await asyncio.to_thread(
+                    lambda: list_channel_types(cfg, ensure_admin_access_token(cfg))
+                )
+            except Exception:
+                items = list_builtin_channel_types()
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"ok": True, "data": {"items": items}}
+
+
+@router.post("/custom/channel-models")
+async def get_custom_direct_channel_models(
+    body: DirectChannelModelsBody,
+) -> dict[str, Any]:
+    try:
+        require_ce_edition_management()
+    except PermissionError as exc:
+        raise _permission_error(exc) from None
+    try:
+        models = await asyncio.to_thread(
+            fetch_direct_channel_models,
+            channel_id=body.channel_id or "",
+            provider=body.provider or "",
+            base_url=body.base_url or "",
+            api_key=body.api_key or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception:
+        raise HTTPException(
+            status_code=502, detail="provider channel model discovery failed"
+        ) from None
+    return {
+        "ok": True,
+        "data": {
+            "provider": body.provider or "",
+            "channelId": body.channel_id or "",
+            "models": models,
+            "count": len(models),
+        },
+    }
+
+
+@router.put("/custom/newapi/feature-models")
+@router.post("/custom/newapi/feature-models")
+async def save_custom_newapi_feature_models(
+    body: SaveFeatureModelsBody,
+) -> dict[str, Any]:
+    try:
+        require_ce_edition_management()
+        saved = save_feature_model_mappings(
+            {
+                feature_id: {
+                    "provider": item.provider,
+                    "channelId": item.channel_id or "",
+                    "upstreamModel": item.upstream_model,
+                }
+                for feature_id, item in body.models.items()
+            },
+            enable_direct_mode=True,
+            merge=body.merge,
+        )
+        runtime = _refresh_runtime_after_gateway_write()
+    except PermissionError as exc:
+        raise _permission_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "data": {
+            "featureModels": saved,
+            "directMode": True,
+        },
+        "runtime": runtime,
+    }
 
 
 @router.post("/custom/newapi/provider-channel/models")
@@ -1531,9 +1685,8 @@ async def create_custom_newapi_channels_batch(
     body: CreateChannelsBatchBody,
 ) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
-        cfg = _get_provisioner_config_from_request(body.new_api_base_url, body.database)
-        admin = ensure_admin_access_token(cfg)
+        require_ce_edition_management()
+        admin_ctx = _try_newapi_admin_config(body.new_api_base_url, body.database)
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     except ValueError as exc:
@@ -1541,6 +1694,51 @@ async def create_custom_newapi_channels_batch(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    extracted_features: dict[str, dict[str, str]] = {}
+    for channel in body.channels:
+        for alias_model, upstream_model in channel.model_mapping.items():
+            clean_alias = str(alias_model or "").strip()
+            clean_upstream = str(upstream_model or "").strip()
+            if clean_alias and clean_upstream:
+                extracted_features[clean_alias] = {
+                    "provider": str(channel.provider or "").strip().lower(),
+                    "upstreamModel": clean_upstream,
+                }
+
+    if admin_ctx is None:
+        try:
+            saved_features = (
+                save_feature_model_mappings(extracted_features, enable_direct_mode=True)
+                if extracted_features
+                else get_feature_model_mappings()
+            )
+            set_direct_multi_channel_mode(True)
+            _refresh_runtime_after_gateway_write()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        results = [
+            {
+                "index": index,
+                "ok": True,
+                "httpStatus": 200,
+                "action": "direct",
+                "channelId": None,
+            }
+            for index, _channel in enumerate(body.channels)
+        ]
+        return {
+            "ok": True,
+            "data": {
+                "directMode": True,
+                "featureModels": saved_features,
+                "total": len(results),
+                "succeeded": len(results),
+                "failed": 0,
+                "results": results,
+            },
+        }
+
+    cfg, admin = admin_ctx
     results: list[dict[str, Any]] = []
     for index, channel in enumerate(body.channels):
         try:
@@ -1571,6 +1769,8 @@ async def create_custom_newapi_channels_batch(
 
     succeeded = sum(1 for item in results if item["ok"])
     failed = len(results) - succeeded
+    if failed == 0 and extracted_features:
+        save_feature_model_mappings(extracted_features)
     return {
         "ok": failed == 0,
         "data": {
@@ -1588,14 +1788,45 @@ async def save_custom_newapi_embedding_model(
     body: SaveEmbeddingModelBody,
 ) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
+        require_ce_edition_management()
         spec, normalized_model = _build_embedding_model_channel_spec(body)
-        cfg = _get_provisioner_config_from_request(body.new_api_base_url, body.database)
-        admin = ensure_admin_access_token(cfg)
-        payload = _build_channel_payload_from_spec(spec)
-        result = upsert_channel(cfg, admin, payload)
+        admin_ctx = _try_newapi_admin_config(body.new_api_base_url, body.database)
     except PermissionError as exc:
         raise _permission_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if admin_ctx is None:
+        set_direct_multi_channel_mode(True)
+        saved = save_newapi_embedding_model_config(
+            provider=normalized_model["provider"],
+            upstream_model=normalized_model["upstreamModel"],
+            dimension=normalized_model["dimension"],
+            batch_size=normalized_model.get("batchSize"),
+            send_dimensions=normalized_model["sendDimensions"],
+            channel_id=normalized_model.get("channelId", ""),
+        )
+        _refresh_runtime_after_gateway_write()
+        return {
+            "ok": True,
+            "data": {
+                "directMode": True,
+                "embeddingModel": saved,
+                "result": {
+                    "provider": spec.provider,
+                    "ok": True,
+                    "httpStatus": 200,
+                    "action": "direct",
+                },
+            },
+        }
+
+    cfg, admin = admin_ctx
+    try:
+        payload = _build_channel_payload_from_spec(spec)
+        result = upsert_channel(cfg, admin, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1633,7 +1864,9 @@ async def save_custom_newapi_embedding_model(
         dimension=normalized_model["dimension"],
         batch_size=normalized_model.get("batchSize"),
         send_dimensions=normalized_model["sendDimensions"],
+        channel_id=normalized_model.get("channelId", ""),
     )
+    _refresh_runtime_after_gateway_write()
     return {
         "ok": True,
         "data": {
@@ -1647,10 +1880,12 @@ async def save_custom_newapi_embedding_model(
 @router.post("/custom/newapi/media-models")
 async def save_custom_newapi_media_models(body: SaveMediaModelsBody) -> dict[str, Any]:
     try:
-        require_ce_gateway_management()
-        specs, normalized_models = _build_media_model_channel_specs(body.models)
-        cfg = _get_provisioner_config_from_request(body.new_api_base_url, body.database)
-        admin = ensure_admin_access_token(cfg)
+        require_ce_edition_management()
+        specs, normalized_models = _build_media_model_channel_specs(
+            body.models,
+            allow_empty=bool(body.replace_catalog),
+        )
+        admin_ctx = _try_newapi_admin_config(body.new_api_base_url, body.database)
     except PermissionError as exc:
         raise _permission_error(exc) from exc
     except ValueError as exc:
@@ -1658,6 +1893,26 @@ async def save_custom_newapi_media_models(body: SaveMediaModelsBody) -> dict[str
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    if admin_ctx is None:
+        set_direct_multi_channel_mode(True)
+        save_newapi_media_model_mappings(
+            normalized_models,
+            replace_catalog=body.replace_catalog,
+        )
+        _refresh_runtime_after_gateway_write()
+        return {
+            "ok": True,
+            "data": {
+                "directMode": True,
+                "total": len(normalized_models),
+                "succeeded": len(normalized_models),
+                "failed": 0,
+                "models": normalized_models,
+                "results": [],
+            },
+        }
+
+    cfg, admin = admin_ctx
     results: list[dict[str, Any]] = []
     for index, channel in enumerate(specs):
         try:
@@ -1697,7 +1952,10 @@ async def save_custom_newapi_media_models(body: SaveMediaModelsBody) -> dict[str
     succeeded = sum(1 for item in results if item["ok"])
     failed = len(results) - succeeded
     if failed == 0:
-        save_newapi_media_model_mappings(normalized_models)
+        save_newapi_media_model_mappings(
+            normalized_models,
+            replace_catalog=body.replace_catalog,
+        )
 
     return {
         "ok": failed == 0,

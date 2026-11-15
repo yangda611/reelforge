@@ -5189,3 +5189,479 @@ def test_configured_text_models_apply_reasoning_level_on_wire(monkeypatch, tmp_p
     asyncio.run(plain_agent.run("p3"))
     assert "reasoning_effort" not in requests[4]
     assert "reasoning_effort" not in requests[5]
+
+
+def test_duplicate_openai_channels_preserve_independent_keys_and_names(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "false")
+
+    app = FastAPI()
+    app.include_router(model_gateway.router)
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/model-gateway/custom/newapi/provider-channels",
+        json={
+            "channels": [
+                {
+                    "id": "openai-llm",
+                    "provider": "openai",
+                    "name": "LLM 分组",
+                    "upstreamKey": "sk-llm-secret-1",
+                    "baseUrl": "https://zeroshell.top",
+                },
+                {
+                    "id": "openai-video",
+                    "provider": "openai",
+                    "name": "视频分组",
+                    "upstreamKey": "sk-video-secret-2",
+                    "baseUrl": "https://zeroshell.top/v1",
+                },
+            ]
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    assert "sk-llm-secret-1" not in create_resp.text
+    assert "sk-video-secret-2" not in create_resp.text
+
+    stored = {ch["id"]: ch for ch in get_newapi_provider_channels()}
+    assert set(stored) == {"openai-llm", "openai-video"}
+    assert stored["openai-llm"]["name"] == "LLM 分组"
+    assert stored["openai-llm"]["upstreamKey"] == "sk-llm-secret-1"
+    assert stored["openai-video"]["name"] == "视频分组"
+    assert stored["openai-video"]["upstreamKey"] == "sk-video-secret-2"
+
+    # Updating only one OpenAI channel must never overwrite the sibling OpenAI channel key.
+    update_resp = client.post(
+        "/model-gateway/custom/newapi/provider-channels",
+        json={
+            "preserveUnmentioned": True,
+            "channels": [
+                {
+                    "id": "openai-video",
+                    "provider": "openai",
+                    "name": "视频分组-v2",
+                    "upstreamKey": "sk-video-updated-3",
+                    "baseUrl": "https://zeroshell.top",
+                }
+            ],
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    stored_after = {ch["id"]: ch for ch in get_newapi_provider_channels()}
+    assert stored_after["openai-llm"]["upstreamKey"] == "sk-llm-secret-1"
+    assert stored_after["openai-llm"]["name"] == "LLM 分组"
+    assert stored_after["openai-video"]["upstreamKey"] == "sk-video-updated-3"
+    assert stored_after["openai-video"]["name"] == "视频分组-v2"
+
+
+def test_direct_multi_channel_routing_with_provisioner_disabled(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "false")
+
+    app = FastAPI()
+    app.include_router(model_gateway.router)
+    client = TestClient(app)
+
+    channels_resp = client.post(
+        "/model-gateway/custom/newapi/provider-channels",
+        json={
+            "channels": [
+                {
+                    "id": "openai-llm",
+                    "provider": "openai",
+                    "name": "LLM",
+                    "upstreamKey": "sk-llm-grp",
+                    "baseUrl": "https://zeroshell.top",
+                },
+                {
+                    "id": "openai-image",
+                    "provider": "openai",
+                    "name": "Image",
+                    "upstreamKey": "sk-img-grp",
+                    "baseUrl": "https://zeroshell.top",
+                },
+                {
+                    "id": "openai-video",
+                    "provider": "openai",
+                    "name": "Video",
+                    "upstreamKey": "sk-vid-grp",
+                    "baseUrl": "https://zeroshell.top",
+                },
+                {
+                    "id": "openai-audio",
+                    "provider": "openai",
+                    "name": "Audio",
+                    "upstreamKey": "sk-aud-grp",
+                    "baseUrl": "https://zeroshell.top",
+                },
+            ]
+        },
+    )
+    assert channels_resp.status_code == 200, channels_resp.text
+
+    feat_resp = client.put(
+        "/model-gateway/custom/newapi/feature-models",
+        json={
+            "models": {
+                "SCREENPLAY_NORMALIZER": {
+                    "provider": "openai",
+                    "channelId": "openai-llm",
+                    "upstreamModel": "gpt-4o",
+                }
+            }
+        },
+    )
+    assert feat_resp.status_code == 200, feat_resp.text
+
+    merge_resp = client.put(
+        "/model-gateway/custom/newapi/feature-models",
+        json={
+            "merge": True,
+            "models": {
+                "HERMES": {
+                    "provider": "openai",
+                    "channelId": "openai-llm",
+                    "upstreamModel": "claude-sonnet-4",
+                }
+            },
+        },
+    )
+    assert merge_resp.status_code == 200, merge_resp.text
+    assert set(merge_resp.json()["data"]["featureModels"]) == {
+        "SCREENPLAY_NORMALIZER",
+        "HERMES",
+    }
+
+    emb_resp = client.post(
+        "/model-gateway/custom/newapi/embedding-model",
+        json={
+            "provider": "openai",
+            "channelId": "openai-llm",
+            "upstreamModel": "text-embedding-3-large",
+            "dimension": 1024,
+            "batchSize": 16,
+        },
+    )
+    assert emb_resp.status_code == 200, emb_resp.text
+
+    media_resp = client.post(
+        "/model-gateway/custom/newapi/media-models",
+        json={
+            "replaceCatalog": True,
+            "models": {
+                "my-img": {
+                    "provider": "openai",
+                    "channelId": "openai-image",
+                    "upstreamModel": "flux-pro",
+                    "mediaType": "image",
+                    "label": "My Image",
+                },
+                "my-vid": {
+                    "provider": "openai",
+                    "channelId": "openai-video",
+                    "upstreamModel": "veo-3",
+                    "mediaType": "video",
+                    "label": "My Video",
+                },
+                "my-aud": {
+                    "provider": "openai",
+                    "channelId": "openai-audio",
+                    "upstreamModel": "suno-v4",
+                    "mediaType": "audio",
+                    "label": "My Audio",
+                },
+                "my-blk": {
+                    "provider": "openai",
+                    "channelId": "openai-llm",
+                    "upstreamModel": "gpt-4.1-mini",
+                    "mediaType": "blockout",
+                    "label": "My Blockout",
+                },
+            },
+        },
+    )
+    assert media_resp.status_code == 200, media_resp.text
+
+    llm_cfg = gateway_settings.get_effective_llm_config("SCREENPLAY_NORMALIZER")
+    assert llm_cfg.base_url == "https://zeroshell.top/v1"
+    assert llm_cfg.api_key == "sk-llm-grp"
+    assert llm_cfg.model == "gpt-4o"
+    assert llm_cfg.channel_id == "openai-llm"
+
+    hermes_cfg = gateway_settings.get_effective_agent_llm_config()
+    assert hermes_cfg.base_url == "https://zeroshell.top/v1"
+    assert hermes_cfg.api_key == "sk-llm-grp"
+    assert hermes_cfg.model == "claude-sonnet-4"
+
+    emb_cfg = get_effective_cognee_embedding_config()
+    assert emb_cfg.base_url == "https://zeroshell.top/v1"
+    assert emb_cfg.api_key == "sk-llm-grp"
+    assert emb_cfg.model == "text-embedding-3-large"
+    assert emb_cfg.dimensions == "1024"
+    assert emb_cfg.channel_id == "openai-llm"
+
+    img_target = gateway_settings.resolve_direct_media_gateway_target("my-img", "image")
+    assert img_target is not None
+    assert img_target.api_key == "sk-img-grp"
+    assert img_target.upstream_model == "flux-pro"
+    assert img_target.base_url == "https://zeroshell.top/v1"
+
+    vid_target = gateway_settings.resolve_direct_media_gateway_target("my-vid", "video")
+    assert vid_target is not None
+    assert vid_target.api_key == "sk-vid-grp"
+    assert vid_target.upstream_model == "veo-3"
+
+    aud_target = gateway_settings.resolve_direct_media_gateway_target("my-aud", "audio")
+    assert aud_target is not None
+    assert aud_target.api_key == "sk-aud-grp"
+    assert aud_target.upstream_model == "suno-v4"
+
+    video_gen = NewApiVideoGenerator(model="my-vid")
+    assert video_gen.api_key == "sk-vid-grp"
+    assert video_gen.base_url == "https://zeroshell.top/v1"
+    assert video_gen.request_model == "veo-3"
+
+    blockout_llm, blockout_model = config._resolve_text_gateway_route(
+        "PREVIZ_BLOCKOUT_MODEL",
+        model_name_override="my-blk",
+    )
+    assert blockout_llm.api_key == "sk-llm-grp"
+    assert blockout_model == "gpt-4.1-mini"
+
+    video_catalog_ids = [item["id"] for item in get_ce_media_model_catalog("video")]
+    assert video_catalog_ids == ["my-vid"]
+    assert gateway_settings.is_media_models_catalog_replaced() is True
+
+    audio_catalog = get_ce_media_model_catalog("audio")
+    assert [item["id"] for item in audio_catalog] == ["my-aud"]
+    assert gateway_settings.resolve_default_direct_audio_model() == "my-aud"
+
+
+@respx.mock
+def test_custom_channel_models_and_builtin_types_when_provisioner_disabled(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "false")
+
+    save_newapi_provider_channels(
+        [
+            {
+                "id": "openai-main",
+                "provider": "openai",
+                "name": "主分组",
+                "upstreamKey": "sk-saved-direct-key",
+                "baseUrl": "https://zeroshell.top/v1",
+            }
+        ]
+    )
+
+    models_route = respx.get("https://zeroshell.top/v1/models").mock(
+        return_value=Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"id": "gpt-4o"},
+                    {"id": "claude-3-7-sonnet"},
+                ],
+            },
+        )
+    )
+
+    app = FastAPI()
+    app.include_router(model_gateway.router)
+    client = TestClient(app)
+
+    types_resp = client.get("/model-gateway/custom/newapi/channel-types")
+    assert types_resp.status_code == 200, types_resp.text
+    providers = {item["provider"] for item in types_resp.json()["data"]["items"]}
+    assert {"openai", "anthropic"}.issubset(providers)
+
+    saved_resp = client.post(
+        "/model-gateway/custom/channel-models",
+        json={"channelId": "openai-main"},
+    )
+    assert saved_resp.status_code == 200, saved_resp.text
+    assert saved_resp.json()["data"]["models"] == ["gpt-4o", "claude-3-7-sonnet"]
+    assert "sk-saved-direct-key" not in saved_resp.text
+    assert models_route.calls[0].request.headers["authorization"] == "Bearer sk-saved-direct-key"
+
+    inline_resp = client.post(
+        "/model-gateway/custom/channel-models",
+        json={
+            "baseUrl": "https://zeroshell.top/v1",
+            "apiKey": "sk-inline-secret",
+        },
+    )
+    assert inline_resp.status_code == 200, inline_resp.text
+    assert inline_resp.json()["data"]["models"] == ["gpt-4o", "claude-3-7-sonnet"]
+    assert "sk-inline-secret" not in inline_resp.text
+    assert models_route.calls[1].request.headers["authorization"] == "Bearer sk-inline-secret"
+
+
+def test_direct_mode_blocks_dc_fallback_and_routes_text_agent_and_singletons(
+    monkeypatch, tmp_path
+):
+    from novelvideo.chat import hermes_workspace, service as chat_service
+    from novelvideo.cognee import config as cognee_config
+    from novelvideo.director_world import scene_analysis_gateway, staging_prop_ai
+    from novelvideo.freezone import text_node
+
+    _isolate_settings_db(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEWAPI_PROVISIONER_ENABLED", "false")
+    for env_name in (
+        "MODEL_NAME",
+        "FREEZONE_TEXT_WRITER_MODEL",
+        "STAGING_PROP_MODEL",
+        "GLOBAL_VIDEO_MODEL",
+        "COGNEE_LLM_MODEL",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    gateway_settings.set_model_gateway_mode(MODE_CUSTOM)
+    gateway_settings.set_custom_llm_mode(gateway_settings.CUSTOM_LLM_MODE_ADVANCED)
+    gateway_settings.set_direct_multi_channel_mode(True)
+
+    save_newapi_provider_channels(
+        [
+            {
+                "id": "openai-media-only",
+                "provider": "openai",
+                "name": "媒体分组",
+                "upstreamKey": "sk-media-only-9999",
+                "baseUrl": "https://zeroshell.top",
+            },
+            {
+                "id": "anthropic-text-only",
+                "provider": "anthropic",
+                "name": "文本分组",
+                "upstreamKey": "sk-text-only-8888",
+                "baseUrl": "https://zeroshell.top",
+            },
+        ]
+    )
+    save_newapi_media_model_mappings(
+        {
+            "my-img": {
+                "provider": "openai",
+                "channelId": "openai-media-only",
+                "upstreamModel": "flux-pro",
+                "mediaType": "image",
+                "label": "My Img",
+            }
+        },
+        replace_catalog=True,
+    )
+
+    # 1. Unconfigured LLM in direct mode: must pick non-media channel for fallback
+    # inspection, report configured=False, and refuse instead of sending DC-*.
+    status_unconfigured = build_model_gateway_status()
+    assert status_unconfigured["llmEffective"]["configured"] is False
+    assert status_unconfigured["llmEffective"]["model"] == ""
+    assert "8888" in status_unconfigured["llmEffective"]["apiKeyPreview"]
+
+    with pytest.raises(ValueError, match="Direct LLM model"):
+        config.get_effective_newapi_text_model_name(
+            "FREEZONE_TEXT_WRITER_MODEL",
+            "DC-freezone-text-writer-LLM",
+        )
+    with pytest.raises(ValueError, match="Direct LLM model"):
+        text_node.resolve_freezone_text_writer_model()
+    with pytest.raises(ValueError, match="STAGING_PROP"):
+        staging_prop_ai.resolve_model_config({})
+    assert scene_analysis_gateway.scene_analysis_gateway_configured() is False
+    with pytest.raises(RuntimeError, match="Cognee direct LLM model"):
+        cognee_config._resolve_llm_model("newapi")
+    with pytest.raises(RuntimeError):
+        chat_service._codex_model()
+    with pytest.raises(RuntimeError):
+        hermes_workspace._hermes_model_default()
+
+    # Replaced direct media catalog selection fallback should avoid LingShan-G2.
+    img_cfg = config._image_provider_config(
+        "newapi", selection_override="newapi_gpt_image2"
+    )
+    assert img_cfg["model"] == "flux-pro"
+    assert img_cfg["api_key"] == "sk-media-only-9999"
+
+    # 2. Configure third_party Agent LLM while featureModels stays empty.
+    gateway_settings.save_agent_llm_config(
+        mode=gateway_settings.AGENT_LLM_MODE_THIRD_PARTY,
+        base_url="https://zeroshell.top/v1",
+        api_key="sk-text-only-8888",
+        model="gpt-6.1-sol",
+    )
+    status_agent = build_model_gateway_status()
+    assert status_agent["llmEffective"]["configured"] is True
+    assert status_agent["llmEffective"]["model"] == "gpt-6.1-sol"
+    assert "8888" in status_agent["llmEffective"]["apiKeyPreview"]
+
+    assert (
+        config.get_effective_newapi_text_model_name(
+            "FREEZONE_TEXT_WRITER_MODEL",
+            "DC-freezone-text-writer-LLM",
+        )
+        == "gpt-6.1-sol"
+    )
+    assert text_node.resolve_freezone_text_writer_model() == "gpt-6.1-sol"
+    assert staging_prop_ai.resolve_model_config({}) == (
+        "gpt-6.1-sol",
+        "sk-text-only-8888",
+        "https://zeroshell.top/v1",
+    )
+    assert scene_analysis_gateway.scene_analysis_gateway_configured() is True
+    assert cognee_config._resolve_llm_model("newapi") == "openai/gpt-6.1-sol"
+
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_text_model(model_name, **kwargs):
+        captured_calls.append({"model_name": model_name, **kwargs})
+        return f"fake:{model_name}"
+
+    monkeypatch.setattr(config, "_newapi_text_openai_model", fake_text_model)
+    config.get_pydantic_model()
+    config.get_superpower_pydantic_model(feature_model_env="GLOBAL_VIDEO_MODEL")
+    assert captured_calls[0]["model_name"] == "gpt-6.1-sol"
+    assert captured_calls[0]["api_key"] == "sk-text-only-8888"
+    assert captured_calls[1]["model_name"] == "gpt-6.1-sol"
+    assert captured_calls[1]["api_key"] == "sk-text-only-8888"
+
+    # 3. Map explicit per-feature channels (omitting provider so channelId lookup runs)
+    # and verify singleton agent caches invalidate on refresh.
+    text_node._text_writer_agent = object()
+    saved_features = gateway_settings.save_feature_model_mappings(
+        {
+            "FREEZONE_TEXT_WRITER": {
+                "channelId": "anthropic-text-only",
+                "upstreamModel": "claude-sonnet-4",
+            },
+            "STAGING_PROP": {
+                "channelId": "openai-media-only",
+                "upstreamModel": "gpt-4.1",
+            },
+            "GLOBAL_VIDEO_OPTIMIZER": {
+                "channelId": "anthropic-text-only",
+                "upstreamModel": "gpt-5-video",
+            },
+        }
+    )
+    assert saved_features["FREEZONE_TEXT_WRITER"]["provider"] == "anthropic"
+    refresh_model_gateway_runtime()
+    assert text_node._text_writer_agent is None
+
+    assert text_node.resolve_freezone_text_writer_model() == "claude-sonnet-4"
+    assert staging_prop_ai.resolve_model_config({}) == (
+        "gpt-4.1",
+        "sk-media-only-9999",
+        "https://zeroshell.top/v1",
+    )
+    captured_calls.clear()
+    config.get_superpower_pydantic_model(feature_model_env="GLOBAL_VIDEO_MODEL")
+    assert captured_calls[0]["model_name"] == "gpt-5-video"
+    assert captured_calls[0]["api_key"] == "sk-text-only-8888"

@@ -1984,6 +1984,19 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             self.api_key = api_key if api_key is not None else gateway.api_key
             self.base_url = (endpoint or gateway.base_url).rstrip("/")
         self.model = model or NEWAPI_VIDEO_MODEL
+        self.request_model = self.model
+        if self.egress_context is None or not self.egress_context.is_organization:
+            from novelvideo.model_gateway_settings import (
+                resolve_direct_media_gateway_target,
+            )
+
+            direct_target = resolve_direct_media_gateway_target(self.model, "video")
+            if direct_target is not None:
+                if api_key is None and direct_target.api_key:
+                    self.api_key = direct_target.api_key
+                if endpoint is None and direct_target.base_url:
+                    self.base_url = direct_target.base_url.rstrip("/")
+                self.request_model = direct_target.upstream_model
         self.resolution = resolution or NEWAPI_VIDEO_RESOLUTION
         self.model_params = model_params or {}
         self.request_schema = request_schema or {}
@@ -3124,7 +3137,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         if isinstance(processing_metadata, dict):
             metadata.update(processing_metadata)
         payload: dict[str, object] = {
-            "model": self.model,
+            "model": getattr(self, "request_model", self.model),
             "prompt": prompt,
             "seconds": str(duration),
             "metadata": metadata,
@@ -4718,18 +4731,30 @@ def newapi_video_backend_options(
     if is_ce_effective():
         try:
             from novelvideo.model_gateway_settings import (
+                MODE_CUSTOM,
+                get_effective_newapi_config,
                 get_newapi_media_model_mappings,
+                is_media_models_catalog_replaced,
             )
 
-            for model, mapping in get_newapi_media_model_mappings().items():
-                media_type = str(mapping.get("mediaType") or "video").strip().lower()
-                if (
-                    mapping.get("provider") == "comfyui"
-                    and mapping.get("enabled") is not False
-                    and media_type == "video"
-                    and model not in models
-                ):
-                    models.append(model)
+            mappings = get_newapi_media_model_mappings()
+            replaced = (
+                is_media_models_catalog_replaced()
+                and get_effective_newapi_config().mode == MODE_CUSTOM
+            )
+            custom_models = [
+                model
+                for model, mapping in mappings.items()
+                if str(mapping.get("mediaType") or "video").strip().lower() == "video"
+                and mapping.get("enabled") is not False
+                and str(mapping.get("provider") or "").strip() != ""
+            ]
+            if replaced:
+                models = custom_models
+            else:
+                for model in custom_models:
+                    if model not in models:
+                        models.append(model)
         except (RuntimeError, ImportError):
             pass
     if include_seedance2_variants:

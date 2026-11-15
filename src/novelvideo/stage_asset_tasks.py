@@ -1217,6 +1217,7 @@ def run_scene_360(
     )
 
     from novelvideo.director_world.scene_analysis_gateway import (
+        resolve_scene_analysis_model,
         scene_analysis_gateway_configured,
     )
 
@@ -1309,10 +1310,7 @@ def run_scene_360(
     reverse_master_path = ""
     overlap_analysis_path = ""
     spatial_contract_path = ""
-    spatial_contract_model = (
-        os.environ.get("SCENE_SPATIAL_CONTRACT_MODEL")
-        or SPATIAL_CONTRACT_DEFAULT_MODEL
-    )
+    spatial_contract_model = ""
     pano_correction_payload: dict[str, Any] | None = None
     if source == "master":
         master_path = (
@@ -1420,6 +1418,10 @@ def run_scene_360(
                     and not is_org
                     and scene_analysis_gateway_configured()
                 ):
+                    spatial_contract_model = resolve_scene_analysis_model(
+                        "SCENE_SPATIAL_CONTRACT_MODEL",
+                        SPATIAL_CONTRACT_DEFAULT_MODEL,
+                    )
                     report(
                         0.14,
                         f"分析 master/reverse 空间合同 ({spatial_contract_model})...",

@@ -575,10 +575,15 @@ def _clear_agent_singletons() -> list[str]:
     targets = {
         "novelvideo.freezone.text_node": (
             "_translation_agent",
+            "_text_writer_agent",
             "_story_script_agent",
             "_video_story_script_agent",
         ),
         "novelvideo.agents.global_video_optimizer": ("_global_video_optimizer",),
+        "novelvideo.agents.video_prompt_builder": ("_video_prompt_builder",),
+        "novelvideo.agents.keyframe_prompt_builder": ("_keyframe_prompt_builder",),
+        "novelvideo.agents.character_reviewer": ("_reviewer_agent",),
+        "novelvideo.agents.character_fixer": ("_fixer_agent",),
     }
     for module_name, attrs in targets.items():
         module = sys.modules.get(module_name)

@@ -3,6 +3,7 @@
 独立的配置系统，不依赖 SuperScript。
 """
 
+import inspect
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,18 +96,20 @@ def get_pydantic_model(
     model_name_override: str | None = None,
     *,
     brainclaw_profile=None,
+    model_env: str = "MODEL_NAME",
 ):
     """Return a PydanticAI model routed through the effective NewAPI gateway.
 
     This is the compatibility factory used by older Agent call sites. Provider
     settings still select their legacy default model when no model name is
-    supplied, but they no longer select a direct-provider transport. CE reads
-    credentials from settings.db; EE reads its deployment-level NewAPI env.
+    supplied in legacy/EE mode, while CE direct multi-channel mode resolves the
+    user's configured channel/model without injecting a legacy provider default.
 
     Args:
         provider_override: Select the legacy provider preset used for a default
             model name. The request transport remains NewAPI.
         model_name_override: Override the model name sent to NewAPI.
+        model_env: Optional logical feature key / env name used in direct mode.
     """
     provider = (
         provider_override or os.environ.get("MODEL_PROVIDER", "volcengine")
@@ -120,17 +123,24 @@ def get_pydantic_model(
         )
 
     preset = PROVIDER_PRESETS[provider]
-    model_name = model_name_override or os.environ.get(
-        "MODEL_NAME", preset["default_model"]
+    explicit_model = (
+        str(model_name_override).strip()
+        if model_name_override is not None and str(model_name_override).strip()
+        else _clean_env_value("MODEL_NAME")
     )
 
-    if provider == "openrouter" and model_name.startswith("openrouter/"):
-        model_name = model_name[len("openrouter/") :]
+    if (
+        provider == "openrouter"
+        and explicit_model
+        and explicit_model.startswith("openrouter/")
+    ):
+        explicit_model = explicit_model[len("openrouter/") :]
 
+    target_env = (model_env or "").strip() or "MODEL_NAME"
     return get_newapi_text_pydantic_model(
-        "MODEL_NAME",
+        target_env,
         preset["default_model"],
-        model_name_override=model_name,
+        model_name_override=explicit_model,
         brainclaw_profile=brainclaw_profile,
         capability="text.generate.agent",
         timeout_seconds_override=_env_float(
@@ -157,33 +167,98 @@ def get_newapi_text_model_name(model_env: str, default_model: str) -> str:
     )
 
 
-def get_effective_newapi_text_model_name(
+def _call_effective_llm_config(
+    fn: Any,
+    *,
+    feature_key: str | None,
+    default_model: str | None,
+) -> Any:
+    params = inspect.signature(fn).parameters
+    accepts_kwargs = any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+    kwargs: dict[str, Any] = {}
+    if accepts_kwargs or "feature_key" in params:
+        kwargs["feature_key"] = feature_key
+    if accepts_kwargs or "default_model" in params:
+        kwargs["default_model"] = default_model
+    return fn(**kwargs)
+
+
+def _resolve_text_gateway_route(
     model_env: str,
     default_model: str | None = None,
     *,
     model_name_override: str | None = None,
-) -> str:
-    """Resolve one text route without silently falling back across editions."""
-    from novelvideo.model_gateway_settings import get_effective_llm_config
+):
+    from novelvideo.model_gateway_settings import (
+        _DC_DEFAULT_MODEL_TO_FEATURE_ID,
+        EffectiveLlmConfig,
+        get_effective_llm_config,
+        resolve_direct_media_gateway_target,
+    )
     from novelvideo.official_defaults import ADVANCED_TEXT_MODEL_BY_ENV
 
     explicit_model = str(model_name_override or "").strip()
     env_model = _clean_env_value(model_env)
     if not uses_local_ce_runtime():
-        # EE never binds a route to BrainClaw. The deployment environment owns
-        # the choice: each task's model env selects the alias, and BrainClaw is
-        # reached by pointing that env at the BrainClaw alias. Fixed EE task
-        # call sites omit ``default_model`` so a missing route fails fast;
-        # generic/provider entry points may still supply an explicit default as
-        # part of their public API.
         selected = explicit_model or env_model or default_model
         if selected:
-            return selected
+            return get_effective_llm_config(), selected
         raise ValueError(f"Missing required EE model route: {model_env}")
 
-    llm_config = get_effective_llm_config()
-    if llm_config.is_brainclaw:
-        return "brainclaw"
+    is_dc_alias = bool(
+        explicit_model
+        and (
+            explicit_model.lower() in _DC_DEFAULT_MODEL_TO_FEATURE_ID
+            or explicit_model.startswith("DC-")
+        )
+    )
+    direct_blockout = (
+        resolve_direct_media_gateway_target(explicit_model, "blockout")
+        if explicit_model
+        else None
+    )
+    if direct_blockout is not None and direct_blockout.base_url and direct_blockout.api_key:
+        direct_llm = EffectiveLlmConfig(
+            mode="advanced",
+            source="custom_direct",
+            base_url=direct_blockout.base_url,
+            api_key=direct_blockout.api_key,
+            model=direct_blockout.upstream_model,
+            is_brainclaw=False,
+            provider=direct_blockout.provider,
+            channel_id=direct_blockout.channel_id,
+        )
+        return direct_llm, direct_blockout.upstream_model
+
+    lookup_feature = explicit_model if is_dc_alias else model_env
+    llm_config = _call_effective_llm_config(
+        get_effective_llm_config,
+        feature_key=lookup_feature,
+        default_model=default_model or explicit_model,
+    )
+    if getattr(llm_config, "is_brainclaw", False):
+        return llm_config, "brainclaw"
+    if getattr(llm_config, "source", "") == "custom_direct":
+        if not getattr(llm_config, "base_url", "") or not getattr(
+            llm_config, "api_key", ""
+        ):
+            feature_label = lookup_feature or model_env
+            raise ValueError(
+                f"Direct LLM gateway is not configured for {feature_label}. "
+                "Please configure a provider channel API Key or Agent LLM in Settings."
+            )
+        if explicit_model and not is_dc_alias:
+            return llm_config, explicit_model
+        llm_model = str(getattr(llm_config, "model", "") or "").strip()
+        if llm_model:
+            return llm_config, llm_model
+        feature_label = lookup_feature or model_env
+        raise ValueError(
+            f"Direct LLM model is not configured for {feature_label}. "
+            "Please configure a model under Settings -> Feature Models or Agent LLM."
+        )
     # Official channel pointed at a third-party gateway: use the text model
     # resolved (and saved) for that gateway. The DC-* aliases below only
     # exist on a self-hosted NewAPI with those mappings, so falling through
@@ -193,15 +268,31 @@ def get_effective_newapi_text_model_name(
     # gateway. In Custom/Advanced mode llm_config.model is empty, so the
     # env var and the DC-* alias keep working exactly as before.
     if explicit_model:
-        return explicit_model
-    if llm_config.model:
-        return llm_config.model
+        return llm_config, explicit_model
+    llm_model = getattr(llm_config, "model", "")
+    if llm_model:
+        return llm_config, llm_model
     selected = env_model or ADVANCED_TEXT_MODEL_BY_ENV.get(model_env)
     if selected:
-        return selected
+        return llm_config, selected
     if default_model:
-        return default_model
+        return llm_config, default_model
     raise ValueError(f"Missing required CE Advanced model route: {model_env}")
+
+
+def get_effective_newapi_text_model_name(
+    model_env: str,
+    default_model: str | None = None,
+    *,
+    model_name_override: str | None = None,
+) -> str:
+    """Resolve one text route without silently falling back across editions."""
+    _llm_config, model_name = _resolve_text_gateway_route(
+        model_env,
+        default_model,
+        model_name_override=model_name_override,
+    )
+    return model_name
 
 
 def _get_newapi_text_model_profile(model_name: str):
@@ -461,10 +552,8 @@ def get_newapi_text_pydantic_model(
 ):
     """Create a PydanticAI OpenAI-compatible model that routes through newAPI."""
     from novelvideo.brainclaw_contract import brainclaw_profile_headers
-    from novelvideo.model_gateway_settings import get_effective_llm_config
 
-    llm_config = get_effective_llm_config()
-    model_name = get_effective_newapi_text_model_name(
+    llm_config, model_name = _resolve_text_gateway_route(
         model_env,
         default_model,
         model_name_override=model_name_override,
@@ -583,10 +672,16 @@ def get_superpower_pydantic_model(
         or _clean_env_value("SUPERPOWER_MODEL")
         or _clean_env_value("SUPERPOWER_MODEL_NAME")
     )
+    extra_kwargs = (
+        {"model_env": feature_model_env}
+        if feature_model_env
+        else {}
+    )
     return get_pydantic_model(
         provider_override=provider_override,
         model_name_override=model_name_override,
         brainclaw_profile=brainclaw_profile,
+        **extra_kwargs,
     )
 
 
@@ -1386,7 +1481,7 @@ def _configured_character_image_model() -> str:
             (name, item)
             for name, item in mappings.items()
             if item.get("mediaType") == "image"
-            and item.get("provider") == "newapi"
+            and item.get("provider") != "comfyui"
             and item.get("enabled") is not False
         ),
         key=lambda pair: (int(pair[1].get("sortOrder") or 100), pair[0]),
@@ -1436,13 +1531,58 @@ def _image_provider_config(
             "model": model or OPENAI_IMAGE_MODEL,
         }
     if provider == "newapi":
+        from novelvideo.model_gateway_settings import (
+            is_direct_multi_channel_mode,
+            is_media_models_catalog_replaced,
+            resolve_direct_media_gateway_target,
+        )
+
+        direct_target = (
+            resolve_direct_media_gateway_target(model, "image") if model else None
+        )
+        if direct_target is not None:
+            return {
+                "provider": provider,
+                "api_key": direct_target.api_key,
+                "model": direct_target.upstream_model,
+                "base_url": direct_target.base_url,
+            }
+        if (
+            not model_override
+            and is_direct_multi_channel_mode()
+            and is_media_models_catalog_replaced()
+        ):
+            fallback_model = _configured_character_image_model()
+            if fallback_model:
+                direct_target = resolve_direct_media_gateway_target(
+                    fallback_model, "image"
+                )
+                if direct_target is not None:
+                    return {
+                        "provider": provider,
+                        "api_key": direct_target.api_key,
+                        "model": direct_target.upstream_model,
+                        "base_url": direct_target.base_url,
+                    }
+        resolved_model = (
+            model or _configured_character_image_model() or NEWAPI_IMAGE_MODEL
+        )
+        if resolved_model:
+            direct_target = resolve_direct_media_gateway_target(
+                resolved_model, "image"
+            )
+            if direct_target is not None:
+                return {
+                    "provider": provider,
+                    "api_key": direct_target.api_key,
+                    "model": direct_target.upstream_model,
+                    "base_url": direct_target.base_url,
+                }
         gateway = get_effective_newapi_gateway_config()
         return {
             "provider": provider,
             "api_key": gateway.api_key,
-            "model": model
-            or _configured_character_image_model()
-            or NEWAPI_IMAGE_MODEL,
+            "model": resolved_model,
             "base_url": gateway.base_url,
         }
 

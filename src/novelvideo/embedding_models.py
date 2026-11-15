@@ -136,6 +136,14 @@ def embedding_gateway_credentials(spec: EmbeddingModelSpec) -> tuple[str, str]:
     """Resolve credentials for the gateway permanently implied by a model spec."""
 
     if is_ce_effective():
+        if spec.gateway == MODE_CUSTOM:
+            from novelvideo.model_gateway_settings import (
+                get_effective_cognee_embedding_config,
+            )
+
+            emb = get_effective_cognee_embedding_config()
+            if emb.base_url and emb.api_key:
+                return emb.api_key, emb.base_url
         gateway = get_ce_newapi_config_for_mode(spec.gateway)
         return gateway.api_key, gateway.base_url
     if spec.gateway != MODE_OFFICIAL:

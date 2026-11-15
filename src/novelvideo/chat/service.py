@@ -2281,13 +2281,24 @@ def _codex_model() -> str:
         from novelvideo.model_gateway_settings import (
             AGENT_LLM_MODE_THIRD_PARTY,
             CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW,
+            is_direct_multi_channel_mode,
         )
 
         gateway = get_effective_agent_llm_config()
         if gateway.mode == AGENT_LLM_MODE_THIRD_PARTY:
+            if not gateway.model and is_direct_multi_channel_mode():
+                raise RuntimeError(
+                    "Direct Agent third-party LLM model is not configured in Settings."
+                )
             return gateway.model or _DEFAULT_CODEX_MODEL
         if gateway.mode == CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW:
             return "brainclaw"
+        if getattr(gateway, "source", "") == "custom_direct":
+            if getattr(gateway, "model", ""):
+                return gateway.model
+            raise RuntimeError(
+                "Direct Hermes/Agent LLM model is not configured. Configure HERMES in Settings -> Feature Models or Agent LLM."
+            )
         return _DEFAULT_CODEX_MODEL
 
     # EE/SaaS is deployment-configured. The gateway address and logical model
@@ -4154,7 +4165,13 @@ def _codex_gateway_config_overrides(
         from novelvideo.shared.runtime_env import is_ce_effective
 
         gateway = get_effective_agent_llm_config() if is_ce_effective() else None
-        if gateway is not None and gateway.mode == AGENT_LLM_MODE_THIRD_PARTY:
+        if gateway is not None and (
+            gateway.mode == AGENT_LLM_MODE_THIRD_PARTY
+            or (
+                gateway.source == "custom_direct"
+                and configured_model != _DEFAULT_CODEX_MODEL
+            )
+        ):
             template = next(
                 (
                     item

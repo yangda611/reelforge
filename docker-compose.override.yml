@@ -1,0 +1,18 @@
+# 本地部署覆盖：默认使用直连多渠道架构（中转站 / 模型供应商 -> ReelForge 系统），
+# 不再默认启动内置 newapi 代理容器，节省资源并消除额外中转链路。
+#
+# 如需临时启用旧版内置 NewAPI 网关，请使用：
+#   NEWAPI_PROVISIONER_ENABLED=true docker compose --profile legacy-newapi up -d
+
+services:
+  api:
+    depends_on: !reset []
+    environment:
+      NEWAPI_PROVISIONER_ENABLED: "${NEWAPI_PROVISIONER_ENABLED:-false}"
+
+  newapi:
+    # 清掉 docker-compose.yml 里的 build 段（其 context 指向本地可能不存在的 ../reelforge-gateway）
+    build: !reset null
+    image: calciumion/new-api:v1.0.0-rc.51
+    profiles:
+      - legacy-newapi

@@ -25,15 +25,23 @@ def resolve_scene_analysis_model(
 def scene_analysis_gateway_configured() -> bool:
     """Use the same effective LLM credentials as the unified gateway client."""
     from novelvideo.config import get_newapi_runtime_credentials
-    from novelvideo.model_gateway_settings import get_effective_llm_config
+    from novelvideo.model_gateway_settings import (
+        get_effective_llm_config,
+        invoke_effective_llm_config,
+    )
 
-    config = get_effective_llm_config()
+    config = invoke_effective_llm_config(
+        get_effective_llm_config,
+        feature_key="SCENE_BUILD",
+    )
     api_key, base_url = get_newapi_runtime_credentials(
         api_key_override=config.api_key,
         base_url_override=config.base_url,
         env_api_key="MODEL_API_KEY",
         env_base_url="MODEL_BASE_URL",
     )
+    if getattr(config, "source", "") == "custom_direct":
+        return bool(api_key and base_url and getattr(config, "model", ""))
     return bool(api_key and base_url)
 
 

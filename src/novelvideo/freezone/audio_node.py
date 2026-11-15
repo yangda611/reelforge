@@ -685,8 +685,15 @@ async def generate_freezone_audio_speech(
     mode = str(speech_mode or "clone").strip().lower()
     output_path = freezone_audio_speech_output_path(project_dir, job_id)
     if mode == "preset":
+        from novelvideo.model_gateway_settings import (
+            resolve_direct_media_gateway_target,
+        )
+
         model_name = str(preset_model or DEFAULT_PRESET_TTS_MODEL).strip()
-        if not model_name or model_name in LEGACY_PRESET_TTS_MODELS:
+        if not model_name or (
+            model_name in LEGACY_PRESET_TTS_MODELS
+            and resolve_direct_media_gateway_target(model_name, "audio") is None
+        ):
             model_name = DEFAULT_PRESET_TTS_MODEL
         voice_name = str(preset_voice or "Serena").strip() or "Serena"
         if model_name == DEFAULT_PRESET_TTS_MODEL:
@@ -869,11 +876,24 @@ async def _write_newapi_audio_speech(
         resolved_base_url = request_credential.base_url
     else:
         from novelvideo.config import get_newapi_runtime_credentials
-
-        key, resolved_base_url = get_newapi_runtime_credentials(
-            api_key_override=api_key,
-            base_url_override=base_url,
+        from novelvideo.model_gateway_settings import (
+            resolve_direct_media_gateway_target,
         )
+
+        direct_target = (
+            resolve_direct_media_gateway_target(str(model or "").strip(), "audio")
+            if not api_key and not base_url
+            else None
+        )
+        if direct_target is not None:
+            key = direct_target.api_key
+            resolved_base_url = direct_target.base_url
+            model = direct_target.upstream_model
+        else:
+            key, resolved_base_url = get_newapi_runtime_credentials(
+                api_key_override=api_key,
+                base_url_override=base_url,
+            )
     key = str(key or "").strip()
     if not key:
         raise RuntimeError("NEWAPI_API_KEY is required for NewAPI audio generation")
@@ -1055,7 +1075,23 @@ async def generate_freezone_audio_eleven_music(
         or "mp3_44100_128",
     }
 
-    model_name = str(model or "LingShan-MU-11").strip() or "LingShan-MU-11"
+    from novelvideo.model_gateway_settings import (
+        resolve_default_direct_audio_model,
+        resolve_direct_media_gateway_target,
+    )
+
+    requested_model = str(model or "").strip()
+    if not requested_model or requested_model == "LingShan-MU-11":
+        fallback_music = resolve_default_direct_audio_model()
+        if fallback_music and (
+            not requested_model
+            or resolve_direct_media_gateway_target("LingShan-MU-11", "audio") is None
+        ):
+            model_name = fallback_music
+        else:
+            model_name = requested_model or "LingShan-MU-11"
+    else:
+        model_name = requested_model
     reservation_id = ""
     try:
         reservation_id = await _reserve_music_model_call(

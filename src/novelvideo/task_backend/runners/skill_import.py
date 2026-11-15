@@ -31,7 +31,15 @@ def run_skill_import(envelope, ctx):
         return {'ok': True, 'import_id': import_id, 'status': result['status']}
     except BaseException as exc:
         record = get_record(root, username, import_id)
-        record.update(status='failed', error=f'{type(exc).__name__}: {str(exc)[:500]}')
+        if getattr(exc, 'status_code', None) == 524:
+            error = (
+                'The model gateway timed out (HTTP 524) after its 120-second '
+                'proxy read window. The original source and completed checkpoints '
+                'are retained; retry this item after the model service recovers.'
+            )
+        else:
+            error = f'{type(exc).__name__}: {str(exc)[:500]}'
+        record.update(status='failed', error=error)
         save_record(root, username, record)
         raise
 

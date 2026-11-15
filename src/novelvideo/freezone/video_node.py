@@ -278,12 +278,43 @@ def freezone_video_duration_bounds(
 
 
 def _freezone_newapi_video_options() -> dict[str, str]:
-    from novelvideo.generators.video_generator import newapi_video_backend_options
+    from novelvideo.generators.video_generator import (
+        NEWAPI_VIDEO_BACKEND_PREFIX,
+        newapi_video_backend_options,
+    )
+    from novelvideo.model_gateway_settings import (
+        MODE_CUSTOM,
+        get_effective_newapi_config,
+        get_newapi_media_model_mappings,
+        is_media_models_catalog_replaced,
+    )
+    from novelvideo.shared.runtime_env import is_ce_effective
+
+    replaced = (
+        is_ce_effective()
+        and is_media_models_catalog_replaced()
+        and get_effective_newapi_config().mode == MODE_CUSTOM
+    )
+    all_options = newapi_video_backend_options()
+    if replaced:
+        return dict(all_options)
+
+    custom_video_backends: set[str] = set()
+    if is_ce_effective():
+        try:
+            for model, mapping in get_newapi_media_model_mappings().items():
+                if (
+                    str(mapping.get("mediaType") or "video").strip().lower() == "video"
+                    and mapping.get("enabled") is not False
+                ):
+                    custom_video_backends.add(f"{NEWAPI_VIDEO_BACKEND_PREFIX}{model}")
+        except (RuntimeError, ImportError):
+            pass
 
     options = {
         key: value
-        for key, value in newapi_video_backend_options().items()
-        if key in FREEZONE_NEWAPI_VIDEO_BACKENDS
+        for key, value in all_options.items()
+        if key in FREEZONE_NEWAPI_VIDEO_BACKENDS or key in custom_video_backends
     }
     options.setdefault("newapi_happyhorse-1.0", "HappyHorse 1.0")
     if FREEZONE_DEFAULT_VIDEO_BACKEND not in options:

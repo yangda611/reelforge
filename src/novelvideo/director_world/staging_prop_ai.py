@@ -232,20 +232,64 @@ def resolve_model_config(
 
     require_direct_model_egress_allowed(egress_context)
     from novelvideo.config import get_newapi_runtime_credentials
-    from novelvideo.model_gateway_settings import get_effective_llm_config
+    from novelvideo.model_gateway_settings import (
+        get_effective_llm_config,
+        invoke_effective_llm_config,
+    )
 
-    llm_config = get_effective_llm_config()
+    llm_config = invoke_effective_llm_config(
+        get_effective_llm_config,
+        feature_key="STAGING_PROP",
+    )
     if llm_config.is_brainclaw and llm_config.api_key:
         return "brainclaw", llm_config.api_key, llm_config.base_url
 
+    request_model = str(request.get("model") or "").strip()
+    if llm_config.source == "custom_direct":
+        api_key, base_url = get_newapi_runtime_credentials(
+            api_key_override=str(request.get("api_key") or "").strip()
+            or llm_config.api_key
+            or None,
+            base_url_override=str(request.get("base_url") or "").strip()
+            or llm_config.base_url
+            or None,
+            env_api_key="MODEL_API_KEY",
+            env_base_url="MODEL_BASE_URL",
+        )
+        model = (
+            request_model
+            or str(llm_config.model or "").strip()
+            or os.environ.get("STAGING_PROP_MODEL")
+            or ""
+        )
+        if not model:
+            raise ValueError(
+                "Direct LLM model is not configured for STAGING_PROP."
+            )
+        if not api_key or not base_url:
+            raise ValueError(
+                "Direct LLM gateway credentials are not configured for STAGING_PROP."
+            )
+        return model, api_key, base_url
+
+    gateway_model = (
+        str(llm_config.model or "").strip()
+        if not llm_config.is_brainclaw
+        else ""
+    )
     model = (
-        str(request.get("model") or "").strip()
+        request_model
+        or gateway_model
         or os.environ.get("STAGING_PROP_MODEL")
         or STAGING_PROP_MODEL
     )
     api_key, base_url = get_newapi_runtime_credentials(
-        api_key_override=str(request.get("api_key") or "").strip() or None,
-        base_url_override=str(request.get("base_url") or "").strip() or None,
+        api_key_override=str(request.get("api_key") or "").strip()
+        or llm_config.api_key
+        or None,
+        base_url_override=str(request.get("base_url") or "").strip()
+        or llm_config.base_url
+        or None,
         env_api_key="MODEL_API_KEY",
         env_base_url="MODEL_BASE_URL",
     )

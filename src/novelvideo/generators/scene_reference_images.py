@@ -686,18 +686,30 @@ async def generate_scene_reference_image(
             image_config=_scene_image_config(selected_model),
         )
     elif provider == "newapi":
+        request_model = selected_model
         if organization_egress is None:
             from novelvideo.config import get_effective_newapi_gateway_config
+            from novelvideo.model_gateway_settings import (
+                resolve_direct_media_gateway_target,
+            )
 
-            gateway = get_effective_newapi_gateway_config()
-            api_key = gateway.api_key
-            base_url = gateway.base_url
+            direct_target = resolve_direct_media_gateway_target(
+                selected_model, "image"
+            )
+            if direct_target is not None:
+                api_key = direct_target.api_key
+                base_url = direct_target.base_url
+                request_model = direct_target.upstream_model
+            else:
+                gateway = get_effective_newapi_gateway_config()
+                api_key = gateway.api_key
+                base_url = gateway.base_url
         else:
             api_key = organization_egress.credential.api_key
             base_url = organization_egress.credential.base_url
         image_bytes, _text, error = await _call_newapi_image_api(
             api_key=api_key,
-            model=selected_model,
+            model=request_model,
             prompt=prompt,
             reference_images=references or None,
             image_config=_scene_image_config(selected_model),

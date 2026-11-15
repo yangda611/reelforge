@@ -8,6 +8,7 @@ keeps its deployment environment as the sole credential source.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import time
 import tempfile
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +90,145 @@ OFFICIAL_MEDIA_CATALOG_PUBLISHED_AT_KEY = "official_media_catalog_published_at"
 OFFICIAL_MEDIA_CATALOG_SHA256_KEY = "official_media_catalog_sha256"
 OFFICIAL_MEDIA_CATALOG_LAST_ERROR_KEY = "official_media_catalog_last_error"
 _OFFICIAL_MEDIA_CATALOG_WRITE_LOCK = threading.Lock()
+CUSTOM_GATEWAY_DIRECT_MODE_KEY = "custom_gateway_direct_mode"
+CUSTOM_FEATURE_MODEL_MAPPINGS_KEY = "custom_newapi_feature_model_mappings"
+CUSTOM_MEDIA_MODELS_REPLACE_CATALOG_KEY = "custom_newapi_media_models_replace_catalog"
+
+FEATURE_ENV_TO_ID: dict[str, str] = {
+    "HERMES": "HERMES",
+    "HERMES_MODEL": "HERMES",
+    "CODEX_MODEL": "HERMES",
+    "GLOBAL_VIDEO_OPTIMIZER": "GLOBAL_VIDEO_OPTIMIZER",
+    "GLOBAL_VIDEO_OPTIMIZER_MODEL": "GLOBAL_VIDEO_OPTIMIZER",
+    "KEYFRAME_PROMPT_MODEL": "GLOBAL_VIDEO_OPTIMIZER",
+    "SEEDANCE2_PROMPT_COMPOSER": "SEEDANCE2_PROMPT_COMPOSER",
+    "SEEDANCE2_PROMPT_COMPOSER_MODEL": "SEEDANCE2_PROMPT_COMPOSER",
+    "GLOBAL_VIDEO_IDENTITY_DETECTOR": "GLOBAL_VIDEO_IDENTITY_DETECTOR",
+    "GLOBAL_VIDEO_IDENTITY_DETECTOR_MODEL": "GLOBAL_VIDEO_IDENTITY_DETECTOR",
+    "IDENTITY_PLANNER_CAST": "IDENTITY_PLANNER_CAST",
+    "IDENTITY_PLANNER_CAST_MODEL": "IDENTITY_PLANNER_CAST",
+    "IDENTITY_PLANNER_ANALYSIS": "IDENTITY_PLANNER_ANALYSIS",
+    "IDENTITY_PLANNER_ANALYSIS_MODEL": "IDENTITY_PLANNER_ANALYSIS",
+    "IDENTITY_PLANNER_APPEARANCE": "IDENTITY_PLANNER_APPEARANCE",
+    "IDENTITY_PLANNER_APPEARANCE_MODEL": "IDENTITY_PLANNER_APPEARANCE",
+    "LITERAL_BEAT_META": "LITERAL_BEAT_META",
+    "LITERAL_BEAT_META_MODEL": "LITERAL_BEAT_META",
+    "SCENE_BUILD": "SCENE_BUILD",
+    "SCENE_BUILD_MODEL": "SCENE_BUILD",
+    "OVERLAP_MODEL": "SCENE_BUILD",
+    "SPATIAL_MODEL": "SCENE_BUILD",
+    "SCENE_OVERLAP_ANALYSIS_MODEL": "SCENE_BUILD",
+    "SCENE_SPATIAL_CONTRACT_MODEL": "SCENE_BUILD",
+    "CHARACTER_BUILD": "CHARACTER_BUILD",
+    "CHARACTER_BUILD_MODEL": "CHARACTER_BUILD",
+    "EPISODE_SCENE_PLANNER": "EPISODE_SCENE_PLANNER",
+    "EPISODE_SCENE_PLANNER_MODEL": "EPISODE_SCENE_PLANNER",
+    "FIXED_CAMERA_PLANNER_MODEL": "EPISODE_SCENE_PLANNER",
+    "EPISODE_PROP_PLANNER": "EPISODE_PROP_PLANNER",
+    "EPISODE_PROP_PLANNER_MODEL": "EPISODE_PROP_PLANNER",
+    "FREEZONE_TRANSLATION": "FREEZONE_TRANSLATION",
+    "FREEZONE_TRANSLATION_MODEL": "FREEZONE_TRANSLATION",
+    "FREEZONE_TEXT_WRITER": "FREEZONE_TEXT_WRITER",
+    "FREEZONE_TEXT_WRITER_MODEL": "FREEZONE_TEXT_WRITER",
+    "FREEZONE_STORY_SCRIPT": "FREEZONE_STORY_SCRIPT",
+    "FREEZONE_STORY_SCRIPT_MODEL": "FREEZONE_STORY_SCRIPT",
+    "FREEZONE_VIDEO_STORY_SCRIPT_MODEL": "FREEZONE_STORY_SCRIPT",
+    "FREEZONE_RECIPE_COMPILER": "FREEZONE_RECIPE_COMPILER",
+    "FREEZONE_RECIPE_COMPILER_MODEL": "FREEZONE_RECIPE_COMPILER",
+    "FREEZONE_VISION": "FREEZONE_VISION",
+    "FREEZONE_VISION_MODEL": "FREEZONE_VISION",
+    "VOXEL_VLM_MODEL": "SCENE_BUILD",
+    "GLOBAL_VIDEO_MODEL": "GLOBAL_VIDEO_OPTIMIZER",
+    "VIDEO_PROMPT_MODEL": "GLOBAL_VIDEO_OPTIMIZER",
+    "STYLE_ANALYZER": "STYLE_ANALYZER",
+    "STYLE_ANALYZER_MODEL": "STYLE_ANALYZER",
+    "CONTENT_REWRITER": "CONTENT_REWRITER",
+    "CONTENT_REWRITER_MODEL": "CONTENT_REWRITER",
+    "SCREENPLAY_NORMALIZER": "SCREENPLAY_NORMALIZER",
+    "SCREENPLAY_NORMALIZER_MODEL": "SCREENPLAY_NORMALIZER",
+    "EPISODE_SCENE_RECONCILE": "EPISODE_SCENE_RECONCILE",
+    "EPISODE_SCENE_RECONCILE_MODEL": "EPISODE_SCENE_RECONCILE",
+    "NARRATED_SCENE_ASSET": "NARRATED_SCENE_ASSET",
+    "NARRATED_SCENE_ASSET_MODEL": "NARRATED_SCENE_ASSET",
+    "STAGING_PROP": "STAGING_PROP",
+    "STAGING_PROP_MODEL": "STAGING_PROP",
+    "PREVIZ_BLOCKOUT": "PREVIZ_BLOCKOUT",
+    "PREVIZ_BLOCKOUT_MODEL": "PREVIZ_BLOCKOUT",
+    "COGNEE": "COGNEE",
+    "COGNEE_LLM_MODEL": "COGNEE",
+}
+
+_DC_DEFAULT_MODEL_TO_FEATURE_ID: dict[str, str] = {
+    "hermes": "HERMES",
+    "dc-hermes-llm": "HERMES",
+    "dc-codex-agent-llm": "HERMES",
+    "dc-video-prompt-optimizer-llm": "GLOBAL_VIDEO_OPTIMIZER",
+    "dc-seedance2-prompt-composer-llm": "SEEDANCE2_PROMPT_COMPOSER",
+    "dc-video-identity-detector-llm": "GLOBAL_VIDEO_IDENTITY_DETECTOR",
+    "dc-identity-cast-planner-llm": "IDENTITY_PLANNER_CAST",
+    "dc-identity-analysis-planner-llm": "IDENTITY_PLANNER_ANALYSIS",
+    "dc-identity-appearance-writer-llm": "IDENTITY_PLANNER_APPEARANCE",
+    "dc-literal-beat-meta-llm": "LITERAL_BEAT_META",
+    "dc-scene-builder-llm": "SCENE_BUILD",
+    "dc-scene-overlap-analyzer-llm": "SCENE_BUILD",
+    "dc-scene-spatial-contract-llm": "SCENE_BUILD",
+    "dc-character-builder-llm": "CHARACTER_BUILD",
+    "dc-episode-scene-planner-llm": "EPISODE_SCENE_PLANNER",
+    "dc-episode-prop-planner-llm": "EPISODE_PROP_PLANNER",
+    "dc-freezone-translator-llm": "FREEZONE_TRANSLATION",
+    "dc-freezone-text-writer-llm": "FREEZONE_TEXT_WRITER",
+    "dc-freezone-story-script-writer-llm": "FREEZONE_STORY_SCRIPT",
+    "dc-freezone-recipe-compiler-llm": "FREEZONE_RECIPE_COMPILER",
+    "dc-freezone-vision-llm": "FREEZONE_VISION",
+    "dc-style-analyzer-llm": "STYLE_ANALYZER",
+    "dc-content-rewriter-llm": "CONTENT_REWRITER",
+    "dc-screenplay-normalizer-llm": "SCREENPLAY_NORMALIZER",
+    "dc-episode-scene-reconciler-llm": "EPISODE_SCENE_RECONCILE",
+    "dc-narrated-scene-asset-planner-llm": "NARRATED_SCENE_ASSET",
+    "dc-staging-prop-planner-llm": "STAGING_PROP",
+    "dc-previz-blockout-llm": "PREVIZ_BLOCKOUT",
+    "dc-cognee-llm": "COGNEE",
+}
+
+
+def normalize_feature_id(feature_key: str | None) -> str:
+    clean = str(feature_key or "").strip()
+    if not clean:
+        return ""
+    lowered = clean.lower()
+    if lowered in _DC_DEFAULT_MODEL_TO_FEATURE_ID:
+        return _DC_DEFAULT_MODEL_TO_FEATURE_ID[lowered]
+    upper = clean.upper()
+    return FEATURE_ENV_TO_ID.get(upper, upper)
+
+
+def _decode_feature_model_mappings(raw: str | None) -> dict[str, dict[str, str]]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for feature_key, item in parsed.items():
+        canonical = normalize_feature_id(str(feature_key or ""))
+        if not canonical or not isinstance(item, dict):
+            continue
+        provider = str(item.get("provider") or "").strip().lower()
+        upstream_model = str(item.get("upstreamModel") or "").strip()
+        channel_id = str(item.get("channelId") or "").strip().lower()
+        if not provider and not channel_id:
+            continue
+        entry: dict[str, str] = {
+            "provider": provider,
+            "upstreamModel": upstream_model,
+        }
+        if channel_id:
+            entry["channelId"] = channel_id
+        result[canonical] = entry
+    return result
 
 
 @dataclass(frozen=True)
@@ -106,6 +247,19 @@ class EffectiveLlmConfig:
     api_key: str
     model: str
     is_brainclaw: bool
+    provider: str = ""
+    channel_id: str = ""
+
+
+@dataclass(frozen=True)
+class DirectMediaGatewayTarget:
+    model: str
+    upstream_model: str
+    base_url: str
+    api_key: str = field(repr=False)
+    provider: str = ""
+    channel_id: str = ""
+    mapping: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -138,6 +292,9 @@ class EffectiveCogneeEmbeddingConfig:
     upstream_provider: str
     upstream_model: str
     batch_size: str = ""
+    base_url: str = ""
+    api_key: str = field(default="", repr=False)
+    channel_id: str = ""
 
 
 def mask_secret(value: str) -> str:
@@ -530,13 +687,17 @@ def save_custom_newapi_gateway(
     token_id: int | str = "",
     activate: bool = True,
 ) -> None:
+    normalized_base = normalize_relay_base_url(base_url)
+    clean_admin = str(admin_base_url or "").strip().rstrip("/")
     values = {
-        "custom_newapi_base_url": normalize_relay_base_url(base_url),
+        "custom_newapi_base_url": normalized_base,
         "custom_newapi_api_key": str(api_key or "").strip(),
-        "custom_newapi_admin_base_url": str(admin_base_url or "").strip().rstrip("/"),
+        "custom_newapi_admin_base_url": clean_admin,
         "custom_newapi_token_name": str(token_name or "").strip(),
         "custom_newapi_token_id": str(token_id or "").strip(),
     }
+    if normalized_base or clean_admin:
+        values[CUSTOM_GATEWAY_DIRECT_MODE_KEY] = "0"
     if activate:
         values["model_gateway_mode"] = MODE_CUSTOM
     _write_many(values)
@@ -597,10 +758,12 @@ def _decode_provider_channels(value: str | None) -> list[dict[str, Any]]:
         if channel_id in seen:
             continue
         seen.add(channel_id)
+        name = str(item.get("name") or "").strip()[:64]
         channels.append(
             {
                 "id": channel_id,
                 "provider": provider,
+                **({"name": name} if name else {}),
                 "type": max(0, int(item.get("type") or 0)),
                 "upstreamKey": str(item.get("upstreamKey") or "").strip(),
                 "baseUrl": str(item.get("baseUrl") or "").strip().rstrip("/"),
@@ -842,14 +1005,31 @@ def save_newapi_provider_channels(
                 while channel_id in seen or channel_id in existing_by_id:
                     channel_id = _new_provider_channel_id(provider)
         seen.add(channel_id)
+        has_explicit_id = bool(str(item.get("id") or "").strip())
         previous = existing_by_id.get(channel_id, {})
-        if not previous and len(existing_by_provider.get(provider, [])) == 1:
+        if (
+            not previous
+            and not has_explicit_id
+            and len(existing_by_provider.get(provider, [])) == 1
+        ):
             # Legacy caller saved by provider only: carry the stored key,
-            # type, priority and settings forward.
+            # type, priority and settings forward. Explicitly identified
+            # channels must never inherit another instance's key.
             previous = existing_by_provider[provider][0]
-        upstream_key = str(item.get("upstreamKey") or "").strip() or previous.get(
-            "upstreamKey",
-            "",
+        clear_key = bool(item.get("clearKey"))
+        upstream_key = (
+            ""
+            if clear_key
+            else (
+                str(item.get("upstreamKey") or "").strip()
+                or previous.get("upstreamKey", "")
+            )
+        )
+        raw_name = item.get("name")
+        name = (
+            str(raw_name or "").strip()[:64]
+            if "name" in item
+            else str(previous.get("name") or "").strip()[:64]
         )
         base_url = str(item.get("baseUrl") or "").strip().rstrip("/")
         channel_type = max(
@@ -874,6 +1054,7 @@ def save_newapi_provider_channels(
             {
                 "id": channel_id,
                 "provider": provider,
+                **({"name": name} if name else {}),
                 "type": channel_type,
                 "upstreamKey": upstream_key,
                 "baseUrl": base_url,
@@ -924,6 +1105,30 @@ def save_newapi_provider_channels(
                 or embedding_model.get("channelId") not in surviving_ids
             ):
                 values["custom_newapi_embedding_model"] = "{}"
+            feature_mappings = _decode_feature_model_mappings(
+                current_settings.get(CUSTOM_FEATURE_MODEL_MAPPINGS_KEY)
+            )
+            if feature_mappings:
+                pruned_feature_mappings = {
+                    feature_id: mapping
+                    for feature_id, mapping in feature_mappings.items()
+                    if (
+                        mapping.get("channelId")
+                        and mapping.get("channelId") in surviving_ids
+                    )
+                    or (
+                        (
+                            not mapping.get("channelId")
+                            or mapping.get("channelId") not in removed_ids
+                        )
+                        and mapping.get("provider") not in removed_providers
+                    )
+                }
+                values[CUSTOM_FEATURE_MODEL_MAPPINGS_KEY] = json.dumps(
+                    pruned_feature_mappings,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
     _write_many(values)
     return normalized
 
@@ -939,6 +1144,8 @@ def get_newapi_media_model_mappings() -> dict[str, dict[str, Any]]:
 
 def save_newapi_media_model_mappings(
     mappings: dict[str, dict[str, Any]],
+    *,
+    replace_catalog: bool | None = None,
 ) -> dict[str, dict[str, Any]]:
     from novelvideo.media_model_request_schema import (
         MEDIA_MODEL_CATALOG_TYPES,
@@ -981,16 +1188,24 @@ def save_newapi_media_model_mappings(
         if config:
             normalized_item["config"] = config
         normalized[model_name] = normalized_item
-    _write_many(
-        {
-            "custom_newapi_media_model_mappings": json.dumps(
-                normalized,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        }
-    )
+    values = {
+        "custom_newapi_media_model_mappings": json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    }
+    if replace_catalog is not None:
+        values[CUSTOM_MEDIA_MODELS_REPLACE_CATALOG_KEY] = "1" if replace_catalog else "0"
+    _write_many(values)
     return normalized
+
+
+def is_media_models_catalog_replaced() -> bool:
+    if not _uses_ce_gateway_settings():
+        return False
+    settings = get_model_gateway_settings()
+    return settings.get(CUSTOM_MEDIA_MODELS_REPLACE_CATALOG_KEY, "").strip() == "1"
 
 
 def build_newapi_media_model_mappings_status() -> dict[str, dict[str, Any]]:
@@ -1309,6 +1524,7 @@ def build_newapi_provider_channels_status() -> list[dict[str, Any]]:
         {
             "id": channel["id"],
             "provider": channel["provider"],
+            **({"name": channel["name"]} if channel.get("name") else {}),
             "type": channel.get("type", 0),
             "configured": bool(channel["upstreamKey"])
             or (
@@ -1323,6 +1539,389 @@ def build_newapi_provider_channels_status() -> list[dict[str, Any]]:
         }
         for channel in get_newapi_provider_channels()
     ]
+
+
+_DIRECT_BASE_URL_VERSION_SUFFIXES = (
+    "/v1",
+    "/v1beta",
+    "/v1beta/openai",
+    "/v2",
+    "/v3",
+    "/v4",
+    "/api/v1",
+    "/api/v3",
+    "/api/paas/v4",
+    "/compatible-mode/v1",
+    "/openai",
+)
+
+
+def _normalize_direct_channel_base_url(
+    value: str | None,
+    *,
+    provider: str = "",
+) -> str:
+    from novelvideo.newapi_provisioner import PROVIDER_PRESETS
+
+    clean_provider = str(provider or "").strip().lower()
+    raw = str(value or "").strip().rstrip("/")
+    if not raw and clean_provider in PROVIDER_PRESETS:
+        raw = str(PROVIDER_PRESETS[clean_provider].get("base_url") or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if clean_provider == "comfyui":
+        return raw
+    lowered = raw.lower()
+    if clean_provider == "volcengine" and lowered == "https://ark.cn-beijing.volces.com":
+        return f"{raw}/api/v3"
+    if clean_provider == "zhipu" and lowered == "https://open.bigmodel.cn":
+        return f"{raw}/api/paas/v4"
+    if (
+        clean_provider == "gemini"
+        and lowered == "https://generativelanguage.googleapis.com"
+    ):
+        return f"{raw}/v1beta/openai"
+    if any(lowered.endswith(suffix) for suffix in _DIRECT_BASE_URL_VERSION_SUFFIXES):
+        return raw
+    return f"{raw}/v1"
+
+
+def set_direct_multi_channel_mode(enabled: bool) -> None:
+    if not _uses_ce_gateway_settings():
+        return
+    _write_many({CUSTOM_GATEWAY_DIRECT_MODE_KEY: "1" if enabled else "0"})
+
+
+def is_direct_multi_channel_mode(
+    settings: Mapping[str, str] | None = None,
+) -> bool:
+    if not _uses_ce_gateway_settings():
+        return False
+    loaded = dict(settings) if settings is not None else get_model_gateway_settings()
+    explicit = str(loaded.get(CUSTOM_GATEWAY_DIRECT_MODE_KEY) or "").strip()
+    if explicit == "1":
+        return True
+    if explicit == "0":
+        return False
+    from novelvideo.newapi_provisioner import provisioner_enabled
+
+    if not provisioner_enabled():
+        has_channels = bool(
+            _decode_provider_channels(loaded.get("custom_newapi_provider_channels"))
+        )
+        has_features = bool(
+            _decode_feature_model_mappings(loaded.get(CUSTOM_FEATURE_MODEL_MAPPINGS_KEY))
+        )
+        return has_channels or has_features
+    return False
+
+
+def get_feature_model_mappings() -> dict[str, dict[str, str]]:
+    if not _uses_ce_gateway_settings():
+        return {}
+    settings = get_model_gateway_settings()
+    return _decode_feature_model_mappings(settings.get(CUSTOM_FEATURE_MODEL_MAPPINGS_KEY))
+
+
+def save_feature_model_mappings(
+    mappings: Mapping[str, Mapping[str, Any]],
+    *,
+    enable_direct_mode: bool | None = None,
+    merge: bool = False,
+) -> dict[str, dict[str, str]]:
+    normalized: dict[str, dict[str, str]] = (
+        dict(get_feature_model_mappings()) if merge else {}
+    )
+    for raw_key, item in mappings.items():
+        if not isinstance(item, Mapping):
+            continue
+        canonical = normalize_feature_id(str(raw_key or ""))
+        if not canonical:
+            continue
+        provider = str(item.get("provider") or "").strip().lower()
+        upstream_model = str(item.get("upstreamModel") or "").strip()
+        channel_id = str(item.get("channelId") or "").strip().lower()
+        if channel_id and not provider:
+            matched_channel = (
+                get_newapi_provider_channel_by_id(channel_id)
+                or get_newapi_provider_channel(channel_id)
+            )
+            if matched_channel:
+                provider = matched_channel["provider"]
+        if not provider and not channel_id:
+            continue
+        if not upstream_model:
+            continue
+        entry: dict[str, str] = {
+            "provider": provider,
+            "upstreamModel": upstream_model,
+        }
+        if channel_id:
+            entry["channelId"] = channel_id
+        normalized[canonical] = entry
+    values: dict[str, str] = {
+        CUSTOM_FEATURE_MODEL_MAPPINGS_KEY: json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    }
+    if enable_direct_mode is not None:
+        values[CUSTOM_GATEWAY_DIRECT_MODE_KEY] = "1" if enable_direct_mode else "0"
+    _write_many(values)
+    return normalized
+
+
+def build_feature_model_mappings_status() -> dict[str, dict[str, str]]:
+    return get_feature_model_mappings()
+
+
+def resolve_channel_credentials(
+    *,
+    channel_id: str = "",
+    provider: str = "",
+) -> tuple[str, str, str, str]:
+    """Return ``(normalized_base_url, api_key, channel_id, provider)`` for a channel."""
+    if not _uses_ce_gateway_settings():
+        return ("", "", "", str(provider or "").strip().lower())
+    channels = get_newapi_provider_channels()
+    wanted_id = str(channel_id or "").strip().lower()
+    wanted_provider = str(provider or "").strip().lower()
+    matched: dict[str, Any] | None = None
+    if wanted_id:
+        for channel in channels:
+            if channel["id"] == wanted_id and (
+                channel["upstreamKey"]
+                or (channel["provider"] == "comfyui" and channel["baseUrl"])
+            ):
+                matched = channel
+                break
+    if matched is None and wanted_provider:
+        for channel in channels:
+            if channel["provider"] == wanted_provider and (
+                channel["upstreamKey"]
+                or (channel["provider"] == "comfyui" and channel["baseUrl"])
+            ):
+                matched = channel
+                break
+    if matched is None:
+        return ("", "", "", wanted_provider)
+    resolved_provider = matched["provider"]
+    base_url = _normalize_direct_channel_base_url(
+        matched.get("baseUrl", ""),
+        provider=resolved_provider,
+    )
+    return (base_url, matched.get("upstreamKey", ""), matched["id"], resolved_provider)
+
+
+def _media_bound_channel_refs() -> tuple[set[str], set[str]]:
+    bound_channel_ids: set[str] = set()
+    bound_providers_without_id: set[str] = set()
+    for item in get_newapi_media_model_mappings().values():
+        cid = str(item.get("channelId") or "").strip().lower()
+        if cid:
+            bound_channel_ids.add(cid)
+        elif item.get("provider"):
+            bound_providers_without_id.add(str(item["provider"]).strip().lower())
+    return bound_channel_ids, bound_providers_without_id
+
+
+def resolve_direct_llm_channel_fallback(
+    *,
+    prefer_feature: str = "",
+) -> tuple[str, str, str, str, str]:
+    """Resolve ``(base_url, api_key, model, channel_id, provider)`` in direct mode."""
+    mappings = get_feature_model_mappings()
+    preferred_order: list[str] = []
+    canonical_prefer = normalize_feature_id(prefer_feature)
+    if canonical_prefer:
+        preferred_order.append(canonical_prefer)
+    for key in ("FREEZONE_TEXT_WRITER", "HERMES", "SCENE_BUILD"):
+        if key not in preferred_order:
+            preferred_order.append(key)
+    for key in mappings:
+        if key not in preferred_order:
+            preferred_order.append(key)
+    for feature_id in preferred_order:
+        mapping = mappings.get(feature_id)
+        if not mapping:
+            continue
+        upstream_model = str(mapping.get("upstreamModel") or "").strip()
+        if not upstream_model:
+            continue
+        base_url, api_key, channel_id, provider = resolve_channel_credentials(
+            channel_id=mapping.get("channelId", ""),
+            provider=mapping.get("provider", ""),
+        )
+        if base_url and api_key:
+            return (
+                base_url,
+                api_key,
+                upstream_model,
+                channel_id,
+                provider,
+            )
+
+    settings = get_model_gateway_settings()
+    if (
+        is_direct_multi_channel_mode(settings)
+        and normalize_gateway_mode(settings.get("model_gateway_mode")) == MODE_CUSTOM
+        and normalize_custom_llm_mode(settings.get("custom_llm_mode"))
+        != CUSTOM_LLM_MODE_RELAYCLAW_BRAINCLAW
+        and normalize_agent_llm_mode(settings.get("agent_llm_mode"))
+        == AGENT_LLM_MODE_THIRD_PARTY
+    ):
+        agent_base = normalize_relay_base_url(settings.get("agent_llm_base_url", ""))
+        agent_key = normalize_api_key(settings.get("agent_llm_api_key", ""))
+        agent_model = str(settings.get("agent_llm_model", "")).strip()
+        if agent_base and agent_key and agent_model:
+            matched_id = "third_party"
+            matched_provider = "openai"
+            for channel in get_newapi_provider_channels():
+                if channel["provider"] == "comfyui":
+                    continue
+                ch_base = _normalize_direct_channel_base_url(
+                    channel.get("baseUrl", ""),
+                    provider=channel["provider"],
+                )
+                if ch_base == agent_base and channel.get("upstreamKey") == agent_key:
+                    matched_id = channel["id"]
+                    matched_provider = channel["provider"]
+                    break
+            return (agent_base, agent_key, agent_model, matched_id, matched_provider)
+
+    bound_ids, bound_providers = _media_bound_channel_refs()
+    non_media_candidates: list[tuple[str, str, str, str, str]] = []
+    media_candidates: list[tuple[str, str, str, str, str]] = []
+    for channel in get_newapi_provider_channels():
+        if channel["provider"] == "comfyui" or not channel.get("upstreamKey"):
+            continue
+        base_url = _normalize_direct_channel_base_url(
+            channel.get("baseUrl", ""),
+            provider=channel["provider"],
+        )
+        if not base_url:
+            continue
+        entry = (
+            base_url,
+            channel["upstreamKey"],
+            "",
+            channel["id"],
+            channel["provider"],
+        )
+        is_media_bound = (
+            channel["id"] in bound_ids
+            or channel["provider"] in bound_providers
+        )
+        if is_media_bound:
+            media_candidates.append(entry)
+        else:
+            non_media_candidates.append(entry)
+    if non_media_candidates:
+        return non_media_candidates[0]
+    if media_candidates:
+        return media_candidates[0]
+    return ("", "", "", "", "")
+
+
+def resolve_direct_media_gateway_target(
+    model_id: str,
+    media_type: str = "",
+) -> DirectMediaGatewayTarget | None:
+    """Resolve a direct upstream target for a configured custom media model."""
+    if not _uses_ce_gateway_settings():
+        return None
+    settings = get_model_gateway_settings()
+    if normalize_gateway_mode(settings.get("model_gateway_mode")) != MODE_CUSTOM:
+        return None
+    if not is_direct_multi_channel_mode(settings):
+        return None
+    wanted = str(model_id or "").strip()
+    if not wanted:
+        return None
+    catalog_id = wanted[len("newapi_") :] if wanted.startswith("newapi_") else wanted
+    wanted_type = str(media_type or "").strip().lower()
+    mappings = get_newapi_media_model_mappings()
+
+    matched_key = ""
+    matched_item: dict[str, Any] | None = None
+    for candidate in (catalog_id, wanted):
+        item = mappings.get(candidate)
+        if isinstance(item, dict) and (
+            not wanted_type or str(item.get("mediaType") or "").lower() in {"", wanted_type}
+        ):
+            matched_key = candidate
+            matched_item = item
+            break
+    if matched_item is None:
+        for key, item in mappings.items():
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("mediaType") or "").strip().lower()
+            if wanted_type and item_type and item_type != wanted_type:
+                continue
+            aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+            upstream = str(item.get("upstreamModel") or "").strip()
+            if catalog_id in aliases or wanted in aliases or upstream == catalog_id:
+                matched_key = key
+                matched_item = item
+                break
+    if matched_item is None:
+        return None
+    if str(matched_item.get("provider") or "").strip().lower() == "comfyui":
+        return None
+    base_url, api_key, channel_id, provider = resolve_channel_credentials(
+        channel_id=str(matched_item.get("channelId") or ""),
+        provider=str(matched_item.get("provider") or ""),
+    )
+    if not base_url or not api_key:
+        return None
+    upstream_model = str(matched_item.get("upstreamModel") or matched_key or catalog_id).strip()
+    return DirectMediaGatewayTarget(
+        model=matched_key or catalog_id,
+        upstream_model=upstream_model,
+        base_url=base_url,
+        api_key=api_key,
+        provider=provider,
+        channel_id=channel_id,
+        mapping=dict(matched_item),
+    )
+
+
+def resolve_default_direct_audio_model() -> str:
+    """Return the first enabled custom audio catalog model id when direct mode is active."""
+    if not is_direct_multi_channel_mode():
+        return ""
+    catalog = get_ce_media_model_catalog("audio")
+    if not catalog:
+        return ""
+    return str(catalog[0].get("id") or "").strip()
+
+
+def fetch_direct_channel_models(
+    *,
+    channel_id: str = "",
+    provider: str = "",
+    base_url: str = "",
+    api_key: str = "",
+    timeout_seconds: float = 15.0,
+) -> list[str]:
+    """Fetch ``GET /models`` directly from an upstream provider/relay channel."""
+    saved_base, saved_key, _cid, resolved_provider = resolve_channel_credentials(
+        channel_id=channel_id,
+        provider=provider,
+    )
+    effective_provider = str(provider or resolved_provider or "").strip().lower()
+    effective_base = _normalize_direct_channel_base_url(
+        base_url or saved_base,
+        provider=effective_provider,
+    )
+    effective_key = normalize_api_key(api_key) or normalize_api_key(saved_key)
+    return _fetch_openai_compatible_models(
+        effective_base,
+        effective_key,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def save_media_relay_config(
@@ -1422,6 +2021,16 @@ def get_ce_newapi_config_for_mode(mode: str) -> EffectiveNewApiConfig:
     settings = get_model_gateway_settings()
     mode = normalize_gateway_mode(mode)
     if mode == MODE_CUSTOM:
+        if is_direct_multi_channel_mode(settings):
+            fb_base, fb_key, _fb_model, _fb_id, _fb_provider = (
+                resolve_direct_llm_channel_fallback()
+            )
+            return EffectiveNewApiConfig(
+                mode=MODE_CUSTOM,
+                source="custom_direct",
+                base_url=fb_base,
+                api_key=fb_key,
+            )
         return EffectiveNewApiConfig(
             mode=MODE_CUSTOM,
             source="custom",
@@ -1482,7 +2091,11 @@ def is_official_relay_base_url(base_url: str | None) -> bool:
     ).lower()
 
 
-def get_effective_llm_config() -> EffectiveLlmConfig:
+def get_effective_llm_config(
+    feature_key: str | None = None,
+    *,
+    default_model: str | None = None,
+) -> EffectiveLlmConfig:
     """Resolve LLM independently from media and embedding gateways."""
     if not _uses_ce_gateway_settings():
         base_url = normalize_relay_base_url(os.environ.get("NEWAPI_BASE_URL", ""))
@@ -1558,6 +2171,42 @@ def get_effective_llm_config() -> EffectiveLlmConfig:
             model="brainclaw",
             is_brainclaw=True,
         )
+    if is_direct_multi_channel_mode(settings):
+        feature_id = normalize_feature_id(feature_key or default_model)
+        feature_mappings = _decode_feature_model_mappings(
+            settings.get(CUSTOM_FEATURE_MODEL_MAPPINGS_KEY)
+        )
+        mapping = feature_mappings.get(feature_id) if feature_id else None
+        if mapping:
+            ch_base, ch_key, ch_id, ch_provider = resolve_channel_credentials(
+                channel_id=mapping.get("channelId", ""),
+                provider=mapping.get("provider", ""),
+            )
+            upstream_model = str(mapping.get("upstreamModel") or "").strip()
+            if ch_base and ch_key and upstream_model:
+                return EffectiveLlmConfig(
+                    mode=CUSTOM_LLM_MODE_ADVANCED,
+                    source="custom_direct",
+                    base_url=ch_base,
+                    api_key=ch_key,
+                    model=upstream_model,
+                    is_brainclaw=False,
+                    provider=ch_provider,
+                    channel_id=ch_id,
+                )
+        fb_base, fb_key, fb_model, fb_id, fb_provider = (
+            resolve_direct_llm_channel_fallback(prefer_feature=feature_id)
+        )
+        return EffectiveLlmConfig(
+            mode=CUSTOM_LLM_MODE_ADVANCED,
+            source="custom_direct",
+            base_url=fb_base,
+            api_key=fb_key,
+            model=fb_model,
+            is_brainclaw=False,
+            provider=fb_provider,
+            channel_id=fb_id,
+        )
     custom = get_ce_newapi_config_for_mode(MODE_CUSTOM)
     return EffectiveLlmConfig(
         mode=CUSTOM_LLM_MODE_ADVANCED,
@@ -1598,24 +2247,15 @@ _NON_TEXT_MODEL_HINTS = (
 )
 
 
-def fetch_gateway_text_models(
+def _fetch_openai_compatible_models(
     base_url: str,
     api_key: str,
     *,
     timeout_seconds: float = 15.0,
 ) -> list[str]:
-    """List the model ids a gateway serves, via its OpenAI-compatible list.
-
-    Uses a dedicated client. It honours the process proxy settings (the
-    default), so it reaches the internet the same way the rest of the app
-    does — a VM or desktop behind a proxy needs that proxy to reach the
-    gateway. Raises ``ValueError`` with a plain-language reason when the
-    gateway cannot be reached, the key is rejected, or the response is not
-    a model list.
-    """
     import httpx
 
-    base = normalize_relay_base_url(base_url)
+    base = str(base_url or "").strip().rstrip("/")
     if not base:
         raise ValueError("网关地址为空，请先填写网关地址")
     if not normalize_api_key(api_key):
@@ -1649,12 +2289,33 @@ def fetch_gateway_text_models(
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list):
         raise ValueError("网关返回的不是有效的模型列表")
-    models = [
+    return [
         str(item.get("id", "")).strip()
         for item in data
         if isinstance(item, dict) and str(item.get("id", "")).strip()
     ]
-    return models
+
+
+def fetch_gateway_text_models(
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = 15.0,
+) -> list[str]:
+    """List the model ids a gateway serves, via its OpenAI-compatible list.
+
+    Uses a dedicated client. It honours the process proxy settings (the
+    default), so it reaches the internet the same way the rest of the app
+    does — a VM or desktop behind a proxy needs that proxy to reach the
+    gateway. Raises ``ValueError`` with a plain-language reason when the
+    gateway cannot be reached, the key is rejected, or the response is not
+    a model list.
+    """
+    return _fetch_openai_compatible_models(
+        normalize_relay_base_url(base_url),
+        api_key,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def pick_gateway_text_model(models: list[str]) -> str:
@@ -1975,15 +2636,37 @@ def test_official_gateway(
     }
 
 
+def invoke_effective_llm_config(
+    fn: Any,
+    *,
+    feature_key: str | None = None,
+    default_model: str | None = None,
+) -> Any:
+    """Invoke ``get_effective_llm_config`` cleanly even when tests patch a 0-arg stub."""
+    params = inspect.signature(fn).parameters
+    accepts_kwargs = any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+    kwargs: dict[str, Any] = {}
+    if accepts_kwargs or "feature_key" in params:
+        kwargs["feature_key"] = feature_key
+    if accepts_kwargs or "default_model" in params:
+        kwargs["default_model"] = default_model
+    return fn(**kwargs)
+
+
 def get_effective_agent_llm_config() -> EffectiveLlmConfig:
     """Resolve the Agent-only LLM route without affecting business text models."""
     if not _uses_ce_gateway_settings():
-        return get_effective_llm_config()
+        return invoke_effective_llm_config(get_effective_llm_config)
 
     settings = get_model_gateway_settings()
     agent_llm_mode = normalize_agent_llm_mode(settings.get("agent_llm_mode"))
     if agent_llm_mode != AGENT_LLM_MODE_THIRD_PARTY:
-        return get_effective_llm_config()
+        return invoke_effective_llm_config(
+            get_effective_llm_config,
+            feature_key="HERMES",
+        )
     return EffectiveLlmConfig(
         mode=AGENT_LLM_MODE_THIRD_PARTY,
         source=AGENT_LLM_MODE_THIRD_PARTY,
@@ -2144,14 +2827,34 @@ def get_effective_cognee_embedding_config(
         ).strip()
         if saved_batch_size:
             saved_batch_size = str(_int_setting(saved_batch_size, 0) or "")
+        direct_base_url = ""
+        direct_api_key = ""
+        direct_channel_id = str(saved.get("channelId") or "").strip().lower()
+        resolved_upstream_provider = str(saved["provider"])
+        resolved_model = str(saved["internalModel"])
+        if is_direct_multi_channel_mode():
+            ch_base, ch_key, ch_id, ch_provider = resolve_channel_credentials(
+                channel_id=direct_channel_id,
+                provider=str(saved["provider"]),
+            )
+            if ch_base and ch_key:
+                direct_base_url = ch_base
+                direct_api_key = ch_key
+                direct_channel_id = ch_id
+                if ch_provider:
+                    resolved_upstream_provider = ch_provider
+                resolved_model = str(saved["upstreamModel"])
         return EffectiveCogneeEmbeddingConfig(
             source="database",
             provider="newapi",
-            model=str(saved["internalModel"]),
+            model=resolved_model,
             dimensions=str(saved["dimension"]),
-            upstream_provider=str(saved["provider"]),
+            upstream_provider=resolved_upstream_provider,
             upstream_model=str(saved["upstreamModel"]),
             batch_size=saved_batch_size or DEFAULT_EMBEDDING_BATCH_SIZE,
+            base_url=direct_base_url,
+            api_key=direct_api_key,
+            channel_id=direct_channel_id,
         )
 
     # Product runtime always sends embeddings through newAPI. Keep the
@@ -2276,7 +2979,15 @@ def build_model_gateway_status(
             "source": effective_llm.source,
             "baseUrl": effective_llm.base_url,
             "apiKeyPreview": mask_secret(effective_llm.api_key),
-            "configured": bool(effective_llm.base_url and effective_llm.api_key),
+            "configured": (
+                bool(
+                    effective_llm.base_url
+                    and effective_llm.api_key
+                    and effective_llm.model
+                )
+                if effective_llm.source == "custom_direct"
+                else bool(effective_llm.base_url and effective_llm.api_key)
+            ),
             "model": effective_llm.model,
             "brainclaw": effective_llm.is_brainclaw,
         },
@@ -2315,10 +3026,27 @@ def build_model_gateway_status(
             "llmMode": custom_llm_mode,
             "baseUrl": custom_base_url,
             "apiKeyPreview": mask_secret(custom_api_key),
-            "configured": bool(custom_base_url and custom_api_key),
+            "configured": bool(
+                (custom_base_url and custom_api_key)
+                or (
+                    uses_ce_settings
+                    and is_direct_multi_channel_mode(settings)
+                    and effective.base_url
+                    and effective.api_key
+                )
+            ),
             "adminBaseUrl": settings.get("custom_newapi_admin_base_url", ""),
             "tokenName": settings.get("custom_newapi_token_name", ""),
             "tokenId": settings.get("custom_newapi_token_id", ""),
+            "directMultiChannel": (
+                is_direct_multi_channel_mode(settings) if uses_ce_settings else False
+            ),
+            "featureModels": (
+                build_feature_model_mappings_status() if uses_ce_settings else {}
+            ),
+            "mediaModelsReplaceCatalog": (
+                is_media_models_catalog_replaced() if uses_ce_settings else False
+            ),
         },
         "reasoning": get_llm_reasoning_settings(),
     }

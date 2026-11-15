@@ -385,6 +385,10 @@ def _hermes_model_default() -> str:
             return "brainclaw"
         if gateway.model:
             return gateway.model
+        if gateway.source == "custom_direct":
+            raise RuntimeError(
+                "Direct Hermes LLM model is not configured. Configure HERMES in Settings -> Feature Models or Agent LLM."
+            )
     return (
         _root_value(
             "HERMES_MODEL",

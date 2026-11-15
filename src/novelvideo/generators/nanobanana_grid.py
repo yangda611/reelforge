@@ -3623,6 +3623,18 @@ async def _call_newapi_image_api(
     import httpx
 
     context = _validate_egress_context(egress_context)
+    if context is None or not context.is_organization:
+        from novelvideo.model_gateway_settings import (
+            resolve_direct_media_gateway_target,
+        )
+
+        direct_target = resolve_direct_media_gateway_target(model, "image")
+        if direct_target is not None:
+            if direct_target.api_key:
+                api_key = direct_target.api_key
+            if direct_target.base_url:
+                base_url = direct_target.base_url
+            model = direct_target.upstream_model
     if not api_key:
         return None, "", "DramaClawAPI API key is missing"
 

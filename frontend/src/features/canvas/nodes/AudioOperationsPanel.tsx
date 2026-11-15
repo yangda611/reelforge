@@ -26,7 +26,9 @@ import { useDetachUpstream } from '@/features/canvas/hooks/useDetachUpstream';
 import {
   fetchFreezoneTextTranslateResult,
   submitFreezoneTextTranslate,
+  type FreezoneAudioModelInfo,
 } from '@/api/ops';
+import { useFreezoneAudioModels } from '@/features/canvas/hooks/useFreezoneAudioModels';
 import { awaitTaskCompletion, isTaskPollTimeoutError } from '@/api/tasks';
 import { notifyTaskStillRunning } from '@/features/canvas/application/errorDialog';
 import { deriveAudioText, useAudioGeneration } from '@/features/canvas/nodes/useAudioGeneration';
@@ -110,6 +112,7 @@ export function AudioOperationsPanel({ nodeId, data }: AudioOperationsPanelProps
   // 'music'：文字生成音乐(走 /freezone/audio/eleven-music)；缺省/'speech'：克隆音频(TTS)。
   const isMusic = data.audioKind === 'music';
   const voiceMissing = requiresCustomVoiceSelection(data);
+  const { models: audioModels } = useFreezoneAudioModels();
   // 生成逻辑(含失败重试)抽到 useAudioGeneration，与节点本体的重试共用同一实现。
   const {
     generate: handleSubmit,
@@ -417,11 +420,11 @@ export function AudioOperationsPanel({ nodeId, data }: AudioOperationsPanelProps
       </div>
 
       {!isMusic && showVoiceSettings && (
-        <AudioVoiceSettingsPanel nodeId={nodeId} data={data} />
+        <AudioVoiceSettingsPanel nodeId={nodeId} data={data} audioModels={audioModels} />
       )}
 
       {isMusic && showMusicSettings && (
-        <AudioMusicSettingsPanel nodeId={nodeId} data={data} />
+        <AudioMusicSettingsPanel nodeId={nodeId} data={data} audioModels={audioModels} />
       )}
       {!isMusic && (
         <VoiceSelectionModal
@@ -555,9 +558,11 @@ function MusicSettingHelp({ text }: { text: string }) {
 function AudioMusicSettingsPanel({
   nodeId,
   data,
+  audioModels,
 }: {
   nodeId: string;
   data: AudioNodeData;
+  audioModels: readonly FreezoneAudioModelInfo[];
 }) {
   const { t } = useTranslation();
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
@@ -565,6 +570,8 @@ function AudioMusicSettingsPanel({
     typeof data.musicLengthMs === 'number' ? data.musicLengthMs : DEFAULT_MUSIC_LENGTH_MS;
   const forceInstrumental = data.forceInstrumental ?? true;
   const respectSectionsDurations = data.respectSectionsDurations ?? true;
+  const selectedMusicModel =
+    typeof data.model === 'string' && data.model !== 'suno_music' ? data.model : '';
   return (
     <div className="border-t border-white/[0.04] px-4 pb-3 pt-1">
       <div className="flex items-center justify-between py-2">
@@ -572,6 +579,34 @@ function AudioMusicSettingsPanel({
           {t('node.audioPanel.advancedSettings')}
         </span>
       </div>
+      {audioModels.length > 0 && (
+        <div className="flex items-center justify-between gap-3 py-1">
+          <span className="inline-flex items-center gap-1.5 text-[13px] text-text-dark">
+            {t('node.audioPanel.audioModel', { defaultValue: '音频模型' })}
+          </span>
+          <UiSelect
+            aria-label={t('node.audioPanel.audioModel', { defaultValue: '音频模型' })}
+            value={selectedMusicModel}
+            onChange={(event) =>
+              updateNodeData(nodeId, {
+                model: event.target.value || 'suno_music',
+              })
+            }
+            onMouseDown={(event) => event.stopPropagation()}
+            className={MUSIC_LENGTH_SELECT_CLASS}
+            menuClassName={MUSIC_LENGTH_SELECT_MENU_CLASS}
+          >
+            <option value="">
+              {t('node.audioPanel.defaultAudioModel', { defaultValue: '后端默认' })}
+            </option>
+            {audioModels.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label || item.apiModel}
+              </option>
+            ))}
+          </UiSelect>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 py-1">
         <span className="inline-flex items-center gap-1.5 text-[13px] text-text-dark">
           {t('node.audioPanel.musicDuration')}
@@ -622,7 +657,13 @@ function AudioMusicSettingsPanel({
   );
 }
 
-function AudioVoiceSettingsPanel({ nodeId, data }: AudioVoiceSettingsPanelProps) {
+function AudioVoiceSettingsPanel({
+  nodeId,
+  data,
+  audioModels,
+}: AudioVoiceSettingsPanelProps & {
+  audioModels: readonly FreezoneAudioModelInfo[];
+}) {
   const { t } = useTranslation();
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   // 默认音色的拉取放在 AudioNode 里完成（音频节点一挂载就会触发）；这里只负责展示。
@@ -630,6 +671,8 @@ function AudioVoiceSettingsPanel({ nodeId, data }: AudioVoiceSettingsPanelProps)
   const voiceLabel = data.voiceLabel ?? t('node.audioPanel.voiceLoading');
   const voiceLanguage = data.voiceLanguage ?? '';
   const currentRef: AudioVoiceRef = data.voiceRef ?? { scope: 'project_narrator' };
+  const selectedPresetModel =
+    data.speechMode === 'preset' ? (data.presetModel ?? '') : '';
   const [modalOpen, setModalOpen] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'success' | 'error'>('idle');
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -671,6 +714,41 @@ function AudioVoiceSettingsPanel({ nodeId, data }: AudioVoiceSettingsPanelProps)
           {t('node.audioPanel.voiceSettings')}
         </span>
       </div>
+      {audioModels.length > 0 && (
+        <div className="mb-2 flex items-center justify-between gap-3 py-1">
+          <span className="text-[12px] text-text-dark">
+            {t('node.audioPanel.audioModel', { defaultValue: '音频模型' })}
+          </span>
+          <UiSelect
+            aria-label={t('node.audioPanel.audioModel', { defaultValue: '音频模型' })}
+            value={selectedPresetModel}
+            onChange={(event) => {
+              const nextModel = event.target.value;
+              if (!nextModel) {
+                updateNodeData(nodeId, { speechMode: 'clone' });
+              } else {
+                updateNodeData(nodeId, {
+                  speechMode: 'preset',
+                  presetModel: nextModel,
+                  presetVoice: data.presetVoice ?? 'Serena',
+                });
+              }
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+            className={MUSIC_LENGTH_SELECT_CLASS}
+            menuClassName={MUSIC_LENGTH_SELECT_MENU_CLASS}
+          >
+            <option value="">
+              {t('node.audioPanel.cloneVoiceMode', { defaultValue: '默认克隆音色' })}
+            </option>
+            {audioModels.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label || item.apiModel}
+              </option>
+            ))}
+          </UiSelect>
+        </div>
+      )}
       <div className="flex min-h-[55px] w-full items-center gap-3 rounded-[10px] border border-white/[0.08] bg-transparent px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

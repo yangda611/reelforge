@@ -98,8 +98,10 @@ export interface FeatureProviderChannel {
    * normalize 时迁移为 `id === provider`，所以单实例旧渠道的 id 不变。
    */
   id?: string;
+  /** 可选显示名称，用于区分相同供应商的不同分组渠道（如 OpenAI - 视频）。 */
+  name?: string;
   provider: FeatureModelProvider;
-  /** 上游供应商 Key（写入 NewAPI 渠道时按 provider 取）。 */
+  /** 上游供应商 Key（写入 NewAPI 或直连渠道时按 channelId 取）。 */
   upstreamKey: string;
   /** 上游 Base URL 覆盖；空表示使用后端 provider preset。 */
   baseUrl: string;
@@ -287,7 +289,9 @@ interface SettingsState {
     snapshot: Pick<
       FeatureModelSettings,
       'providerChannels' | 'providerKeys' | 'mediaModels' | 'embeddingModel'
-    >,
+    > & {
+      featureModels?: FeatureModelSettings['featureModels'];
+    },
     snapshotKey: string
   ) => void;
   updateFeatureModel: (
@@ -314,7 +318,7 @@ interface SettingsState {
   ) => string;
   updateFeatureProviderChannel: (
     channelId: string,
-    patch: Partial<Omit<FeatureProviderChannel, 'provider'>>,
+    patch: Partial<FeatureProviderChannel>,
     options?: FeatureModelConfigMutationOptions
   ) => void;
   clearFeatureProviderUpstreamKey: (
@@ -441,8 +445,8 @@ function normalizeFeatureModelSettings(
         const provider = normalizeFeatureModelProvider(entry.provider);
         const model = typeof entry.model === 'string' ? entry.model.trim() : '';
         const channelId = normalizeChannelIdReference(entry.channelId);
-        // 仅在偏离默认（provider≠ali 或有模型名）时保留，保持空状态干净。
-        if (provider !== DEFAULT_FEATURE_MODEL_PROVIDER || model) {
+        // 仅在偏离默认（provider≠ali、指定了渠道或有模型名）时保留，保持空状态干净。
+        if (provider !== DEFAULT_FEATURE_MODEL_PROVIDER || model || channelId) {
           featureModels[fid] = {
             provider,
             model,
@@ -541,8 +545,10 @@ function normalizeFeatureModelSettings(
       // first entry so one provider can hold several configurations.
       const id = normalizeProviderChannelId(channel.id ?? key, provider);
       if (providerChannels[id]) continue;
+      const name = typeof channel.name === 'string' ? channel.name.trim().slice(0, 64) : '';
       providerChannels[id] = {
         id,
+        ...(name ? { name } : {}),
         provider,
         upstreamKey: typeof channel.upstreamKey === 'string' ? channel.upstreamKey.trim() : '',
         baseUrl: typeof channel.baseUrl === 'string' ? channel.baseUrl.trim() : '',
@@ -762,19 +768,24 @@ export const useSettingsStore = create<SettingsState>()(
       hydrateFeatureModelConfigFromBackend: (snapshot, snapshotKey) =>
         set((state) => {
           const next = normalizeFeatureModelSettings({
-            featureModels: state.featureModelConfig.featureModels,
             ...snapshot,
+            featureModels:
+              snapshot.featureModels && Object.keys(snapshot.featureModels).length > 0
+                ? snapshot.featureModels
+                : state.featureModelConfig.featureModels,
           });
           const backendChanged =
             JSON.stringify({
               providerChannels: state.featureModelConfig.providerChannels,
               providerKeys: state.featureModelConfig.providerKeys,
+              featureModels: state.featureModelConfig.featureModels,
               mediaModels: state.featureModelConfig.mediaModels,
               embeddingModel: state.featureModelConfig.embeddingModel,
             }) !==
             JSON.stringify({
               providerChannels: next.providerChannels,
               providerKeys: next.providerKeys,
+              featureModels: next.featureModels,
               mediaModels: next.mediaModels,
               embeddingModel: next.embeddingModel,
             });
@@ -795,10 +806,10 @@ export const useSettingsStore = create<SettingsState>()(
           const provider = normalizeFeatureModelProvider(patch.provider ?? prev.provider);
           const model = (patch.model ?? prev.model).trim();
           const channelId = normalizeChannelIdReference(
-            patch.channelId ?? prev.channelId,
+            'channelId' in patch ? patch.channelId : prev.channelId,
           );
-          // 回到默认（ali + 空模型）时删除该条，保持空状态干净。
-          if (provider === DEFAULT_FEATURE_MODEL_PROVIDER && !model) {
+          // 回到默认（ali + 空模型 + 无指定渠道）时删除该条，保持空状态干净。
+          if (provider === DEFAULT_FEATURE_MODEL_PROVIDER && !model && !channelId) {
             delete nextFeatureModels[featureId];
           } else {
             nextFeatureModels[featureId] = {
@@ -901,7 +912,7 @@ export const useSettingsStore = create<SettingsState>()(
         }),
       addFeatureProviderChannel: (provider, options) => {
         const normalized = normalizeFeatureModelProvider(provider);
-        // 同一 provider 可重复添加：每次生成新 id，绝不因 provider 已存在而 no-op。
+        // 同一 provider 可重复添加：每次生成新 id，且绝不复制同供应商已有渠道的 Key。
         const id = generateProviderChannelId(normalized);
         set((state) => ({
           ...nextFeatureModelConfigMutationMeta(
@@ -916,7 +927,7 @@ export const useSettingsStore = create<SettingsState>()(
               [id]: {
                 id,
                 provider: normalized,
-                upstreamKey: state.featureModelConfig.providerKeys[normalized] ?? '',
+                upstreamKey: '',
                 baseUrl: '',
                 priority: 0,
                 settings: {},
@@ -929,30 +940,41 @@ export const useSettingsStore = create<SettingsState>()(
       updateFeatureProviderChannel: (channelId, patch, options) =>
         set((state) => {
           const channels = state.featureModelConfig.providerChannels;
+          const { id: _ignoredPatchId, ...restPatch } = patch;
+          void _ignoredPatchId;
+          const resolvedProvider = restPatch.provider
+            ? normalizeFeatureModelProvider(restPatch.provider)
+            : normalizeFeatureModelProvider(channelId);
           // 按 id 更新；传 provider 名时退化为该 provider 的唯一渠道（旧调用兼容）。
           const resolvedId =
             resolveProviderChannelId(channels, channelId) ??
-            normalizeProviderChannelId(
-              channelId,
-              normalizeFeatureModelProvider(channelId),
-            );
+            normalizeProviderChannelId(channelId, resolvedProvider);
           const prev = channels[resolvedId] ?? {
             id: resolvedId,
-            provider: normalizeFeatureModelProvider(channelId),
+            provider: resolvedProvider,
             upstreamKey: '',
             baseUrl: '',
             priority: 0,
             settings: {},
           };
-          const { id: _ignoredPatchId, ...restPatch } = patch;
-          void _ignoredPatchId;
           const upstreamKey = (restPatch.upstreamKey ?? prev.upstreamKey).trim();
           const baseUrl = (restPatch.baseUrl ?? prev.baseUrl).trim();
           const priority = Math.round(Number(restPatch.priority ?? prev.priority) || 0);
           const settings = restPatch.settings ?? prev.settings;
+          const rawName = restPatch.name !== undefined ? restPatch.name : prev.name;
+          const name = typeof rawName === 'string' ? rawName.trim().slice(0, 64) : '';
           const nextKeys = { ...state.featureModelConfig.providerKeys };
-          if (upstreamKey) {
-            nextKeys[prev.provider] = upstreamKey;
+          const sameProviderChannels = Object.values(channels).filter(
+            (channel) => channel.provider === prev.provider
+          );
+          // 仅当该供应商只有一个渠道实例（兼容旧单实例路径）时维护 providerKeys，
+          // 防止多个同供应商渠道彼此覆盖或串联 Key。
+          if (sameProviderChannels.length <= 1) {
+            if (upstreamKey) {
+              nextKeys[prev.provider] = upstreamKey;
+            } else {
+              delete nextKeys[prev.provider];
+            }
           } else {
             delete nextKeys[prev.provider];
           }
@@ -969,6 +991,7 @@ export const useSettingsStore = create<SettingsState>()(
                 ...state.featureModelConfig.providerChannels,
                 [resolvedId]: {
                   id: resolvedId,
+                  ...(name ? { name } : {}),
                   provider: prev.provider,
                   upstreamKey,
                   baseUrl,
@@ -979,13 +1002,20 @@ export const useSettingsStore = create<SettingsState>()(
             },
           };
         }),
-      clearFeatureProviderUpstreamKey: (provider, options) =>
+      clearFeatureProviderUpstreamKey: (channelIdOrProvider, options) =>
         set((state) => {
-          const normalized = normalizeFeatureModelProvider(provider);
-          const nextKeys = { ...state.featureModelConfig.providerKeys };
-          delete nextKeys[normalized];
           const nextChannels = { ...state.featureModelConfig.providerChannels };
-          const channelId = findFirstProviderChannelId(nextChannels, normalized);
+          const channelId =
+            resolveProviderChannelId(nextChannels, channelIdOrProvider) ??
+            findFirstProviderChannelId(
+              nextChannels,
+              normalizeFeatureModelProvider(channelIdOrProvider),
+            );
+          const targetProvider = channelId
+            ? nextChannels[channelId]?.provider
+            : normalizeFeatureModelProvider(channelIdOrProvider);
+          const nextKeys = { ...state.featureModelConfig.providerKeys };
+          if (targetProvider) delete nextKeys[targetProvider];
           if (channelId && nextChannels[channelId]) {
             nextChannels[channelId] = { ...nextChannels[channelId], upstreamKey: '' };
           }

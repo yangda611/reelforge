@@ -1327,6 +1327,95 @@ def list_channel_types(
     return sorted(items, key=lambda item: (item["type"], item["provider"]))
 
 
+_BUILTIN_CHANNEL_CAPABILITIES: dict[str, list[str]] = {
+    "openai": ["text", "vision", "embedding", "image", "video", "audio"],
+    "openrouter": ["text", "vision", "embedding", "image", "video", "audio"],
+    "custom": ["text", "vision", "embedding", "image", "video", "audio"],
+    "azure": ["text", "vision", "embedding", "image", "video", "audio"],
+    "openaimax": ["text", "vision", "embedding", "image", "video", "audio"],
+    "ohmygpt": ["text", "vision", "embedding", "image", "video", "audio"],
+    "ails": ["text", "vision", "embedding", "image", "video", "audio"],
+    "aiproxy": ["text", "vision", "embedding", "image", "video", "audio"],
+    "aiproxylibrary": ["text", "vision", "embedding", "image", "video", "audio"],
+    "api2gpt": ["text", "vision", "embedding", "image", "video", "audio"],
+    "aigc2d": ["text", "vision", "embedding", "image", "video", "audio"],
+    "fastgpt": ["text", "vision", "embedding", "image", "video", "audio"],
+    "ali": ["text", "vision", "embedding", "image", "video", "audio"],
+    "volcengine": ["text", "vision", "embedding", "image", "video"],
+    "zhipu": ["text", "vision", "embedding", "image", "video"],
+    "zhipuv4": ["text", "vision", "embedding", "image", "video"],
+    "baidu": ["text", "vision", "embedding", "image", "video"],
+    "baiduv2": ["text", "vision", "embedding", "image", "video"],
+    "tencent": ["text", "vision", "embedding", "image", "video"],
+    "gemini": ["text", "vision", "embedding", "image", "video"],
+    "vertexai": ["text", "vision", "embedding", "image", "video"],
+    "siliconflow": ["text", "vision", "embedding", "image", "video", "audio"],
+    "minimax": ["text", "vision", "image", "video", "audio"],
+    "xai": ["text", "vision", "image"],
+    "midjourney": ["image"],
+    "midjourneyplus": ["image"],
+    "replicate": ["image", "video"],
+    "kling": ["video"],
+    "jimeng": ["image", "video"],
+    "vidu": ["video"],
+    "doubaovideo": ["video"],
+    "sora": ["video"],
+    "sunoapi": ["audio"],
+    "comfyui": ["image", "video"],
+    "anthropic": ["text", "vision"],
+    "claude": ["text", "vision"],
+}
+
+
+def list_builtin_channel_types() -> list[dict[str, Any]]:
+    """Return built-in channel type metadata without requiring a live NewAPI container."""
+    items: list[dict[str, Any]] = []
+    seen_providers: set[str] = set()
+    for provider, preset in PROVIDER_PRESETS.items():
+        clean_provider = str(provider or "").strip().lower()
+        if not clean_provider or clean_provider == "claude" or clean_provider in seen_providers:
+            continue
+        seen_providers.add(clean_provider)
+        default_base_url = str(preset.get("base_url") or "").strip()
+        channel_type = int(preset.get("type") or 0)
+        capabilities = list(
+            _BUILTIN_CHANNEL_CAPABILITIES.get(
+                clean_provider,
+                ["text", "vision", "embedding"],
+            )
+        )
+        items.append(
+            {
+                "type": channel_type,
+                "provider": clean_provider,
+                "name": str(preset.get("label") or clean_provider).strip(),
+                "description": "",
+                "icon": "",
+                "defaultBaseUrl": default_base_url,
+                "status": 1,
+                "capabilities": capabilities,
+                "requiresBaseUrl": not bool(default_base_url),
+                "supportsBaseUrlOverride": True,
+            }
+        )
+    if "comfyui" not in seen_providers:
+        items.append(
+            {
+                "type": 63,
+                "provider": "comfyui",
+                "name": "ComfyUI",
+                "description": "",
+                "icon": "",
+                "defaultBaseUrl": "",
+                "status": 1,
+                "capabilities": ["image", "video"],
+                "requiresBaseUrl": True,
+                "supportsBaseUrlOverride": True,
+            }
+        )
+    return sorted(items, key=lambda item: (item["type"], item["provider"]))
+
+
 def update_channel(
     cfg: NewApiProvisionerConfig,
     admin: AdminToken,

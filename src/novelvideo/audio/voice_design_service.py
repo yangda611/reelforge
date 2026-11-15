@@ -648,24 +648,44 @@ async def generate_voice_design(
         )
         if lease.replay_error:
             raise VoiceDesignError("generation_unknown", unknown=True)
-    try:
-        credential = (
-            await resolve_audio_gateway_credential(egress_context)
-            if egress_context.is_organization
-            else await get_model_credentials().resolve(
-                _trusted_admission(egress_context)
-            )
-        )
-        if credential.reference != egress_context.credential:
-            raise VoiceDesignError("voice_design_forbidden")
+    direct_target = None
+    if not egress_context.is_organization:
+        from novelvideo.model_gateway_settings import resolve_direct_media_gateway_target
+
+        candidate = resolve_direct_media_gateway_target(model_config.model, "audio")
+        if candidate is not None and candidate.base_url and candidate.api_key:
+            direct_target = candidate
+
+    request_body = dict(body)
+    if direct_target is not None:
         if execution_mode == "test_replay" and not _is_loopback_gateway(
-            credential.base_url
+            direct_target.base_url
         ):
             raise VoiceDesignError("voice_design_forbidden")
-    except Exception:
-        if lease is not None:
-            await reject_audio_operation(lease)
-        raise VoiceDesignError("voice_design_forbidden") from None
+        request_base_url = direct_target.base_url
+        request_api_key = direct_target.api_key
+        request_body["model"] = direct_target.upstream_model
+    else:
+        try:
+            credential = (
+                await resolve_audio_gateway_credential(egress_context)
+                if egress_context.is_organization
+                else await get_model_credentials().resolve(
+                    _trusted_admission(egress_context)
+                )
+            )
+            if credential.reference != egress_context.credential:
+                raise VoiceDesignError("voice_design_forbidden")
+            if execution_mode == "test_replay" and not _is_loopback_gateway(
+                credential.base_url
+            ):
+                raise VoiceDesignError("voice_design_forbidden")
+        except Exception:
+            if lease is not None:
+                await reject_audio_operation(lease)
+            raise VoiceDesignError("voice_design_forbidden") from None
+        request_base_url = credential.base_url
+        request_api_key = credential.api_key
     meter = get_usage_meter()
     reservation_id = ""
     call_reserved = False
@@ -686,9 +706,9 @@ async def generate_voice_design(
                 timeout=aiohttp.ClientTimeout(total=timeout)
             ) as session:
                 async with session.post(
-                    credential.base_url.rstrip("/") + "/" + endpoint,
-                    json=body,
-                    headers={"Authorization": f"Bearer {credential.api_key}"},
+                    request_base_url.rstrip("/") + "/" + endpoint,
+                    json=request_body,
+                    headers={"Authorization": f"Bearer {request_api_key}"},
                     allow_redirects=False,
                 ) as response:
                     if response.status != 200:

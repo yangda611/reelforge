@@ -327,10 +327,20 @@ def _get_endpoint_env(provider: str, primary_key: str, fallback_key: str) -> str
     return ""
 
 
+def _effective_cognee_llm_config():
+    from novelvideo.model_gateway_settings import get_effective_llm_config
+
+    return get_effective_llm_config(feature_key="COGNEE")
+
+
 def _effective_newapi_gateway() -> tuple[str, str]:
     try:
         from novelvideo.config import get_newapi_runtime_credentials
 
+        if uses_local_ce_runtime():
+            cognee_llm = _effective_cognee_llm_config()
+            if cognee_llm.base_url and cognee_llm.api_key:
+                return cognee_llm.api_key, cognee_llm.base_url
         return get_newapi_runtime_credentials()
     except Exception:
         if uses_local_ce_runtime():
@@ -343,13 +353,39 @@ def _effective_newapi_gateway() -> tuple[str, str]:
 
 
 def _resolve_llm_model(provider: str) -> str:
+    if uses_local_ce_runtime():
+        cognee_llm = None
+        try:
+            cognee_llm = _effective_cognee_llm_config()
+        except Exception:
+            cognee_llm = None
+        if cognee_llm is not None and cognee_llm.source == "custom_direct":
+            if cognee_llm.model:
+                return _normalize_llm_model(provider, cognee_llm.model)
+            raise RuntimeError(
+                "Cognee direct LLM model is not configured. Configure COGNEE in Settings -> Feature Models or Agent LLM."
+            )
+        if (
+            cognee_llm is not None
+            and not cognee_llm.is_brainclaw
+            and cognee_llm.source == "official"
+            and cognee_llm.model
+        ):
+            return _normalize_llm_model(provider, cognee_llm.model)
     model = os.getenv("COGNEE_LLM_MODEL", "").strip() or DEFAULT_COGNEE_LLM_MODEL
     return _normalize_llm_model(provider, model)
 
 
 def _current_gateway_fingerprint() -> str:
     api_key, base_url = _effective_newapi_gateway()
-    material = f"{base_url}\n{api_key}".encode("utf-8")
+    extra = ""
+    if is_ce_effective():
+        try:
+            cognee_llm = _effective_cognee_llm_config()
+            extra = f"\n{cognee_llm.model}"
+        except Exception:
+            pass
+    material = f"{base_url}\n{api_key}{extra}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
@@ -684,14 +720,36 @@ def _project_embedding_request_kwargs(
             raise RuntimeError("organization embedding credential is not resolved")
         api_key = request_credential.api_key
         base_url = request_credential.base_url
+        target_model = spec.internal_model
     else:
-        api_key, base_url = embedding_gateway_credentials(spec)
+        target_model = spec.internal_model
+        api_key = ""
+        base_url = ""
+        if is_ce_effective():
+            from novelvideo.model_gateway_settings import (
+                get_effective_cognee_embedding_config,
+                is_direct_multi_channel_mode,
+            )
+
+            direct_mode = is_direct_multi_channel_mode()
+            if spec.gateway == "custom" or direct_mode:
+                emb = get_effective_cognee_embedding_config()
+                if emb.base_url and emb.api_key and emb.upstream_model:
+                    api_key = emb.api_key
+                    base_url = emb.base_url
+                    target_model = emb.upstream_model
+                elif direct_mode:
+                    raise RuntimeError(
+                        "Direct embedding model is not configured in Settings."
+                    )
+        if not api_key or not base_url:
+            api_key, base_url = embedding_gateway_credentials(spec)
     if not api_key or not base_url:
         raise RuntimeError(f"Embedding gateway is not configured for {spec.gateway}")
 
     routed = dict(kwargs)
     routed["custom_llm_provider"] = "openai"
-    routed["model"] = _normalize_embedding_model("newapi", spec.internal_model)
+    routed["model"] = _normalize_embedding_model("newapi", target_model)
     routed["api_key"] = api_key
     routed["api_base"] = base_url
     if spec.send_dimensions:
@@ -787,6 +845,22 @@ async def _route_cognee_llm_transport(
 
     context = current_model_gateway_context()
     if context is None or not context.is_organization:
+        if uses_local_ce_runtime():
+            cognee_llm = _effective_cognee_llm_config()
+            if cognee_llm.source == "custom_direct":
+                if not cognee_llm.base_url or not cognee_llm.api_key:
+                    raise RuntimeError(
+                        "Cognee direct LLM gateway credentials are not configured."
+                    )
+                if not cognee_llm.model:
+                    raise RuntimeError(
+                        "Cognee direct LLM model is not configured."
+                    )
+                routed = dict(kwargs)
+                routed["api_key"] = cognee_llm.api_key
+                routed["api_base"] = cognee_llm.base_url
+                routed["model"] = _normalize_llm_model("newapi", cognee_llm.model)
+                return await transport(*args, **routed)
         return await transport(*args, **kwargs)
 
     clean_kwargs = {

@@ -9410,15 +9410,21 @@ async def _ee_media_model_catalog(media_type: str) -> list[dict[str, Any]] | Non
             get_ce_media_model_catalog,
             get_effective_newapi_config,
             get_official_media_model_catalog,
+            is_media_models_catalog_replaced,
         )
         from novelvideo.shared.runtime_env import is_ce_effective
 
         if is_ce_effective():
             mode = get_effective_newapi_config().mode
             if mode == MODE_CUSTOM:
+                custom_catalog = get_ce_media_model_catalog(
+                    media_type, include_disabled=True
+                )
+                if is_media_models_catalog_replaced():
+                    return custom_catalog
                 return _merge_media_model_catalog_defaults(
                     _static_media_model_catalog(media_type),
-                    get_ce_media_model_catalog(media_type, include_disabled=True),
+                    custom_catalog,
                 )
             if mode == MODE_HYBRID:
                 local = get_ce_media_model_catalog(
@@ -9476,7 +9482,12 @@ async def _scoped_media_model_catalog(
         raise HTTPException(503, "媒体模型目录暂不可用，请稍后重试") from None
 
 
-_MEDIA_TYPE_LABELS = {"image": "图片", "video": "视频", "blockout": "白模"}
+_MEDIA_TYPE_LABELS = {
+    "image": "图片",
+    "video": "视频",
+    "audio": "音频",
+    "blockout": "白模",
+}
 
 
 def _media_model_catalog_is_authoritative() -> bool:
@@ -10128,6 +10139,24 @@ async def freezone_blockout_models(
     return {"ok": True, "data": catalog}
 
 
+@router.get("/projects/{project}/freezone/audio/models", tags=[TAG_FREEZONE_AUDIO])
+async def freezone_audio_models(
+    project: str,
+    user: dict = Depends(get_api_user),
+):
+    """画布音频节点：返回可用的音频模型列表（支持自定义直连模型目录）。"""
+    ctx, _username, _project_name, _project_dir, _output_dir = (
+        await _resolve_freezone_project(project, user, required_role="viewer")
+    )
+    catalog = await _scoped_media_model_catalog(
+        "audio",
+        requester_user_id=ctx.requester_user_id,
+    )
+    if catalog is None:
+        catalog = _static_media_model_catalog("audio")
+    return {"ok": True, "data": _public_media_model_catalog(catalog)}
+
+
 async def _blockout_model_catalog(*, requester_user_id: str) -> list[dict[str, Any]]:
     """白模目录：图片/视频同一套目录的 ``blockout`` 类型，设置页的默认模型排第一。
 
@@ -10149,7 +10178,9 @@ async def _blockout_model_catalog(*, requester_user_id: str) -> list[dict[str, A
         None,
     )
     if default_entry is None:
-        if _media_model_catalog_is_authoritative():
+        from novelvideo.model_gateway_settings import is_media_models_catalog_replaced
+
+        if _media_model_catalog_is_authoritative() or is_media_models_catalog_replaced():
             return catalog
         default_entry = {
             "catalogId": default_model,
@@ -10915,7 +10946,31 @@ async def freezone_image_animate(
     )
     source_paths = [_image_output_source(project_dir, ctx, username, project_name, body.image_url)]
 
+    catalog = await _scoped_media_model_catalog(
+        "video",
+        requester_user_id=ctx.requester_user_id,
+    )
     model = "newapi_seedance-2.0-fast"
+    if catalog and not any(
+        model in _catalog_entry_identifiers(entry) for entry in catalog
+    ):
+        preferred_entries = [
+            entry
+            for entry in catalog
+            if not _is_processing_only_video_model(entry)
+        ] or list(catalog)
+        first_last = next(
+            (
+                entry
+                for entry in preferred_entries
+                if isinstance(entry.get("capabilities"), dict)
+                and "firstLastFrame"
+                in (entry["capabilities"].get("supportedModes") or [])
+            ),
+            None,
+        )
+        chosen = first_last or preferred_entries[0]
+        model = str(chosen.get("id") or chosen.get("apiModel") or model)
     try:
         backend = await _resolve_catalog_video_backend(
             model,

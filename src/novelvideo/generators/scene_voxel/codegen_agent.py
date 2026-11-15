@@ -22,8 +22,8 @@ from novelvideo.config import get_pydantic_model
 
 _log = logging.getLogger(__name__)
 
-_PROVIDER = os.environ.get("VOXEL_VLM_PROVIDER", "openrouter")
-_MODEL = os.environ.get("VOXEL_VLM_MODEL", "openai/gpt-5.5")
+_PROVIDER = os.environ.get("VOXEL_VLM_PROVIDER", "").strip() or None
+_MODEL = os.environ.get("VOXEL_VLM_MODEL", "").strip() or None
 
 
 SYSTEM_PROMPT = """You are an expert 3D voxel scene designer for a comic-drama (漫剧) production pipeline.
@@ -309,6 +309,7 @@ async def generate_build_script(
     model = get_pydantic_model(
         provider_override=_PROVIDER,
         model_name_override=_MODEL,
+        model_env="VOXEL_VLM_MODEL",
     )
     agent = Agent(
         model,

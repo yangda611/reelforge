@@ -3,7 +3,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import ky from "ky";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/api/client", async (original) => {
+  const client = ky.create({ baseUrl: "http://localhost:3000/api/v1/" });
+  return {
+    ...(await original<typeof import("@/api/client")>()),
+    apiClient: client,
+    apiCall: async <T,>(
+      path: string,
+      options?: Parameters<typeof client>[1],
+    ): Promise<T> => (await client(path, options).json<{ data: T }>()).data,
+  };
+});
 
 import { server } from "@/__mocks__/msw/server";
 import { CANVAS_NODE_TYPES } from "@/features/canvas/domain/canvasNodes";
@@ -55,7 +68,11 @@ const allowedOrgMe = {
 
 describe("AudioOperationsPanel music advanced settings", () => {
   beforeEach(() => {
-    server.use(http.get("*/api/v1/org/me", () => HttpResponse.json(allowedOrgMe)));
+    server.use(
+      http.get("http://localhost:3000/api/v1/org/me", () =>
+        HttpResponse.json(allowedOrgMe),
+      ),
+    );
     useCanvasStore.getState().setCanvasData([], []);
   });
 
@@ -177,4 +194,41 @@ describe("AudioOperationsPanel music advanced settings", () => {
     );
   });
 
+  it("renders custom audio models from /freezone/audio/models and writes selected model to node data", async () => {
+    window.history.replaceState({}, "", "/projects/audio-model-test/freezone");
+    server.use(
+      http.get(
+        "http://localhost:3000/api/v1/projects/audio-model-test/freezone/audio/models",
+        () =>
+        HttpResponse.json({
+          ok: true,
+          data: [
+            {
+              id: "my-suno-v4",
+              label: "Suno V4 Direct",
+              apiModel: "suno-v4",
+              provider: "openai",
+            },
+          ],
+        }),
+      ),
+    );
+    renderPanel({ audioKind: "music" });
+    fireEvent.click(screen.getByTitle("高级设置"));
+
+    const trigger = await screen.findByRole("button", {
+      name: "音频模型",
+    });
+    fireEvent.click(trigger);
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Suno V4 Direct" }),
+    );
+
+    await waitFor(() => {
+      const updated = useCanvasStore
+        .getState()
+        .nodes.find((n) => n.id === "audio-1")?.data as AudioNodeData | undefined;
+      expect(updated?.model).toBe("my-suno-v4");
+    });
+  });
 });

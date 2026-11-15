@@ -51,6 +51,7 @@ def _raised_while_handling(exc: BaseException, context: BaseException) -> BaseEx
         ModelHTTPError(429, 'test-model'),
         ModelHTTPError(500, 'test-model'),
         ModelHTTPError(503, 'test-model'),
+        ModelHTTPError(524, 'test-model'),
     ],
 )
 def test_transient_model_error_recognizes_retryable_transport_failures(exc):

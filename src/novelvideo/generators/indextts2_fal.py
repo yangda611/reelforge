@@ -143,14 +143,31 @@ class IndexTTS2FalClient:
         if self.provider not in {"newapi", "fal"}:
             self.provider = "newapi"
         if self.provider == "newapi":
+            resolved_model = model or INDEXTTS2_NEWAPI_MODEL
+            self.model = resolved_model
             if organization_mode:
                 self.api_key = ""
                 self.endpoint = ""
             else:
-                gateway = get_effective_newapi_gateway_config()
-                self.api_key = api_key if api_key is not None else gateway.api_key
-                self.endpoint = endpoint or gateway.base_url
-            self.model = model or INDEXTTS2_NEWAPI_MODEL
+                from novelvideo.model_gateway_settings import (
+                    resolve_direct_media_gateway_target,
+                )
+
+                direct_target = resolve_direct_media_gateway_target(
+                    resolved_model, "audio"
+                )
+                if direct_target is not None:
+                    self.api_key = (
+                        api_key if api_key is not None else direct_target.api_key
+                    )
+                    self.endpoint = endpoint or direct_target.base_url
+                    self.model = direct_target.upstream_model
+                else:
+                    gateway = get_effective_newapi_gateway_config()
+                    self.api_key = (
+                        api_key if api_key is not None else gateway.api_key
+                    )
+                    self.endpoint = endpoint or gateway.base_url
         else:
             if organization_mode:
                 self.api_key = ""

@@ -148,4 +148,51 @@ describe("channel model input", () => {
     expect(screen.getByRole("combobox", { name: "上游模型" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "选择渠道模型" })).toBeDisabled();
   });
+
+  it("uses direct /custom/channel-models when channelId or inline credentials are supplied", async () => {
+    const directEndpoint = "http://localhost:3000/api/v1/model-gateway/custom/channel-models";
+    let receivedBody: unknown;
+    server.use(
+      http.post(directEndpoint, async ({ request }) => {
+        receivedBody = await request.json();
+        return HttpResponse.json({
+          ok: true,
+          data: {
+            provider: "openai",
+            channelId: "openai-llm",
+            models: ["gpt-4o", "claude-3-7"],
+          },
+        });
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelModelsButton
+          provider="openai"
+          channelId="openai-llm"
+          baseUrl="https://zeroshell.top"
+          apiKey="sk-group-1"
+        />
+        <ChannelModelInput
+          provider="openai"
+          channelId="openai-llm"
+          baseUrl="https://zeroshell.top"
+          apiKey="sk-group-1"
+          value=""
+          onChange={() => {}}
+          placeholder="上游模型"
+        />
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+    await screen.findByRole("button", { name: "获取模型列表 (2)" });
+    expect(receivedBody).toEqual({
+      channelId: "openai-llm",
+      provider: "openai",
+      baseUrl: "https://zeroshell.top",
+      apiKey: "sk-group-1",
+    });
+  });
 });

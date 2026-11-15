@@ -1820,6 +1820,17 @@ export async function fetchFreezoneVideoModels(
   return coerceVideoModelList(payload);
 }
 
+export type FreezoneAudioModelInfo = FreezoneVideoModelInfo;
+
+export async function fetchFreezoneAudioModels(
+  project: string,
+): Promise<FreezoneAudioModelInfo[]> {
+  const payload = await apiCall<unknown>(
+    `projects/${encodeURIComponent(project)}/freezone/audio/models`,
+  );
+  return coerceVideoModelList(payload);
+}
+
 // /freezone/video/camera-templates --------------------------------------- //
 
 export interface FreezoneVideoCameraTemplate {
@@ -2710,6 +2721,8 @@ export async function submitFreezoneAudioSpeech(
 export interface FreezoneAudioMusicPayload extends FreezoneNodeContext {
   /** 音乐描述 prompt（风格、乐器、氛围等）；映射到后端 `input`。 */
   prompt: string;
+  /** 可选自定义音频模型名（来自设置页媒体模型目录）。 */
+  model?: string;
   /** 生成长度（毫秒），范围 3000–600000，留空走后端默认 30000。 */
   musicLengthMs?: number;
   /** 是否强制纯音乐，留空走后端默认 true。 */
@@ -2736,6 +2749,7 @@ export async function submitFreezoneAudioMusic(
       json: {
         ...nodeContextBody(payload),
         input: payload.prompt,
+        ...(payload.model ? { model: payload.model } : {}),
         music_length_ms: payload.musicLengthMs,
         force_instrumental: payload.forceInstrumental,
         respect_sections_durations: payload.respectSectionsDurations,

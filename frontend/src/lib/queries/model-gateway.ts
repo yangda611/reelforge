@@ -50,15 +50,25 @@ export interface OfficialGatewayConfig extends GatewayEndpointPreview {
   environment: GatewayEndpointPreview;
 }
 
+export interface FeatureModelMappingConfig {
+  provider: string;
+  channelId?: string;
+  upstreamModel: string;
+  apiFormat?: string;
+}
+
 export interface CustomGatewayConfig extends GatewayEndpointPreview {
   llmMode: CustomLlmMode;
   adminBaseUrl: string;
   tokenName: string;
   tokenId: string;
+  directMultiChannel?: boolean;
+  mediaModelsReplaceCatalog?: boolean;
+  featureModels?: Record<string, FeatureModelMappingConfig>;
 }
 
 export interface EffectiveGatewayConfig {
-  /** "official" | "custom"。 */
+  /** "official" | "custom" | "custom_direct"。 */
   source: string;
   baseUrl: string;
   apiKeyPreview: string;
@@ -69,6 +79,8 @@ export interface EffectiveLlmConfig extends EffectiveGatewayConfig {
   mode: string;
   model: string;
   brainclaw: boolean;
+  provider?: string;
+  channelId?: string;
 }
 
 export interface AgentLlmConfig extends GatewayEndpointPreview {
@@ -85,6 +97,7 @@ export interface NewApiDatabaseStatus {
 
 export interface SavedProviderChannelConfig {
   id?: string;
+  name?: string;
   provider: string;
   type?: number;
   configured: boolean;
@@ -109,6 +122,7 @@ export interface NewApiChannelType {
 
 export interface SavedMediaModelConfig {
   provider: string;
+  channelId?: string;
   upstreamModel: string;
   mediaType?: "image" | "video" | "blockout" | "audio";
   label?: string;
@@ -119,6 +133,7 @@ export interface SavedMediaModelConfig {
 
 export interface SavedEmbeddingModelConfig {
   provider: string;
+  channelId?: string;
   upstreamModel: string;
   dimension: number;
   batchSize?: number;
@@ -271,6 +286,7 @@ export interface FastApiErrorResponse {
 /** 一个 NewAPI 渠道：provider + 上游 Key + DC 模型名→上游模型名映射。 */
 export interface CustomChannelInput {
   provider: string;
+  channelId?: string;
   type?: number;
   /** 渠道名，可选；不填后端自动生成。 */
   name?: string;
@@ -291,9 +307,11 @@ export interface SaveProviderChannelsInput {
   preserveUnmentioned?: boolean;
   channels: Array<{
     id?: string;
+    name?: string;
     provider: string;
     type?: number;
     upstreamKey?: string;
+    clearKey?: boolean;
     baseUrl?: string;
     priority?: number;
     settings?: Record<string, unknown>;
@@ -309,9 +327,12 @@ export interface SyncProviderChannelInput {
 }
 
 export interface ChannelModelsInput {
-  newApiBaseUrl: string;
+  newApiBaseUrl?: string;
   database?: NewApiDatabaseConfigInput;
   provider: string;
+  channelId?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface ChannelModelsResult {
@@ -321,18 +342,30 @@ export interface ChannelModelsResult {
 }
 
 export interface SaveMediaModelsInput {
-  newApiBaseUrl: string;
+  newApiBaseUrl?: string;
   database?: NewApiDatabaseConfigInput;
+  replaceCatalog?: boolean;
   models: Record<string, SavedMediaModelConfig>;
 }
 
 export interface SaveEmbeddingModelInput {
-  newApiBaseUrl: string;
+  newApiBaseUrl?: string;
   database?: NewApiDatabaseConfigInput;
   provider: string;
+  channelId?: string;
   upstreamModel: string;
   dimension: number;
   batchSize?: number;
+}
+
+export interface SaveFeatureModelsInput {
+  models: Record<string, FeatureModelMappingConfig>;
+  merge?: boolean;
+}
+
+export interface SaveFeatureModelsResult {
+  featureModels: Record<string, FeatureModelMappingConfig>;
+  directMode?: boolean;
 }
 
 export interface SaveMediaRelayConfigInput {
@@ -355,7 +388,7 @@ export interface SaveMediaRelayConfigInput {
 }
 
 export interface SaveCustomChannelsBatchInput {
-  newApiBaseUrl: string;
+  newApiBaseUrl?: string;
   database?: NewApiDatabaseConfigInput;
   channels: CustomChannelInput[];
 }
@@ -652,6 +685,7 @@ export function useSaveProviderChannels() {
               channels: SavedProviderChannelConfig[];
               mediaModels: Record<string, SavedMediaModelConfig>;
               embeddingModel: SavedEmbeddingModelConfig | null;
+              featureModels?: Record<string, FeatureModelMappingConfig>;
             }>
           | ErrorResponse
           | FastApiErrorResponse
@@ -668,6 +702,12 @@ export function useSaveProviderChannels() {
                   ...current,
                   data: {
                     ...current.data,
+                    custom: {
+                      ...current.data.custom,
+                      ...(response.data.featureModels !== undefined
+                        ? { featureModels: response.data.featureModels }
+                        : {}),
+                    },
                     provisioner: current.data.provisioner
                       ? {
                           ...current.data.provisioner,
@@ -681,6 +721,7 @@ export function useSaveProviderChannels() {
                 }
               : current,
         );
+        qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
       }
       if (response.ok !== true) {
         qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
@@ -710,23 +751,51 @@ export function useClearComfyUIConfig() {
 
 const CHANNEL_MODELS_QUERY_KEY = ["newapi-channel-models"] as const;
 
-/** Fetch explicitly; all model inputs for this gateway/provider share the list. */
+/** Fetch explicitly; all model inputs for this channel/gateway share the list. */
 export function useChannelModels(input: ChannelModelsInput) {
+  const useDirectEndpoint = Boolean(
+    input.channelId?.trim()
+      || input.baseUrl?.trim()
+      || input.apiKey?.trim()
+      || !input.newApiBaseUrl?.trim(),
+  );
+  const keyTag = input.apiKey?.trim()
+    ? `key:${input.apiKey.trim().length}:${input.apiKey.trim().slice(-4)}`
+    : "";
   return useQuery({
     queryKey: [
       ...CHANNEL_MODELS_QUERY_KEY,
-      input.newApiBaseUrl.trim().replace(/\/v1\/?$/, ""),
+      input.channelId?.trim() ?? "",
+      input.baseUrl?.trim().replace(/\/v1\/?$/, "") ?? "",
+      keyTag,
+      (input.newApiBaseUrl ?? "").trim().replace(/\/v1\/?$/, ""),
       input.provider,
     ],
-    queryFn: ({ signal }) =>
-      api
+    queryFn: ({ signal }) => {
+      if (useDirectEndpoint) {
+        return api
+          .post("api/v1/model-gateway/custom/channel-models", {
+            json: {
+              channelId: input.channelId,
+              provider: input.provider,
+              baseUrl: input.baseUrl,
+              apiKey: input.apiKey,
+            },
+            signal,
+            timeout: 60_000,
+            retry: 0,
+          })
+          .json<OkResponse<ChannelModelsResult>>();
+      }
+      return api
         .post("api/v1/model-gateway/custom/newapi/provider-channel/models", {
           json: input,
           signal,
           timeout: 60_000,
           retry: 0,
         })
-        .json<OkResponse<ChannelModelsResult>>(),
+        .json<OkResponse<ChannelModelsResult>>();
+    },
     enabled: false,
     retry: false,
     staleTime: Infinity,
@@ -771,7 +840,7 @@ export function useSaveCustomChannel() {
   });
 }
 
-/** 保存图片 / 视频固定模型映射。 */
+/** 保存图片 / 视频 / 音频 / 白模模型映射。 */
 export function useSaveMediaModels() {
   const qc = useQueryClient();
   return useMutation({
@@ -782,6 +851,35 @@ export function useSaveMediaModels() {
           timeout: 120_000,
         })
         .json<OkResponse<SaveMediaModelsResult> | ErrorResponse>(),
+    onSuccess: (response) => {
+      qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
+      qc.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey)
+          && query.queryKey.includes("freezone")
+          && (query.queryKey.includes("image")
+            || query.queryKey.includes("video")
+            || query.queryKey.includes("audio")
+            || query.queryKey.includes("blockout")),
+      });
+      if (response.ok === true && typeof window !== "undefined") {
+        window.dispatchEvent(new Event("media-model-catalog-updated"));
+      }
+    },
+  });
+}
+
+/** 保存功能文本模型映射（直连多渠道绑定）。 */
+export function useSaveFeatureModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SaveFeatureModelsInput) =>
+      api
+        .put("api/v1/model-gateway/custom/newapi/feature-models", {
+          json: input,
+          timeout: 60_000,
+        })
+        .json<OkResponse<SaveFeatureModelsResult> | ErrorResponse>(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.modelGateway() });
     },

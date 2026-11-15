@@ -190,6 +190,47 @@ def test_runner_uses_shared_model_timeout(tmp_path, monkeypatch):
     assert result == {'ok': True, 'import_id': record['id'], 'status': 'ready'}
 
 
+def test_runner_reports_524_as_actionable_and_preserves_checkpoints(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from pydantic_ai.exceptions import ModelHTTPError
+    from novelvideo.freezone import skill_import as module
+    from novelvideo.task_backend.runners import skill_import as runner
+
+    monkeypatch.setattr(
+        'novelvideo.freezone.agent_config_store.list_user_agent_config_items',
+        lambda *args: [],
+    )
+    monkeypatch.setattr(
+        'novelvideo.config.get_effective_newapi_text_model_name',
+        lambda *_args: 'test-model',
+    )
+    record = module.create_record(
+        tmp_path, 'alice', read_source('x.md', base64.b64encode(b'Method').decode()), 'b'
+    )
+    checkpoints = {'analyzing': {'key': 'source', 'value': {'purpose': 'method'}}}
+    record['checkpoints'] = checkpoints
+    module.save_record(tmp_path, 'alice', record)
+
+    async def fail_conversion(*args):
+        raise ModelHTTPError(524, 'test-model')
+
+    monkeypatch.setattr(runner, 'convert_record', fail_conversion)
+    monkeypatch.setattr(runner, '_run_cancellable', lambda _envelope, coro: asyncio.run(coro))
+
+    with pytest.raises(ModelHTTPError):
+        runner.run_skill_import(
+            {'payload': {'import_id': record['id'], 'username': 'alice'}},
+            SimpleNamespace(state_dir=tmp_path, requester_username='alice'),
+        )
+
+    failed = module.get_record(tmp_path, 'alice', record['id'])
+    assert failed['status'] == 'failed'
+    assert 'HTTP 524' in failed['error'] and '120-second' in failed['error']
+    assert failed['source']['sha256'] == record['source_sha256']
+    assert failed['checkpoints'] == checkpoints
+
+
 def test_bundle_install_rolls_back_new_recipes(tmp_path, monkeypatch):
     from novelvideo.freezone import agent_config_store, agent_bundle_store
     from test_freezone_agent_bundle import _bundle_payload

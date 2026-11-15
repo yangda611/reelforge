@@ -22,8 +22,11 @@ const modelGatewayMocks = vi.hoisted(() => ({
   config: undefined as Record<string, unknown> | undefined,
   saveAgent: vi.fn(),
   saveBrainClaw: vi.fn(),
+  saveFeatureModels: vi.fn(),
+  saveMediaModels: vi.fn(),
   saveMediaRelay: vi.fn(),
   saveOfficial: vi.fn(),
+  saveProviderChannels: vi.fn(),
   saveReasoning: vi.fn(),
   setCustomLlmMode: vi.fn(),
 }));
@@ -117,14 +120,52 @@ vi.mock("@/lib/queries/model-gateway", () => ({
   useInitCustomNewApi: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSaveCustomChannel: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSaveCustomChannelsBatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSaveFeatureModels: () => ({
+    mutate: (
+      vars: unknown,
+      opts?: { onSuccess?: (res: unknown) => void; onError?: (err: unknown) => void },
+    ) => {
+      Promise.resolve(modelGatewayMocks.saveFeatureModels(vars)).then(
+        (res) => opts?.onSuccess?.(res),
+        (err) => opts?.onError?.(err),
+      );
+    },
+    mutateAsync: modelGatewayMocks.saveFeatureModels,
+    isPending: false,
+  }),
   useSaveEmbeddingModel: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSaveMediaModels: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSaveProviderChannels: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSaveMediaModels: () => ({
+    mutate: (
+      vars: unknown,
+      opts?: { onSuccess?: (res: unknown) => void; onError?: (err: unknown) => void },
+    ) => {
+      Promise.resolve(modelGatewayMocks.saveMediaModels(vars)).then(
+        (res) => opts?.onSuccess?.(res),
+        (err) => opts?.onError?.(err),
+      );
+    },
+    mutateAsync: modelGatewayMocks.saveMediaModels,
+    isPending: false,
+  }),
+  useSaveProviderChannels: () => ({
+    mutate: (
+      vars: unknown,
+      opts?: { onSuccess?: (res: unknown) => void; onError?: (err: unknown) => void },
+    ) => {
+      Promise.resolve(modelGatewayMocks.saveProviderChannels(vars)).then(
+        (res) => opts?.onSuccess?.(res),
+        (err) => opts?.onError?.(err),
+      );
+    },
+    mutateAsync: modelGatewayMocks.saveProviderChannels,
+    isPending: false,
+  }),
   useSaveMediaRelayConfig: () => ({
     mutateAsync: modelGatewayMocks.saveMediaRelay,
     isPending: false,
   }),
   useSyncProviderChannel: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useClearComfyUIConfig: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useChannelModels: () => ({
     data: undefined,
     isFetching: false,
@@ -414,8 +455,11 @@ beforeEach(() => {
   modelGatewayMocks.config = undefined;
   modelGatewayMocks.saveAgent.mockReset();
   modelGatewayMocks.saveBrainClaw.mockReset();
+  modelGatewayMocks.saveFeatureModels.mockReset();
+  modelGatewayMocks.saveMediaModels.mockReset();
   modelGatewayMocks.saveMediaRelay.mockReset();
   modelGatewayMocks.saveOfficial.mockReset();
+  modelGatewayMocks.saveProviderChannels.mockReset();
   modelGatewayMocks.saveReasoning.mockReset();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.success).mockClear();
@@ -2095,4 +2139,245 @@ describe("SettingsDialog pages", () => {
     expect(rawJson.planning.model_preferences).toBeUndefined();
   });
 
+  it("allows adding two OpenAI channels with independent keys and names without overwriting either", async () => {
+    useSettingsStore.setState((state) => ({
+      featureModelConfig: {
+        ...state.featureModelConfig,
+        providerChannels: {},
+        providerKeys: {},
+        featureModels: {},
+        mediaModels: {},
+        embeddingModel: undefined,
+      },
+    }));
+    modelGatewayMocks.config = {
+      mode: "custom",
+      effective: { source: "custom", baseUrl: "", apiKeyPreview: "", configured: false },
+      custom: {
+        llmMode: "advanced",
+        directMultiChannel: true,
+        baseUrl: "",
+        apiKeyPreview: "",
+        configured: false,
+        adminBaseUrl: "",
+        tokenName: "",
+        tokenId: "",
+      },
+      provisioner: {
+        enabled: false,
+        adminBaseUrl: "",
+        dbConfigured: false,
+        adminUsername: "",
+        relayTokenName: "",
+        relayBaseUrl: "",
+        providers: {},
+        providerChannels: [],
+        mediaModels: {},
+        embeddingModel: undefined,
+        featureModels: {},
+        mediaModelsReplaceCatalog: false,
+      },
+    };
+    modelGatewayMocks.saveProviderChannels.mockResolvedValue({
+      ok: true,
+      data: { channels: [], mediaModels: {}, embeddingModel: null },
+    });
+
+    renderSettingsDialog();
+
+    const addChannelBtn = screen.getByRole("button", {
+      name: zhT("settings.modelConfig.featureModels.addChannel"),
+    });
+    fireEvent.click(addChannelBtn);
+    fireEvent.click(addChannelBtn);
+
+    const channels = Object.values(
+      useSettingsStore.getState().featureModelConfig.providerChannels,
+    );
+    expect(channels).toHaveLength(2);
+    expect(channels.every((ch) => ch.provider === "openai")).toBe(true);
+    expect(channels[0].id).not.toBe(channels[1].id);
+
+    const nameInputs = screen.getAllByPlaceholderText(
+      zhT("settings.modelConfig.featureModels.channelNamePlaceholder"),
+    );
+    expect(nameInputs).toHaveLength(2);
+    fireEvent.change(nameInputs[0], { target: { value: "OpenAI LLM" } });
+    fireEvent.change(nameInputs[1], { target: { value: "OpenAI 视频" } });
+
+    const keyInputs = screen.getAllByPlaceholderText("sk-...");
+    expect(keyInputs).toHaveLength(2);
+    fireEvent.change(keyInputs[0], { target: { value: "sk-llm-only" } });
+    fireEvent.change(keyInputs[1], { target: { value: "sk-video-only" } });
+
+    const updatedChannels = Object.values(
+      useSettingsStore.getState().featureModelConfig.providerChannels,
+    );
+    expect(updatedChannels.find((ch) => ch.name === "OpenAI LLM")?.upstreamKey).toBe(
+      "sk-llm-only",
+    );
+    expect(updatedChannels.find((ch) => ch.name === "OpenAI 视频")?.upstreamKey).toBe(
+      "sk-video-only",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: zhT("settings.modelConfig.featureModels.saveChannels"),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(modelGatewayMocks.saveProviderChannels).toHaveBeenCalledTimes(1);
+    });
+    const callPayload = modelGatewayMocks.saveProviderChannels.mock.calls[0]?.[0] as {
+      preserveUnmentioned?: boolean;
+      channels: Array<{ id?: string; name?: string; provider: string; upstreamKey?: string }>;
+    };
+    expect(callPayload.preserveUnmentioned).toBe(false);
+    expect(callPayload.channels).toHaveLength(2);
+    expect(callPayload.channels.map((ch) => ch.upstreamKey).sort()).toEqual([
+      "sk-llm-only",
+      "sk-video-only",
+    ]);
+  });
+
+  it("allows editing and deleting preset media model IDs, supports audio type, and saves replaceCatalog=true", async () => {
+    useSettingsStore.setState((state) => ({
+      featureModelConfig: {
+        ...state.featureModelConfig,
+        providerChannels: {
+          "openai-vid": {
+            id: "openai-vid",
+            name: "视频分组",
+            provider: "openai",
+            upstreamKey: "sk-vid-secret",
+            baseUrl: "https://zeroshell.top",
+            priority: 0,
+            settings: {},
+          },
+        },
+        mediaModels: {},
+      },
+    }));
+    modelGatewayMocks.config = {
+      mode: "custom",
+      effective: { source: "custom", baseUrl: "", apiKeyPreview: "", configured: false },
+      custom: {
+        llmMode: "advanced",
+        directMultiChannel: true,
+        baseUrl: "",
+        apiKeyPreview: "",
+        configured: false,
+        adminBaseUrl: "",
+        tokenName: "",
+        tokenId: "",
+      },
+      provisioner: {
+        enabled: false,
+        adminBaseUrl: "",
+        dbConfigured: false,
+        adminUsername: "",
+        relayTokenName: "",
+        relayBaseUrl: "",
+        providers: {},
+        providerChannels: [
+          {
+            id: "openai-vid",
+            name: "视频分组",
+            provider: "openai",
+            configured: true,
+            upstreamKeyPreview: "sk-v...cret",
+            baseUrl: "https://zeroshell.top",
+            priority: 0,
+            settings: {},
+          },
+        ],
+        mediaModels: {},
+        embeddingModel: undefined,
+        featureModels: {},
+        mediaModelsReplaceCatalog: false,
+      },
+    };
+    modelGatewayMocks.saveMediaModels.mockResolvedValue({
+      ok: true,
+      data: {
+        models: {},
+        mediaModels: {},
+        replaceCatalog: true,
+      },
+    });
+
+    const user = userEvent.setup();
+    renderSettingsDialog();
+
+    // Preset model ID input is directly editable (no readonly lock).
+    const presetInput = screen.getByRole("textbox", { name: "LingShan-G2" }) as HTMLInputElement;
+    expect(presetInput).not.toHaveAttribute("readonly");
+    expect(presetInput).not.toBeDisabled();
+    fireEvent.change(presetInput, { target: { value: "my-custom-image" } });
+    fireEvent.blur(presetInput);
+    expect(screen.getByRole("textbox", { name: "my-custom-image" })).toBeInTheDocument();
+
+    // Every preset row can be removed.
+    const removeButtons = screen.getAllByTitle(
+      zhT("settings.modelConfig.mediaModels.removeModel"),
+    );
+    const initialRemoveCount = removeButtons.length;
+    fireEvent.click(removeButtons[0]);
+    expect(
+      screen.getAllByTitle(zhT("settings.modelConfig.mediaModels.removeModel")),
+    ).toHaveLength(initialRemoveCount - 1);
+
+    // LocalMediaModelEditor supports creating an "audio" model and saving with replaceCatalog=true.
+    fireEvent.click(
+      screen.getByRole("button", { name: zhT("settings.modelConfig.mediaModels.addModel") }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: zhT("settings.modelConfig.mediaModels.addModelTitle"),
+    });
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByPlaceholderText("seedance-2.0-mini"), {
+      target: { value: "my-audio-model" },
+    });
+    fireEvent.change(within(dialog).getByPlaceholderText("Seedance 2.0 Mini"), {
+      target: { value: "My Audio" },
+    });
+    // Select media type -> audio via Base UI Select popup.
+    const mediaTypeTrigger = within(dialog).getAllByRole("combobox")[0];
+    await user.click(mediaTypeTrigger);
+    await user.click(
+      await screen.findByRole("option", {
+        name: zhT("settings.modelConfig.mediaModels.types.audio"),
+      }),
+    );
+    // Enter upstream model name.
+    const upstreamCombobox = within(dialog).getByPlaceholderText("my-audio-model");
+    fireEvent.change(upstreamCombobox, { target: { value: "suno-v4" } });
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: zhT("settings.modelConfig.mediaModels.applyModelEdit"),
+      }),
+    );
+
+    expect(screen.getByRole("textbox", { name: "my-audio-model" })).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: zhT("settings.modelConfig.mediaModels.save") }),
+    );
+    await waitFor(() => {
+      expect(modelGatewayMocks.saveMediaModels).toHaveBeenCalledTimes(1);
+    });
+    expect(modelGatewayMocks.saveMediaModels.mock.calls[0]?.[0]).toMatchObject({
+      replaceCatalog: true,
+      models: {
+        "my-audio-model": {
+          mediaType: "audio",
+          provider: "openai",
+          channelId: "openai-vid",
+          upstreamModel: "suno-v4",
+        },
+      },
+    });
+  });
 });

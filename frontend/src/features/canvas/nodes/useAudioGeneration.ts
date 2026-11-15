@@ -257,6 +257,9 @@ export function useAudioGeneration(nodeId: string, data: AudioNodeData) {
             canvasId: readUrl().canvas ?? 'default',
             nodeId,
             prompt: trimmed,
+            ...(typeof runtimeData.model === 'string' && runtimeData.model !== 'suno_music'
+              ? { model: runtimeData.model }
+              : {}),
             musicLengthMs: runtimeMusicLengthMs,
             forceInstrumental: runtimeData.forceInstrumental ?? true,
             respectSectionsDurations: runtimeData.respectSectionsDurations ?? true,

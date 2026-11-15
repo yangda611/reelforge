@@ -99,7 +99,6 @@ const MAX_WIDTH = 900;
 const MAX_HEIGHT = 1200;
 const IMAGE_REVERSE_PROMPT_FEATURE_KEY = 'freezone.image_reverse_prompt';
 const TEXT_GENERATE_FEATURE_KEY = 'freezone.text_generate';
-const TEXT_WRITER_MODEL_ID = 'DC-freezone-text-writer-LLM';
 const MAX_TEXT_GENERATE_PROMPT_CHARS = 20000;
 
 const PICKER_INSET = 32;
@@ -469,7 +468,7 @@ export const TextAnnotationNode = memo(({
       }
       updateNodeData(id, {
         content: result.generated_text,
-        model: result.model || TEXT_WRITER_MODEL_ID,
+        ...(result.model ? { model: result.model } : {}),
         isGenerating: false,
         generationStartedAt: null,
       });

@@ -10,8 +10,8 @@ export function usesLegacySpeechVoice(data: AudioNodeData): boolean {
 /** True when a speech node has no usable custom/reference voice selection. */
 export function requiresCustomVoiceSelection(data: AudioNodeData): boolean {
   if (data.audioKind === 'music') return false;
+  if (data.speechMode === 'preset') return false;
   if (usesLegacySpeechVoice(data)) {
-    if (data.speechMode === 'preset') return false;
     if (data.voiceAvailable === false) return true;
     if (!data.voiceRef) return false; // Historical nodes used the project narrator.
   } else if (data.voiceAvailable !== true || !data.voiceRef) {
