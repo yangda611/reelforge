@@ -36,6 +36,38 @@ def _gateway_model_from_backend(backend: str | None) -> str:
     return ""
 
 
+def _catalog_duration_bounds(model: str) -> tuple[int, int] | None:
+    try:
+        from novelvideo.model_gateway_settings import (
+            get_newapi_media_model_mappings,
+            get_official_media_model_mappings,
+        )
+        from novelvideo.shared.runtime_env import is_ce_effective
+
+        mappings: dict[str, dict] = {}
+        if is_ce_effective():
+            mappings.update(get_newapi_media_model_mappings())
+        entry = mappings.get(model)
+        if not isinstance(entry, dict):
+            entry = get_official_media_model_mappings().get(model)
+        if not isinstance(entry, dict):
+            return None
+        config = entry.get("config")
+        if not isinstance(config, dict):
+            return None
+        raw_min = config.get("minDuration")
+        raw_max = config.get("maxDuration")
+        if raw_min is None or raw_max is None:
+            return None
+        min_seconds = int(raw_min)
+        max_seconds = int(raw_max)
+        if min_seconds > 0 and max_seconds >= min_seconds:
+            return (min_seconds, max_seconds)
+    except (RuntimeError, ImportError, TypeError, ValueError):
+        return None
+    return None
+
+
 def video_duration_bounds_for_backend(
     backend: str | None,
 ) -> tuple[int | None, int | None]:
@@ -48,6 +80,9 @@ def video_duration_bounds_for_backend(
         bounds = configured.get(model)
         if bounds:
             return bounds
+        catalog_bounds = _catalog_duration_bounds(model)
+        if catalog_bounds:
+            return catalog_bounds
         lowered_model = model.lower()
         if lowered_model == "seedance-2.0-mini":
             return (4, 15)

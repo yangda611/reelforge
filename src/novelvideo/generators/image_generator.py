@@ -22,6 +22,7 @@ from novelvideo.config import (
     get_character_image_selection,
     get_image_config,
     get_style_preset,
+    is_registered_image_generation_selection,
     normalize_character_image_selection,
 )
 from novelvideo.ports import get_usage_meter
@@ -1246,7 +1247,7 @@ async def generate_character_reference_unified(
             print(f"[Character] NanoBanana 配置错误: {e}")
             return []
 
-    if model in IMAGE_GENERATION_SELECTIONS:
+    if is_registered_image_generation_selection(model):
         try:
             from novelvideo.generators.nanobanana_character import NanoBananaCharacterGenerator
 
@@ -1414,7 +1415,7 @@ async def generate_identity_image_unified(
             print(f"[Identity] NanoBanana 配置错误: {e}")
             return False
 
-    if model in IMAGE_GENERATION_SELECTIONS:
+    if is_registered_image_generation_selection(model):
         try:
             from novelvideo.generators.nanobanana_character import NanoBananaCharacterGenerator
 

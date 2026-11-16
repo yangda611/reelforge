@@ -856,11 +856,18 @@ export function useSaveMediaModels() {
       qc.invalidateQueries({
         predicate: (query) =>
           Array.isArray(query.queryKey)
-          && query.queryKey.includes("freezone")
-          && (query.queryKey.includes("image")
-            || query.queryKey.includes("video")
-            || query.queryKey.includes("audio")
-            || query.queryKey.includes("blockout")),
+          && (
+            (query.queryKey.includes("freezone")
+              && (query.queryKey.includes("image")
+                || query.queryKey.includes("video")
+                || query.queryKey.includes("audio")
+                || query.queryKey.includes("blockout")))
+            || query.queryKey.includes("render-settings")
+            || query.queryKey.includes("sketch-settings")
+            || query.queryKey.includes("character-image-selection")
+            || query.queryKey.includes("image-source-selection")
+            || query.queryKey.includes("video-backends")
+          ),
       });
       if (response.ok === true && typeof window !== "undefined") {
         window.dispatchEvent(new Event("media-model-catalog-updated"));

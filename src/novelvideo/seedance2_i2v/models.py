@@ -13,6 +13,14 @@ from pydantic import BaseModel, Field, field_validator
 SEEDANCE2_PROMPT_GUIDANCE_TEMPLATE_KEYS = frozenset(
     {"subject", "scene", "lighting", "camera", "style", "no_subtitle"}
 )
+VIDEO_PROMPT_STYLE_VALUES = frozenset(
+    {"seedance_2_0", "seedance_2_5", "minimax_h3", "generic"}
+)
+
+
+def normalize_video_prompt_style(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in VIDEO_PROMPT_STYLE_VALUES else ""
 
 
 class Seedance2I2VMode(str, Enum):
@@ -27,6 +35,7 @@ class Seedance2VideoConfig(BaseModel):
 
     mode: Seedance2I2VMode = Seedance2I2VMode.MULTIMODAL_REFERENCE
     final_prompt: str = ""
+    prompt_style: str = ""
     prompt_guidance: str = ""
     prompt_guidance_template_keys: list[str] = Field(default_factory=list)
     prompt_source: str = ""
@@ -50,6 +59,7 @@ class Seedance2VideoConfig(BaseModel):
 
     @field_validator(
         "final_prompt",
+        "prompt_style",
         "prompt_guidance",
         "prompt_source",
         "prompt_inputs_hash",
@@ -62,6 +72,11 @@ class Seedance2VideoConfig(BaseModel):
     @classmethod
     def _strip_text(cls, value: Any) -> str:
         return str(value or "").strip()
+
+    @field_validator("prompt_style", mode="after")
+    @classmethod
+    def _normalize_prompt_style(cls, value: str) -> str:
+        return normalize_video_prompt_style(value)
 
     @field_validator("duration", mode="before")
     @classmethod

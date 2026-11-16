@@ -184,6 +184,8 @@ class Seedance2PromptGenerateRequest(BaseModel):
     manual_prompt_reference: Optional[str] = None
     prompt_guidance: Optional[str] = None
     prompt_guidance_template_keys: Optional[list[str]] = None
+    prompt_style: Optional[str] = None
+    video_backend: Optional[str] = None
 
 
 class BeatVideoPromptGenerateRequest(BaseModel):
@@ -241,6 +243,7 @@ class VideoBackendOption(BaseModel):
     is_seedance2: bool = False
     is_happyhorse: bool = False
     is_grok_video: bool = False
+    supports_prompt_panel: bool = False
     dialogue_only: bool = False
     min_duration: Optional[int] = None
     max_duration: Optional[int] = None

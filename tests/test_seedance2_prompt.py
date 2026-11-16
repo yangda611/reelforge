@@ -1252,3 +1252,86 @@ async def test_generate_seedance2_prompt_extracts_recommended_duration_and_syncs
     assert config.ratio_user_set is False
     assert config.duration_user_set is False
     assert store.saved[-1]["seedance2_config_json"] == saved_json
+
+
+async def test_generate_seedance2_prompt_supports_prompt_styles_and_extended_duration(
+    monkeypatch, tmp_path
+):
+    from novelvideo.seedance2_i2v import panel_service
+    from novelvideo.seedance2_i2v.models import parse_seedance2_config
+    from novelvideo.seedance2_i2v.prompt import (
+        Seedance2PromptComposerOutput,
+        build_seedance2_prompt_composer_task,
+        compute_seedance2_prompt_inputs_hash,
+    )
+
+    state_dir = tmp_path / "state" / "alice" / "demo"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "project_config.json").write_text(
+        json.dumps({"aspect_ratio": "16:9"}),
+        encoding="utf-8",
+    )
+
+    h_20 = compute_seedance2_prompt_inputs_hash(
+        mode="multimodal_reference",
+        beat={"visual_description": "人物转身"},
+        assets=[],
+        text_overlay={},
+        prompt_style="seedance_2_0",
+    )
+    h_h3 = compute_seedance2_prompt_inputs_hash(
+        mode="multimodal_reference",
+        beat={"visual_description": "人物转身"},
+        assets=[],
+        text_overlay={},
+        prompt_style="minimax_h3",
+    )
+    assert h_20 != h_h3
+
+    task_25 = build_seedance2_prompt_composer_task(
+        mode="multimodal_reference",
+        beat={"visual_description": "人物转身"},
+        assets=[],
+        text_overlay={},
+        prompt_guidance="",
+        draft_prompt="人物转身",
+        prompt_style="seedance_2_5",
+        min_duration=4,
+        max_duration=30,
+    )
+    assert '"prompt_style": "seedance_2_5"' in task_25
+    assert "4-30 秒" in task_25
+
+    seen = {}
+
+    class Store:
+        async def update_beat_asset(self, **_kwargs):
+            return None
+
+    async def fake_composer(**kwargs):
+        seen.update(kwargs)
+        return Seedance2PromptComposerOutput(
+            final_prompt="图片1中人物缓缓推开木门，镜头稳步跟进。",
+            recommended_duration=24,
+        )
+
+    monkeypatch.setattr(panel_service, "build_seedance2_project_assets", lambda **_kwargs: [])
+    saved_json = await panel_service.generate_seedance2_prompt_for_panel(
+        store=Store(),
+        state_dir=state_dir,
+        episode=1,
+        beat={
+            "beat_number": 1,
+            "visual_description": "人物推开木门。",
+            "seedance2_config_json": "{}",
+        },
+        project_dir=tmp_path / "output",
+        composer=fake_composer,
+        prompt_style="seedance_2_5",
+    )
+
+    assert seen["prompt_style"] == "seedance_2_5"
+    assert seen["max_duration"] == 30
+    config = parse_seedance2_config(saved_json)
+    assert config.prompt_style == "seedance_2_5"
+    assert config.duration == 24

@@ -143,6 +143,8 @@ async def _run_single_video_async(
     single_resolution = config.get("resolution")
     if single_resolution and not is_seedance2_backend:
         gen_kwargs["resolution"] = str(single_resolution)
+    if "generate_audio" in config and not is_seedance2_backend:
+        gen_kwargs["generate_audio"] = bool(config["generate_audio"])
     video_gen = create_video_generator(backend=backend_str, **gen_kwargs)
 
     def on_log(msg: str) -> None:
@@ -158,7 +160,12 @@ async def _run_single_video_async(
             current_task=f"生成 Beat {beat_num} 视频",
         )
 
-    if video_mode == "keyframe" and last_frame_path and not is_seedance2_backend:
+    if (
+        video_mode == "keyframe"
+        and last_frame_path
+        and not is_seedance2_backend
+        and not config.get("gen_mode")
+    ):
         video_duration = 5.0
 
     seedance2_references = []
@@ -230,7 +237,9 @@ async def _run_single_video_async(
         generate_kwargs["references"] = model_references
     if config.get("audio_setting"):
         generate_kwargs["audio_setting"] = str(config["audio_setting"])
-    if is_seedance2_backend:
+    if config.get("gen_mode") and not is_seedance2_backend:
+        generate_kwargs["gen_mode"] = str(config["gen_mode"])
+    if seedance2_config:
         generate_kwargs["seedance2_config"] = seedance2_config
 
     result = await video_gen.generate(**generate_kwargs)

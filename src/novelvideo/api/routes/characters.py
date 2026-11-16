@@ -242,11 +242,13 @@ def _resolve_character_image_model(
 def _character_image_billing_metadata(
     model: str, *, image_role: str = "character"
 ) -> dict:
-    from novelvideo.config import IMAGE_GENERATION_SELECTIONS
+    from novelvideo.config import resolve_image_generation_selection_entry
 
     selection = normalize_character_image_selection(model)
-    model_cfg = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-    pricing_model = str(model_cfg.get("model") or "").strip()
+    model_cfg = resolve_image_generation_selection_entry(selection)
+    pricing_model = str(
+        model_cfg.get("upstream_model") or model_cfg.get("model") or ""
+    ).strip()
     if not pricing_model:
         return {}
     from novelvideo.api.routes.model_credits import _image_selection_billing_params

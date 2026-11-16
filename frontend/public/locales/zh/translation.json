@@ -4258,6 +4258,14 @@
           "realistic": "写实"
         },
         "seedance2GeneratePrompt": "AI 优化",
+        "promptStyleLabel": "提示词方向",
+        "promptStyles": {
+          "seedance_2_0": "Seedance 2.0",
+          "seedance_2_5": "Seedance 2.5",
+          "minimax_h3": "MiniMax-H3",
+          "generic": "通用运动"
+        },
+        "customVideoInspector": "视频参数与提示词",
         "seedance2PromptGenerated": "Seedance2 提示词 已优化",
         "seedance2PromptGeneratedOtherBeat": "主体提示词已优化，已写回镜头 #{{n}}",
         "seedance2PromptGenerateFailed": "Seedance2 提示词 生成失败",

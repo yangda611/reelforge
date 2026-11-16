@@ -11,6 +11,12 @@ import type { Beat } from "@/types/episode";
 
 export const DEFAULT_VIDEO_BACKEND = "huimeng_seedance-1.0-pro-fast";
 
+export type VideoPromptStyle =
+  | "seedance_2_0"
+  | "seedance_2_5"
+  | "minimax_h3"
+  | "generic";
+
 export interface VideoBackendOption {
   value: string;
   label: string;
@@ -18,6 +24,7 @@ export interface VideoBackendOption {
   is_seedance2: boolean;
   is_happyhorse?: boolean;
   is_grok_video?: boolean;
+  supports_prompt_panel?: boolean;
   dialogue_only: boolean;
   min_duration?: number | null;
   max_duration?: number | null;
@@ -639,11 +646,15 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
       manualPromptReference,
       promptGuidance,
       promptGuidanceTemplateKeys,
+      promptStyle,
+      videoBackend,
     }: {
       beatNum: number;
       manualPromptReference?: string;
       promptGuidance?: string;
       promptGuidanceTemplateKeys?: string[];
+      promptStyle?: VideoPromptStyle;
+      videoBackend?: string;
     }) =>
       jsonWithBackendError<OkResponse<Seedance2PromptResult> | ErrorResponse>(
         api.post(
@@ -653,6 +664,8 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
               manual_prompt_reference: manualPromptReference ?? "",
               prompt_guidance: promptGuidance ?? "",
               prompt_guidance_template_keys: promptGuidanceTemplateKeys ?? [],
+              ...(promptStyle ? { prompt_style: promptStyle } : {}),
+              ...(videoBackend ? { video_backend: videoBackend } : {}),
             },
             throwHttpErrors: false,
           },

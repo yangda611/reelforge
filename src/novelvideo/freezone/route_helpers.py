@@ -21,7 +21,10 @@ from novelvideo.api.schemas import (
     FreezoneRelightRequest,
     FreezoneTemplateEditRequest,
 )
-from novelvideo.config import IMAGE_GENERATION_SELECTIONS
+from novelvideo.config import (
+    is_registered_image_generation_selection,
+    resolve_image_generation_selection_entry,
+)
 from novelvideo.freezone.paths import resolve_static_url_to_path, safe_upload_filename, uploads_dir
 from novelvideo.freezone.style_templates import (
     get_style_manifest_version,
@@ -243,8 +246,8 @@ def split_provider_and_model(
     """解析 Freezone 图片模型。"""
     model_text = str(model or "").strip()
     if model_text:
-        if model_text in IMAGE_GENERATION_SELECTIONS:
-            entry = IMAGE_GENERATION_SELECTIONS[model_text]
+        if is_registered_image_generation_selection(model_text):
+            entry = resolve_image_generation_selection_entry(model_text)
             return entry["provider"], entry["model"]
 
     if provider:

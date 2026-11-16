@@ -4227,6 +4227,14 @@
           "realistic": "Realistic"
         },
         "seedance2GeneratePrompt": "AI optimize",
+        "promptStyleLabel": "Prompt style",
+        "promptStyles": {
+          "seedance_2_0": "Seedance 2.0",
+          "seedance_2_5": "Seedance 2.5",
+          "minimax_h3": "MiniMax-H3",
+          "generic": "Generic I2V"
+        },
+        "customVideoInspector": "Video Inspector",
         "seedance2PromptGenerated": "Seedance2 prompt optimized",
         "seedance2PromptGeneratedOtherBeat": "Subject prompt optimized and saved back to beat #{{n}}",
         "seedance2PromptGenerateFailed": "Seedance2 prompt generation failed",

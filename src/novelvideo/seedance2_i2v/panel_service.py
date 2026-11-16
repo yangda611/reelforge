@@ -36,6 +36,7 @@ from novelvideo.seedance2_i2v.models import (
     Seedance2I2VMode,
     default_seedance2_ratio_for_state_dir,
     dump_seedance2_config,
+    normalize_video_prompt_style,
     parse_seedance2_config,
 )
 from novelvideo.seedance2_i2v.prompt import (
@@ -43,6 +44,7 @@ from novelvideo.seedance2_i2v.prompt import (
     compute_seedance2_prompt_inputs_hash,
     detect_seedance2_prompt_language,
     generate_seedance2_prompt,
+    style_duration_bounds,
 )
 from novelvideo.seedance2_i2v.voice_clone import normalize_seedance2_audio_type
 from novelvideo.utils.async_ops import metadata_io_limiter
@@ -304,6 +306,8 @@ async def generate_seedance2_prompt_for_panel(
     manual_prompt_reference: str | None = None,
     prompt_guidance: str | None = None,
     prompt_guidance_template_keys: list[str] | None = None,
+    prompt_style: str | None = None,
+    video_backend: str | None = None,
     language: AssetLanguage | None = None,
     prop_menu: list[Any] | None = None,
 ) -> str:
@@ -323,6 +327,20 @@ async def generate_seedance2_prompt_for_panel(
         beat.get("seedance2_config_json"),
         default_ratio=default_ratio,
         default_duration=duration_floor,
+    )
+    normalized_style = normalize_video_prompt_style(prompt_style)
+    if normalized_style:
+        config.prompt_style = normalized_style
+    effective_style = config.prompt_style or None
+    backend_min, backend_max = (None, None)
+    if video_backend:
+        from novelvideo.video_duration import video_duration_bounds_for_backend
+
+        backend_min, backend_max = video_duration_bounds_for_backend(video_backend)
+    min_duration, max_duration = style_duration_bounds(
+        effective_style,
+        min_duration=backend_min,
+        max_duration=backend_max,
     )
     if prompt_guidance is not None:
         config.prompt_guidance = str(prompt_guidance or "").strip()
@@ -359,24 +377,30 @@ async def generate_seedance2_prompt_for_panel(
         assets=assets,
         language=output_language,
     )
-    result = await generate_seedance2_prompt(
-        mode=config.mode,
-        beat=prompt_beat,
-        assets=assets,
-        text_overlay=config.text_overlay,
-        prompt_guidance=config.prompt_guidance,
-        prompt_guidance_template_keys=config.prompt_guidance_template_keys,
-        request_params={
+    generate_kwargs: dict[str, Any] = {
+        "mode": config.mode,
+        "beat": prompt_beat,
+        "assets": assets,
+        "text_overlay": config.text_overlay,
+        "prompt_guidance": config.prompt_guidance,
+        "prompt_guidance_template_keys": config.prompt_guidance_template_keys,
+        "request_params": {
             "duration": int(config.duration),
             "resolution": config.resolution,
             "ratio": config.ratio,
         },
-        manual_prompt_reference=reference_prompt,
-        composer=composer,
-        prev_beat=prev_beat,
-        next_beat=next_beat,
-        language=output_language,
-    )
+        "manual_prompt_reference": reference_prompt,
+        "composer": composer,
+        "prev_beat": prev_beat,
+        "next_beat": next_beat,
+        "language": output_language,
+    }
+    if effective_style:
+        generate_kwargs["prompt_style"] = effective_style
+    if effective_style or video_backend:
+        generate_kwargs["min_duration"] = min_duration
+        generate_kwargs["max_duration"] = max_duration
+    result = await generate_seedance2_prompt(**generate_kwargs)
     config.final_prompt = mark_seedance2_prompt_references_for_editor(result.prompt)
     if not config.duration_user_set:
         recommended = getattr(result, "recommended_duration", None)
@@ -385,7 +409,7 @@ async def generate_seedance2_prompt_for_panel(
             if isinstance(recommended, int) and recommended > 0
             else duration_floor
         )
-        config.duration = max(4, min(15, resolved_duration))
+        config.duration = max(min_duration, min(max_duration, resolved_duration))
     config.prompt_source = "generated" if result.used_ai else "fallback"
     config.prompt_inputs_hash = inputs_hash
     config.prompt_updated_at = datetime.now().isoformat(timespec="seconds")
@@ -1124,6 +1148,7 @@ def _seedance2_prompt_inputs_hash(
         prompt_guidance=config.prompt_guidance,
         prompt_guidance_template_keys=config.prompt_guidance_template_keys,
         language=language,
+        prompt_style=str(getattr(config, "prompt_style", "") or ""),
     )
 
 

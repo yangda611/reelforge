@@ -7,7 +7,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -45,18 +45,102 @@ class Seedance2PromptComposerOutput(BaseModel):
 
     final_prompt: str = Field(
         ...,
-        description="Final Seedance 2.0 prompt body without API parameters or meta commentary",
+        description="Final video prompt body without API parameters or meta commentary",
     )
     recommended_duration: int = Field(
         default=5,
-        ge=4,
-        le=15,
+        ge=1,
+        le=30,
         description=(
-            "Optimal clip duration in integer seconds (4-15): 4-5s for crisp action/reaction/insert cuts, "
-            "6-9s for medium dialogue or action+reaction beats, 10-15s for sustained continuous performance, "
-            "long takes, or full voiceover/monologue beats."
+            "Optimal clip duration in integer seconds within the model's allowed duration range: "
+            "4-5s for crisp action/reaction/insert cuts, 6-9s for medium dialogue or action+reaction beats, "
+            "10-15s+ for sustained continuous performance, long takes, or full voiceover/monologue beats."
         ),
     )
+
+
+VideoPromptStyle = Literal["seedance_2_0", "seedance_2_5", "minimax_h3", "generic"]
+DEFAULT_VIDEO_PROMPT_STYLE: VideoPromptStyle = "seedance_2_0"
+
+
+@dataclass(frozen=True)
+class VideoPromptStyleProfile:
+    key: VideoPromptStyle
+    label: str
+    default_min_duration: int
+    default_max_duration: int
+    system_directive: str
+
+
+VIDEO_PROMPT_STYLE_PROFILES: dict[VideoPromptStyle, VideoPromptStyleProfile] = {
+    "seedance_2_0": VideoPromptStyleProfile(
+        key="seedance_2_0",
+        label="Seedance 2.0",
+        default_min_duration=4,
+        default_max_duration=15,
+        system_directive="",
+    ),
+    "seedance_2_5": VideoPromptStyleProfile(
+        key="seedance_2_5",
+        label="Seedance 2.5",
+        default_min_duration=4,
+        default_max_duration=30,
+        system_directive=(
+            "Target Model Profile: Seedance 2.5.\n"
+            "- Supports extended multimodal reference compositions and longer continuous takes up to 30s.\n"
+            "- When `recommended_duration` is 10-30s, choreograph clear sequential performance & camera beats with smooth mid-clip transitions rather than repetitive single actions."
+        ),
+    ),
+    "minimax_h3": VideoPromptStyleProfile(
+        key="minimax_h3",
+        label="MiniMax-H3",
+        default_min_duration=4,
+        default_max_duration=15,
+        system_directive=(
+            "Target Model Profile: MiniMax-H3 (Hailuo H3).\n"
+            "- Write fluid, physically grounded cinematic prose highlighting clear subject motion, camera trajectory (push, pull, pan, track), lighting atmosphere, and diegetic sound.\n"
+            "- Prefer natural subject/prop descriptions anchored to `图片1` (or other `图片N` visual anchors present in `asset_manifest`); avoid unnecessary `音频N` binding tokens unless explicitly referenced by the user guidance."
+        ),
+    ),
+    "generic": VideoPromptStyleProfile(
+        key="generic",
+        label="Generic I2V",
+        default_min_duration=4,
+        default_max_duration=15,
+        system_directive=(
+            "Target Model Profile: Generic I2V (Wan / standard single-frame & multi-frame motion).\n"
+            "- Focus on concise, direct forward temporal motion starting from the primary frame (`图片1`), explicit camera displacement/zoom, continuous micro-dynamics, and a brief ambient audio cue.\n"
+            "- Avoid rigid multi-audio token markup (`音频N`) and keep visual reference wording clean and universally understandable."
+        ),
+    ),
+}
+
+
+def resolve_video_prompt_style(value: str | None) -> VideoPromptStyle:
+    text = str(value or "").strip().lower()
+    if text in VIDEO_PROMPT_STYLE_PROFILES:
+        return text  # type: ignore[return-value]
+    return DEFAULT_VIDEO_PROMPT_STYLE
+
+
+def style_duration_bounds(
+    prompt_style: str | None,
+    *,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
+) -> tuple[int, int]:
+    profile = VIDEO_PROMPT_STYLE_PROFILES[resolve_video_prompt_style(prompt_style)]
+    resolved_min = (
+        int(min_duration)
+        if isinstance(min_duration, int) and min_duration > 0
+        else profile.default_min_duration
+    )
+    resolved_max = (
+        int(max_duration)
+        if isinstance(max_duration, int) and max_duration >= resolved_min
+        else max(resolved_min, profile.default_max_duration)
+    )
+    return resolved_min, resolved_max
 
 
 from novelvideo.skills.cinematic_storyboard_skill import (
@@ -806,10 +890,11 @@ def compute_seedance2_prompt_inputs_hash(
     prompt_guidance: str = "",
     prompt_guidance_template_keys: list[str] | tuple[str, ...] | None = None,
     language: AssetLanguage = "zh",
+    prompt_style: str = "",
 ) -> str:
     """Hash only prompt-relevant inputs, excluding request-only video controls."""
 
-    payload = {
+    payload: dict[str, Any] = {
         "mode": Seedance2I2VMode(mode).value,
         "beat": {
             "visual_description": beat.get("visual_description") or "",
@@ -834,6 +919,9 @@ def compute_seedance2_prompt_inputs_hash(
         ),
         "language": language,
     }
+    clean_style = str(prompt_style or "").strip().lower()
+    if clean_style:
+        payload["prompt_style"] = clean_style
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -906,9 +994,21 @@ def build_seedance2_prompt_composer_task(
     prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
+    prompt_style: str | None = None,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
 ) -> str:
+    resolved_style = resolve_video_prompt_style(prompt_style)
+    profile = VIDEO_PROMPT_STYLE_PROFILES[resolved_style]
+    resolved_min, resolved_max = style_duration_bounds(
+        resolved_style,
+        min_duration=min_duration,
+        max_duration=max_duration,
+    )
     payload: dict[str, Any] = {
         "mode": Seedance2I2VMode(mode).value,
+        "prompt_style": resolved_style,
+        "duration_bounds": {"min": resolved_min, "max": resolved_max},
         "asset_manifest": build_seedance2_asset_manifest(assets),
         "beat": {
             "audio_type": beat.get("audio_type") or "",
@@ -943,6 +1043,8 @@ def build_seedance2_prompt_composer_task(
         beat, prev_beat=prev_beat, next_beat=next_beat
     )
     language_rule = asset_language_instruction(language)
+    duration_range = f"{resolved_min}-{resolved_max}s"
+    duration_range_zh = f"{resolved_min}-{resolved_max} 秒"
     if language == "en":
         locked_line = (
             "- FIXED-CAMERA LOCK: keep the camera completely steady on a locked tripod (no push-in, pan, tilt, whip-pan, or zoom) so background alignment stays identical across cuts; bridge solely through subject motion and ambient dynamics.\n"
@@ -950,7 +1052,7 @@ def build_seedance2_prompt_composer_task(
             else ""
         )
         return (
-            "Write the final Seedance 2.0 image-to-video prompt from the JSON below.\n\n"
+            f"Write the final {profile.label} image-to-video prompt from the JSON below.\n\n"
             "Hard requirements:\n"
             "- Follow the official reference syntax using tokens such as 图片1 and 音频1.\n"
             "- Only use numbered tokens present in asset_manifest; never add or reorder them.\n"
@@ -960,7 +1062,7 @@ def build_seedance2_prompt_composer_task(
             "- Keep duration, resolution, ratio, generate_audio, return_last_frame, and human_review out of the prompt.\n"
             "- Preserve spoken dialogue verbatim while action directions may be rewritten naturally.\n"
             "- Avoid repeating static character traits covered by reference images and avoid empty buzzwords ('8K', 'masterpiece', 'cinematic feel'). For character/prop interactions, use dual spatial anchoring (frame position + in-scene relative orientation), explicit eyeline, hand task, and prop state transitions. Keep lips still for off-screen voiceover/OS.\n"
-            "- Choose `recommended_duration` dynamically in integer seconds (4-15s) to fit pacing: 4-5s for crisp reactions/inserts, 6-9s for dialogue/action-reaction beats, 10-15s for continuous long takes or full voiceover beats (never write duration numbers inside `final_prompt`).\n"
+            f"- Choose `recommended_duration` dynamically in integer seconds ({duration_range}) to fit pacing: 4-5s for crisp reactions/inserts, 6-9s for dialogue/action-reaction beats, 10-{resolved_max}s for continuous long takes or full voiceover beats (never write duration numbers inside `final_prompt`).\n"
             "- Start strictly forward from the starting image state; when adjacent_beats is present, bridge smoothly from prev_beat (compatible flow/direction) and shape the ending motion/eyeline/framing as a natural lead into next_beat (clean cut if same_scene_with_next is false; never invent ungrounded elements).\n"
             f"{locked_line}"
             f"- {language_rule}\n"
@@ -973,7 +1075,7 @@ def build_seedance2_prompt_composer_task(
         else ""
     )
     return (
-        "请根据下面 JSON 写出最终 Seedance 2.0 图生视频 prompt。\n\n"
+        f"请根据下面 JSON 写出最终 {profile.label} 图生视频 prompt。\n\n"
         "硬性要求：\n"
         "- 必须遵循官方写法，使用“图片1”“音频1”等编号指代参考素材。\n"
         "- 只能使用 asset_manifest 中已有编号，不能新增图片或音频编号。\n"
@@ -988,7 +1090,7 @@ def build_seedance2_prompt_composer_task(
         "动作可自然改写，但实际台词必须逐字完整保留，不能删减或概括。\n"
         "- 禁止复述参考图中已固定的外貌服饰，禁止“8K/电影感/杰作”等空泛画质词，禁止在正文里写出“无背景音乐/无字幕”等元标签（直接写写实环境声）。\n"
         "- 当画面有角色互动或方向运动时，使用“画面位置+场景内相对朝向”双重空间锚定，写清视线落点、手部动作与道具交接变化；若 `audio_type` 为 `narration`/内心独白 OS，人物必须保持闭口专注，禁止张嘴对口型。\n"
-        "- 在 `recommended_duration` 字段中按镜头节奏动态给出 4-15 秒整数推荐时长（短切反应/空镜特写 4-5 秒，常规对话/动作交互 6-9 秒，持续长镜头/多阶段调度/完整独白旁白 10-15 秒），多阶段镜头应写明前后流畅演进，严禁把秒数写进 `final_prompt`。\n"
+        f"- 在 `recommended_duration` 字段中按镜头节奏动态给出 {duration_range_zh}整数推荐时长（短切反应/空镜特写 4-5 秒，常规对话/动作交互 6-9 秒，持续长镜头/多阶段调度/完整独白旁白 10-{resolved_max} 秒），多阶段镜头应写明前后流畅演进，严禁把秒数写进 `final_prompt`。\n"
         "- 必须严格从首帧参考图的起始状态向后演进；若存在 adjacent_beats，在不违背当前首帧的前提下承接 prev_beat 的运动/视线方向，并在结尾设计自然过渡落点（同场景优先动作延续、视线引导、已有前景遮挡或同向扫镜；跨场次保持构图呼应或干净收束，严禁凭空编造画面外物体）。\n"
         f"{locked_line_zh}"
         "- 只输出最终 prompt，不要解释。\n\n"
@@ -997,7 +1099,12 @@ def build_seedance2_prompt_composer_task(
     )
 
 
-def _clamp_seedance2_duration(value: Any) -> int | None:
+def _clamp_seedance2_duration(
+    value: Any,
+    *,
+    min_duration: int = 4,
+    max_duration: int = 15,
+) -> int | None:
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -1006,7 +1113,7 @@ def _clamp_seedance2_duration(value: Any) -> int | None:
         return None
     if parsed <= 0:
         return None
-    return max(4, min(15, parsed))
+    return max(min_duration, min(max_duration, parsed))
 
 
 def recommend_seedance2_duration(
@@ -1014,9 +1121,11 @@ def recommend_seedance2_duration(
     *,
     prompt_text: str = "",
     audio_duration: float | None = None,
+    min_duration: int = 4,
+    max_duration: int = 15,
 ) -> int:
-    """Estimate a 4-15s Seedance 2.0 clip duration from dialogue, narration, and action pacing."""
-    candidates: list[float] = [4.0]
+    """Estimate a clip duration within [min_duration, max_duration] from dialogue, narration, and action pacing."""
+    candidates: list[float] = [float(min_duration)]
     for raw_sec in (
         beat.get("estimated_duration"),
         audio_duration if audio_duration is not None else beat.get("audio_duration_seconds"),
@@ -1051,22 +1160,37 @@ def recommend_seedance2_duration(
             candidates.append(5.0)
 
     target = int(math.ceil(max(candidates)))
-    return max(4, min(15, target))
+    return max(min_duration, min(max_duration, target))
 
 
-def _extract_composer_output(output: Any) -> tuple[str, int | None]:
+def _extract_composer_output(
+    output: Any,
+    *,
+    min_duration: int = 4,
+    max_duration: int = 15,
+) -> tuple[str, int | None]:
     if isinstance(output, Seedance2PromptComposerOutput):
         return normalize_seedance2_editor_prompt(output.final_prompt), _clamp_seedance2_duration(
-            output.recommended_duration
+            output.recommended_duration,
+            min_duration=min_duration,
+            max_duration=max_duration,
         )
     if isinstance(output, dict):
         return normalize_seedance2_editor_prompt(
             output.get("final_prompt") or output.get("prompt") or ""
-        ), _clamp_seedance2_duration(output.get("recommended_duration"))
+        ), _clamp_seedance2_duration(
+            output.get("recommended_duration"),
+            min_duration=min_duration,
+            max_duration=max_duration,
+        )
     if hasattr(output, "final_prompt"):
         return normalize_seedance2_editor_prompt(
             getattr(output, "final_prompt", "")
-        ), _clamp_seedance2_duration(getattr(output, "recommended_duration", None))
+        ), _clamp_seedance2_duration(
+            getattr(output, "recommended_duration", None),
+            min_duration=min_duration,
+            max_duration=max_duration,
+        )
 
     text = str(output or "").strip()
     if text.startswith("{") and text.endswith("}"):
@@ -1075,16 +1199,41 @@ def _extract_composer_output(output: Any) -> tuple[str, int | None]:
             if isinstance(parsed, dict) and "final_prompt" in parsed:
                 return normalize_seedance2_editor_prompt(
                     parsed.get("final_prompt") or ""
-                ), _clamp_seedance2_duration(parsed.get("recommended_duration"))
+                ), _clamp_seedance2_duration(
+                    parsed.get("recommended_duration"),
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                )
         except json.JSONDecodeError:
             pass
     return normalize_seedance2_editor_prompt(text), None
 
 
-def create_seedance2_prompt_composer_agent(language: AssetLanguage = "zh"):
+def create_seedance2_prompt_composer_agent(
+    language: AssetLanguage = "zh",
+    *,
+    prompt_style: str | None = None,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
+):
     from pydantic_ai import Agent
 
     from novelvideo.config import get_newapi_text_pydantic_model
+
+    resolved_style = resolve_video_prompt_style(prompt_style)
+    profile = VIDEO_PROMPT_STYLE_PROFILES[resolved_style]
+    resolved_min, resolved_max = style_duration_bounds(
+        resolved_style,
+        min_duration=min_duration,
+        max_duration=max_duration,
+    )
+    parts = [SEEDANCE2_COMPOSER_SYSTEM_PROMPT]
+    if profile.system_directive:
+        parts.append(f"## Model Direction\n{profile.system_directive}")
+    parts.append(
+        f"## Allowed Duration Budget\nSelect `recommended_duration` between {resolved_min} and {resolved_max} integer seconds."
+    )
+    parts.append(f"## Output Language\n{asset_language_instruction(language)}")
 
     return Agent(
         get_newapi_text_pydantic_model(
@@ -1092,12 +1241,9 @@ def create_seedance2_prompt_composer_agent(language: AssetLanguage = "zh"):
             brainclaw_profile=BrainClawProfile.SEEDANCE2_PROMPT_COMPOSITION,
             capability="text.generate.workflow",
         ),
-        system_prompt=(
-            f"{SEEDANCE2_COMPOSER_SYSTEM_PROMPT}\n\n"
-            f"## Output Language\n{asset_language_instruction(language)}"
-        ),
+        system_prompt="\n\n".join(parts),
         output_type=Seedance2PromptComposerOutput,
-        name="Seedance 2.0 Prompt Composer",
+        name=f"{profile.label} Prompt Composer",
     )
 
 
@@ -1114,8 +1260,24 @@ async def compose_seedance2_prompt_bundle_with_agent(
     prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
+    prompt_style: str | None = None,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
 ) -> tuple[str, int | None]:
-    agent = create_seedance2_prompt_composer_agent(language)
+    resolved_min, resolved_max = style_duration_bounds(
+        prompt_style,
+        min_duration=min_duration,
+        max_duration=max_duration,
+    )
+    if prompt_style is None and min_duration is None and max_duration is None:
+        agent = create_seedance2_prompt_composer_agent(language)
+    else:
+        agent = create_seedance2_prompt_composer_agent(
+            language,
+            prompt_style=prompt_style,
+            min_duration=resolved_min,
+            max_duration=resolved_max,
+        )
     result = await agent.run(
         build_seedance2_prompt_composer_task(
             mode=mode,
@@ -1129,9 +1291,16 @@ async def compose_seedance2_prompt_bundle_with_agent(
             prev_beat=prev_beat,
             next_beat=next_beat,
             language=language,
+            prompt_style=prompt_style,
+            min_duration=resolved_min,
+            max_duration=resolved_max,
         )
     )
-    prompt, recommended_duration = _extract_composer_output(result.output)
+    prompt, recommended_duration = _extract_composer_output(
+        result.output,
+        min_duration=resolved_min,
+        max_duration=resolved_max,
+    )
     if not prompt:
         raise ValueError("AI composer returned an empty prompt")
     return prompt, recommended_duration
@@ -1150,6 +1319,9 @@ async def compose_seedance2_prompt_with_agent(
     prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
+    prompt_style: str | None = None,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
 ) -> str:
     prompt, _recommended_duration = await compose_seedance2_prompt_bundle_with_agent(
         mode=mode,
@@ -1163,6 +1335,9 @@ async def compose_seedance2_prompt_with_agent(
         prev_beat=prev_beat,
         next_beat=next_beat,
         language=language,
+        prompt_style=prompt_style,
+        min_duration=min_duration,
+        max_duration=max_duration,
     )
     return prompt
 
@@ -1181,9 +1356,17 @@ async def generate_seedance2_prompt(
     prev_beat: dict[str, Any] | None = None,
     next_beat: dict[str, Any] | None = None,
     language: AssetLanguage = "zh",
+    prompt_style: str | None = None,
+    min_duration: int | None = None,
+    max_duration: int | None = None,
 ) -> Seedance2PromptGeneration:
-    """Generate a Seedance 2.0 prompt, preferring AI and falling back to rules."""
+    """Generate a video prompt for the selected style, preferring AI and falling back to rules."""
 
+    resolved_min, resolved_max = style_duration_bounds(
+        prompt_style,
+        min_duration=min_duration,
+        max_duration=max_duration,
+    )
     localized_guidance = _localized_prompt_guidance(
         prompt_guidance, prompt_guidance_template_keys, language
     )
@@ -1215,9 +1398,19 @@ async def generate_seedance2_prompt(
             compose_kwargs["prev_beat"] = prev_beat
         if next_beat is not None:
             compose_kwargs["next_beat"] = next_beat
+        if prompt_style is not None:
+            compose_kwargs["prompt_style"] = prompt_style
+        if min_duration is not None:
+            compose_kwargs["min_duration"] = resolved_min
+        if max_duration is not None:
+            compose_kwargs["max_duration"] = resolved_max
         if composer is not None:
             raw_output = await composer(**compose_kwargs)
-            prompt, recommended_duration = _extract_composer_output(raw_output)
+            prompt, recommended_duration = _extract_composer_output(
+                raw_output,
+                min_duration=resolved_min,
+                max_duration=resolved_max,
+            )
         else:
             prompt, recommended_duration = await compose_seedance2_prompt_bundle_with_agent(
                 **compose_kwargs
@@ -1225,7 +1418,12 @@ async def generate_seedance2_prompt(
         if not prompt:
             raise ValueError("AI composer returned an empty prompt")
         if recommended_duration is None:
-            recommended_duration = recommend_seedance2_duration(beat, prompt_text=prompt)
+            recommended_duration = recommend_seedance2_duration(
+                beat,
+                prompt_text=prompt,
+                min_duration=resolved_min,
+                max_duration=resolved_max,
+            )
         return Seedance2PromptGeneration(
             prompt=prompt,
             used_ai=True,
@@ -1239,5 +1437,10 @@ async def generate_seedance2_prompt(
             used_ai=False,
             draft_prompt=draft_prompt,
             error=str(exc),
-            recommended_duration=recommend_seedance2_duration(beat, prompt_text=draft_prompt),
+            recommended_duration=recommend_seedance2_duration(
+                beat,
+                prompt_text=draft_prompt,
+                min_duration=resolved_min,
+                max_duration=resolved_max,
+            ),
         )

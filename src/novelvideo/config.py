@@ -1351,13 +1351,81 @@ else:
 GRID_TOTAL_PANELS = 25  # 动态优化时的最大面板数
 
 
+def _custom_image_generation_selections() -> tuple[dict[str, dict[str, str]], bool]:
+    """Load enabled custom CE image models as image-selection entries."""
+    try:
+        from novelvideo.shared.runtime_env import is_ce_effective
+
+        if not is_ce_effective():
+            return {}, False
+        from novelvideo.model_gateway_settings import (
+            MODE_CUSTOM,
+            get_effective_newapi_config,
+            get_newapi_media_model_mappings,
+            is_media_models_catalog_replaced,
+        )
+
+        mappings = get_newapi_media_model_mappings()
+        replaced = (
+            is_media_models_catalog_replaced()
+            and get_effective_newapi_config().mode == MODE_CUSTOM
+        )
+    except (ImportError, RuntimeError, ValueError):
+        return {}, False
+
+    entries: dict[str, dict[str, str]] = {}
+    for model_id, mapping in sorted(
+        mappings.items(),
+        key=lambda pair: (
+            int(pair[1].get("sortOrder") or 100)
+            if isinstance(pair[1], dict)
+            else 100,
+            pair[0],
+        ),
+    ):
+        if not isinstance(mapping, dict):
+            continue
+        if str(mapping.get("mediaType") or "").strip().lower() != "image":
+            continue
+        if mapping.get("enabled") is False:
+            continue
+        provider = str(mapping.get("provider") or "").strip().lower()
+        if not provider or provider == "comfyui":
+            continue
+        label = str(mapping.get("label") or model_id).strip() or model_id
+        upstream_model = (
+            str(mapping.get("upstreamModel") or model_id).strip() or model_id
+        )
+        entries[model_id] = {
+            "label": label,
+            "provider": "newapi",
+            "model": model_id,
+            "upstream_model": upstream_model,
+        }
+    return entries, replaced
+
+
 def image_generation_selection_options() -> dict[str, str]:
     """Return UI labels for configured image-generation selections."""
-    return {
+    static_options = {
         key: IMAGE_GENERATION_SELECTIONS[key]["label"]
         for key in VISIBLE_IMAGE_GENERATION_SELECTION_KEYS
         if key in IMAGE_GENERATION_SELECTIONS
     }
+    custom_entries, replaced = _custom_image_generation_selections()
+    if not custom_entries:
+        return static_options
+    if replaced:
+        return {key: entry["label"] for key, entry in custom_entries.items()}
+
+    merged = dict(static_options)
+    static_models = {
+        IMAGE_GENERATION_SELECTIONS[key]["model"] for key in static_options
+    }
+    for key, entry in custom_entries.items():
+        if key not in merged and entry["model"] not in static_models:
+            merged[key] = entry["label"]
+    return merged
 
 
 def character_image_selection_options() -> dict[str, str]:
@@ -1365,31 +1433,61 @@ def character_image_selection_options() -> dict[str, str]:
     return image_generation_selection_options()
 
 
-def _visible_image_generation_selection(value: str | None) -> str:
+def _visible_image_generation_selection(
+    value: str | None,
+    *,
+    options: dict[str, str] | None = None,
+    custom_entries: dict[str, dict[str, str]] | None = None,
+) -> str:
     candidate = str(value or "").strip()
-    if (
-        candidate in VISIBLE_IMAGE_GENERATION_SELECTION_KEYS
-        and candidate in IMAGE_GENERATION_SELECTIONS
-    ):
+    if not candidate:
+        return ""
+    opts = options if options is not None else image_generation_selection_options()
+    if candidate in opts:
         return candidate
     alias = LEGACY_IMAGE_GENERATION_SELECTION_ALIASES.get(candidate)
-    if (
-        alias in VISIBLE_IMAGE_GENERATION_SELECTION_KEYS
-        and alias in IMAGE_GENERATION_SELECTIONS
-    ):
+    if alias and alias in opts:
         return alias
+    custom = (
+        custom_entries
+        if custom_entries is not None
+        else _custom_image_generation_selections()[0]
+    )
+    if candidate.startswith("newapi_"):
+        stripped = candidate[len("newapi_") :].strip()
+        if stripped in opts:
+            return stripped
+    for key, entry in custom.items():
+        if key in opts and entry.get("upstream_model") == candidate:
+            return key
     return ""
 
 
-def _default_image_generation_selection(fallback: str | None = None) -> str:
+def _default_image_generation_selection(
+    fallback: str | None = None,
+    *,
+    options: dict[str, str] | None = None,
+    custom_entries: dict[str, dict[str, str]] | None = None,
+) -> str:
+    opts = options if options is not None else image_generation_selection_options()
+    custom = (
+        custom_entries
+        if custom_entries is not None
+        else _custom_image_generation_selections()[0]
+    )
     for candidate in (
         fallback,
         DEFAULT_SKETCH_IMAGE_SELECTION,
         DEFAULT_RENDER_IMAGE_SELECTION,
         "newapi_gpt_image2",
+        *opts.keys(),
         *VISIBLE_IMAGE_GENERATION_SELECTION_KEYS,
     ):
-        selection = _visible_image_generation_selection(candidate)
+        selection = _visible_image_generation_selection(
+            candidate,
+            options=opts,
+            custom_entries=custom,
+        )
         if selection:
             return selection
     raise ValueError("No visible image generation selection configured.")
@@ -1400,27 +1498,88 @@ def normalize_image_generation_selection(
     *,
     fallback: str | None = None,
 ) -> str:
-    selection = _visible_image_generation_selection(value)
+    opts = image_generation_selection_options()
+    custom, _ = _custom_image_generation_selections()
+    selection = _visible_image_generation_selection(
+        value,
+        options=opts,
+        custom_entries=custom,
+    )
     if selection:
         return selection
-    return _default_image_generation_selection(fallback)
+    return _default_image_generation_selection(
+        fallback,
+        options=opts,
+        custom_entries=custom,
+    )
+
+
+def is_registered_image_generation_selection(value: str | None) -> bool:
+    """Return whether value identifies a built-in or custom image selection."""
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    if candidate in IMAGE_GENERATION_SELECTIONS:
+        return True
+    custom, _ = _custom_image_generation_selections()
+    if candidate in custom:
+        return True
+    if candidate.startswith("newapi_"):
+        return candidate[len("newapi_") :].strip() in custom
+    return False
+
+
+def resolve_image_generation_selection_entry(
+    value: str | None,
+    *,
+    fallback: str | None = None,
+) -> dict[str, str]:
+    """Resolve provider/model/label metadata for built-in or custom selections."""
+    candidate = str(value or "").strip()
+    if candidate in IMAGE_GENERATION_SELECTIONS:
+        return IMAGE_GENERATION_SELECTIONS[candidate]
+    custom, _ = _custom_image_generation_selections()
+    if candidate in custom:
+        return custom[candidate]
+    if candidate.startswith("newapi_"):
+        stripped = candidate[len("newapi_") :].strip()
+        if stripped in custom:
+            return custom[stripped]
+    normalized = normalize_image_generation_selection(candidate, fallback=fallback)
+    if normalized in IMAGE_GENERATION_SELECTIONS:
+        return IMAGE_GENERATION_SELECTIONS[normalized]
+    if normalized in custom:
+        return custom[normalized]
+    return IMAGE_GENERATION_SELECTIONS[DEFAULT_RENDER_IMAGE_SELECTION]
 
 
 def image_generation_selection_label(
     value: str | None, *, fallback: str | None = None
 ) -> str:
     selection = normalize_image_generation_selection(value, fallback=fallback)
-    return IMAGE_GENERATION_SELECTIONS[selection]["label"]
+    return resolve_image_generation_selection_entry(selection, fallback=fallback)[
+        "label"
+    ]
 
 
 def get_character_image_selection() -> str:
     """Return the configured character/identity image source selection."""
-    candidate = _visible_image_generation_selection(CHARACTER_IMAGE_SELECTION)
+    opts = character_image_selection_options()
+    custom, _ = _custom_image_generation_selections()
+    candidate = _visible_image_generation_selection(
+        CHARACTER_IMAGE_SELECTION,
+        options=opts,
+        custom_entries=custom,
+    )
     if candidate:
         return candidate
 
     legacy_model = str(CHARACTER_IMAGE_MODEL or "").strip()
-    legacy_selection = _visible_image_generation_selection(legacy_model)
+    legacy_selection = _visible_image_generation_selection(
+        legacy_model,
+        options=opts,
+        custom_entries=custom,
+    )
     if legacy_selection:
         return legacy_selection
 
@@ -1431,7 +1590,13 @@ def get_character_image_selection() -> str:
 
 
 def normalize_character_image_selection(value: str | None) -> str:
-    candidate = _visible_image_generation_selection(value)
+    opts = character_image_selection_options()
+    custom, _ = _custom_image_generation_selections()
+    candidate = _visible_image_generation_selection(
+        value,
+        options=opts,
+        custom_entries=custom,
+    )
     if candidate:
         return candidate
     return get_character_image_selection()
@@ -1445,6 +1610,10 @@ def infer_image_generation_selection(
 ) -> str:
     provider_norm = str(provider or "").strip().lower()
     model_norm = str(model or "").strip()
+    custom, _ = _custom_image_generation_selections()
+    for key, entry in custom.items():
+        if model_norm in {entry["model"], entry.get("upstream_model")}:
+            return key
     for key, entry in IMAGE_GENERATION_SELECTIONS.items():
         if entry["provider"] == provider_norm and entry["model"] == model_norm:
             return key
@@ -1500,7 +1669,7 @@ def _image_provider_config(
 ) -> dict:
     if selection_override:
         selection = normalize_image_generation_selection(selection_override)
-        entry = IMAGE_GENERATION_SELECTIONS[selection]
+        entry = resolve_image_generation_selection_entry(selection)
         provider = entry["provider"]
         model = model_override or entry["model"]
     else:

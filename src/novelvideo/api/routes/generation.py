@@ -233,14 +233,16 @@ def _image_selection_billing_metadata(
     image_role: str,
 ) -> dict:
     from novelvideo.config import (
-        IMAGE_GENERATION_SELECTIONS,
         normalize_image_generation_selection,
+        resolve_image_generation_selection_entry,
     )
     from novelvideo.api.routes.model_credits import _image_selection_billing_params
 
     selection = normalize_image_generation_selection(image_selection)
-    model_cfg = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-    pricing_model = str(model_cfg.get("model") or "").strip()
+    model_cfg = resolve_image_generation_selection_entry(selection)
+    pricing_model = str(
+        model_cfg.get("upstream_model") or model_cfg.get("model") or ""
+    ).strip()
     if not pricing_model:
         return {}
     pricing_params = _image_selection_billing_params(
@@ -811,10 +813,27 @@ def _seedance2_model_from_backend(video_backend: str | None) -> str:
 
 def _seedance2_resolution_options_for_backend(video_backend: str | None) -> tuple[str, ...]:
     model = _seedance2_model_from_backend(video_backend)
-    return SEEDANCE2_RESOLUTION_OPTIONS_BY_MODEL.get(
-        model,
-        SEEDANCE2_DEFAULT_RESOLUTION_OPTIONS,
-    )
+    if model in SEEDANCE2_RESOLUTION_OPTIONS_BY_MODEL:
+        return SEEDANCE2_RESOLUTION_OPTIONS_BY_MODEL[model]
+    # Check custom/official catalog config (case-insensitive key match)
+    raw_model = str(video_backend or "").strip()
+    for prefix in ("newapi_", "huimeng_", "huimengi_"):
+        if raw_model.lower().startswith(prefix):
+            raw_model = raw_model[len(prefix) :].strip()
+            break
+    catalog_configs = _catalog_video_model_configs()
+    cfg = catalog_configs.get(raw_model) or catalog_configs.get(model)
+    if isinstance(cfg, dict):
+        res_list = _config_str_list(cfg, "resolutionOptions")
+        if res_list:
+            normalized = tuple(
+                dict.fromkeys(_seedance2_api_resolution(item) for item in res_list)
+            )
+            if normalized:
+                return normalized
+    if model and not model.startswith("seedance-2.0-mini") and not model.startswith("seedance-2.0-fast"):
+        return ("480p", "720p", "1080p")
+    return SEEDANCE2_DEFAULT_RESOLUTION_OPTIONS
 
 
 def _seedance2_resolution_for_backend(
@@ -878,6 +897,7 @@ SEEDANCE2_SINGLE_VIDEO_CONFIG_FIELDS = {
     "human_review",
     "scene_optimize",
     "final_prompt",
+    "prompt_style",
     "prompt_guidance",
     "text_overlay",
 }
@@ -1671,6 +1691,45 @@ async def trim_seedance2_audio_asset(
     )
 
 
+def _catalog_video_model_configs() -> dict[str, dict[str, Any]]:
+    configs: dict[str, dict[str, Any]] = {}
+    try:
+        from novelvideo.model_gateway_settings import (
+            get_newapi_media_model_mappings,
+            get_official_media_model_mappings,
+        )
+        from novelvideo.shared.runtime_env import is_ce_effective
+
+        for model_name, entry in get_official_media_model_mappings().items():
+            if isinstance(entry, dict) and isinstance(entry.get("config"), dict):
+                configs[model_name] = dict(entry["config"])
+        if is_ce_effective():
+            for model_name, entry in get_newapi_media_model_mappings().items():
+                if isinstance(entry, dict) and isinstance(entry.get("config"), dict):
+                    configs[model_name] = dict(entry["config"])
+    except (RuntimeError, ImportError):
+        return configs
+    return configs
+
+
+def _config_str_list(config: dict[str, Any], key: str) -> list[str] | None:
+    raw = config.get(key)
+    if not isinstance(raw, list) or not raw:
+        return None
+    items = [str(item).strip() for item in raw if str(item or "").strip()]
+    return items or None
+
+
+def _config_opt_int(config: dict[str, Any], key: str) -> int | None:
+    raw = config.get(key)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _api_video_backend_options() -> list[VideoBackendOption]:
     from novelvideo.config import NEWAPI_VIDEO_DURATION_BOUNDS
     from novelvideo.generators.video_generator import (
@@ -1694,27 +1753,42 @@ def _api_video_backend_options() -> list[VideoBackendOption]:
     duration_bounds = NewApiVideoGenerator._parse_duration_bounds_config(
         NEWAPI_VIDEO_DURATION_BOUNDS
     )
+    catalog_configs = _catalog_video_model_configs()
     default_backend = VideoGenerateRequest().video_backend
     backend_options: list[VideoBackendOption] = []
     for value, label in options.items():
         model = parse_newapi_video_backend(value)
+        model_config = catalog_configs.get(model or "", {})
         bounds = duration_bounds.get(model or "")
+        if not bounds:
+            cfg_min = _config_opt_int(model_config, "minDuration")
+            cfg_max = _config_opt_int(model_config, "maxDuration")
+            if cfg_min and cfg_max and cfg_max >= cfg_min:
+                bounds = (cfg_min, cfg_max)
         if model == "seedance-2.0-mini" and not bounds:
             bounds = (4, 15)
         if model == "happyhorse-1.0" and not bounds:
             bounds = (3, 15)
         if model == "grok-video-channel" and not bounds:
             bounds = (6, 30)
+        is_seedance2 = _is_seedance2_backend(value)
         is_happyhorse = _is_happyhorse_backend(value)
         is_grok_video = _is_grok_video_backend(value)
+        supports_prompt_panel = bool(
+            is_seedance2
+            or is_happyhorse
+            or is_grok_video
+            or (model and not model.lower().startswith("seedance-1."))
+        )
         backend_options.append(
             VideoBackendOption(
                 value=value,
                 label=label,
                 is_default=value == default_backend,
-                is_seedance2=_is_seedance2_backend(value),
+                is_seedance2=is_seedance2,
                 is_happyhorse=is_happyhorse,
                 is_grok_video=is_grok_video,
+                supports_prompt_panel=supports_prompt_panel,
                 dialogue_only=value in {"seedance_pro", "newapi_seedance-1.5-pro"},
                 min_duration=bounds[0] if bounds else None,
                 max_duration=bounds[1] if bounds else None,
@@ -1723,25 +1797,41 @@ def _api_video_backend_options() -> list[VideoBackendOption]:
                     if is_happyhorse
                     else list(GROK_VIDEO_RESOLUTION_OPTIONS)
                     if is_grok_video
-                    else None
+                    else _config_str_list(model_config, "resolutionOptions")
                 ),
                 ratio_options=(
                     list(HAPPYHORSE_RATIO_OPTIONS)
                     if is_happyhorse
                     else list(GROK_VIDEO_RATIO_OPTIONS)
                     if is_grok_video
-                    else None
+                    else _config_str_list(model_config, "ratioOptions")
                 ),
                 supported_modes=(
                     list(HAPPYHORSE_SUPPORTED_MODES)
                     if is_happyhorse
                     else list(GROK_VIDEO_SUPPORTED_MODES)
                     if is_grok_video
-                    else None
+                    else _config_str_list(model_config, "supportedModes")
                 ),
-                reference_image_max=7 if is_grok_video else 9 if is_happyhorse else None,
-                reference_video_max=0 if is_grok_video else 1 if is_happyhorse else None,
-                reference_audio_max=0 if is_grok_video or is_happyhorse else None,
+                reference_image_max=(
+                    7
+                    if is_grok_video
+                    else 9
+                    if is_happyhorse
+                    else _config_opt_int(model_config, "referenceImageMax")
+                ),
+                reference_video_max=(
+                    0
+                    if is_grok_video
+                    else 1
+                    if is_happyhorse
+                    else _config_opt_int(model_config, "referenceVideoMax")
+                ),
+                reference_audio_max=(
+                    0
+                    if is_grok_video or is_happyhorse
+                    else _config_opt_int(model_config, "referenceAudioMax")
+                ),
             )
         )
     return backend_options
@@ -4827,6 +4917,9 @@ async def generate_single_video(
     happyhorse_ratio: str | None = None
     grok_video_references: list[dict[str, str]] = []
     grok_video_ratio: str | None = None
+    custom_panel_ratio: str | None = None
+    custom_panel_gen_mode: str | None = None
+    custom_panel_generate_audio: bool | None = None
     resolved_video_references: list[dict[str, str]] = []
     if is_seedance2:
         try:
@@ -4976,29 +5069,126 @@ async def generate_single_video(
                     beat_number=beat_num,
                     seedance2_config_json=request_config_json,
                 )
-            from novelvideo.seedance2_i2v.models import parse_seedance2_config
-            from novelvideo.seedance2_i2v.assets import resolve_beat_video_references
-
-            merged_config = parse_seedance2_config(beat.get("seedance2_config_json"))
-            resolved_assets, declared_count, missing = resolve_beat_video_references(
-                list(merged_config.reference_image_paths),
-                list(merged_config.reference_audio_paths),
+            from novelvideo.seedance2_i2v.assets import (
+                apply_prompt_audio_selection,
+                build_seedance2_project_assets,
+                resolve_beat_video_references,
             )
-            if missing:
-                condition = "全部丢失" if len(missing) == declared_count else "部分丢失"
-                return {
-                    "ok": False,
-                    "error": f"视频参考素材{condition}（声明 {declared_count} 项，可用 {declared_count - len(missing)} 项）：" + "；".join(missing),
-                }
-            resolved_video_references = [
-                {
-                    "type": asset.media_type,
-                    "path": str(asset.path),
-                    "role": asset.reference_label,
-                }
-                for asset in resolved_assets
-                if asset.selected
-            ]
+            from novelvideo.seedance2_i2v.models import (
+                Seedance2I2VMode,
+                parse_seedance2_config,
+            )
+            from novelvideo.seedance2_i2v.request import normalize_seedance2_prompt
+
+            merged_config = parse_seedance2_config(
+                request_config_json or beat.get("seedance2_config_json")
+            )
+            uses_prompt_panel = bool(
+                request_config_json is not None
+                or (not prompt.strip() and str(merged_config.final_prompt or "").strip())
+            )
+            if uses_prompt_panel and str(merged_config.final_prompt or "").strip():
+                prompt = normalize_seedance2_prompt(merged_config.final_prompt)
+            if uses_prompt_panel:
+                seedance2_config_json = request_config_json or beat.get(
+                    "seedance2_config_json"
+                )
+                custom_panel_ratio = body.ratio if "ratio" in body.model_fields_set else merged_config.ratio
+                if (
+                    "generate_audio" in body.model_fields_set
+                    or body.seedance2_config_json is not None
+                ):
+                    custom_panel_generate_audio = bool(merged_config.generate_audio)
+                if merged_config.mode == Seedance2I2VMode.FIRST_LAST_FRAME:
+                    next_frame = paths.first_frame_for_video(
+                        beat_num + 1,
+                        use_director_render=bool(body.use_director_render),
+                    )
+                    if not next_frame.exists():
+                        return {
+                            "ok": False,
+                            "error": f"Beat {beat_num + 1} 首帧不存在，无法使用首尾帧模式",
+                        }
+                    last_frame_path = str(next_frame)
+                    video_mode = "keyframe"
+                    custom_panel_gen_mode = "first_last_frame"
+                elif merged_config.mode == Seedance2I2VMode.FIRST_FRAME:
+                    last_frame_path = None
+                    video_mode = "first_frame"
+                    custom_panel_gen_mode = "first_frame"
+                elif merged_config.mode == Seedance2I2VMode.TEXT_TO_VIDEO:
+                    frame_path = None
+                    last_frame_path = None
+                    video_mode = "first_frame"
+                    custom_panel_gen_mode = "text_to_video"
+                else:
+                    custom_panel_gen_mode = "all_reference"
+                    episode_obj = _episode_from_store_or_none(store, episode_num)
+                    prop_menu = await _runtime_prop_menu_with_global_props(
+                        store, episode_obj, beats
+                    )
+                    next_beat = (
+                        beats[beats.index(beat) + 1]
+                        if beat in beats and beats.index(beat) + 1 < len(beats)
+                        else None
+                    )
+                    assets = build_seedance2_project_assets(
+                        project_output=Path(output_dir),
+                        episode=episode_num,
+                        beat=beat,
+                        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+                        state_dir=Path(
+                            getattr(store, "state_dir", None) or resolved.state_dir
+                        ),
+                        next_beat=next_beat,
+                        prop_menu=prop_menu,
+                    )
+                    _user_refs, declared_count, missing = resolve_beat_video_references(
+                        list(merged_config.reference_image_paths),
+                        list(merged_config.reference_audio_paths),
+                        assets=assets,
+                    )
+                    if missing:
+                        condition = "全部丢失" if len(missing) == declared_count else "部分丢失"
+                        return {
+                            "ok": False,
+                            "error": f"视频参考素材{condition}（声明 {declared_count} 项，可用 {declared_count - len(missing)} 项）："
+                            + "；".join(missing),
+                        }
+                    selected_assets = apply_prompt_audio_selection(
+                        assets,
+                        merged_config.final_prompt,
+                        generate_audio=bool(merged_config.generate_audio),
+                    )
+                    resolved_video_references = [
+                        {
+                            "type": asset.media_type,
+                            "path": str(asset.path),
+                            "role": asset.reference_label,
+                        }
+                        for asset in selected_assets
+                        if asset.selected
+                    ]
+            else:
+                resolved_assets, declared_count, missing = resolve_beat_video_references(
+                    list(merged_config.reference_image_paths),
+                    list(merged_config.reference_audio_paths),
+                )
+                if missing:
+                    condition = "全部丢失" if len(missing) == declared_count else "部分丢失"
+                    return {
+                        "ok": False,
+                        "error": f"视频参考素材{condition}（声明 {declared_count} 项，可用 {declared_count - len(missing)} 项）：" + "；".join(missing),
+                    }
+                resolved_video_references = [
+                    {
+                        "type": asset.media_type,
+                        "path": str(asset.path),
+                        "role": asset.reference_label,
+                    }
+                    for asset in resolved_assets
+                    if asset.selected
+                ]
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if not prompt.strip():
@@ -5014,11 +5204,17 @@ async def generate_single_video(
                 video_duration = float(body.duration)
             except (TypeError, ValueError):
                 pass
+        elif uses_prompt_panel and merged_config.duration > 0:
+            video_duration = float(merged_config.duration)
         if audio_duration:
             video_duration = max(float(video_duration), float(math.ceil(float(audio_duration))))
         if "resolution" in body.model_fields_set:
             single_video_resolution = _seedance2_resolution_for_backend(
                 body.video_backend, body.resolution
+            )
+        elif uses_prompt_panel and merged_config.resolution:
+            single_video_resolution = _seedance2_resolution_for_backend(
+                body.video_backend, merged_config.resolution
             )
 
     from novelvideo.video_duration import normalize_video_duration_for_backend
@@ -5053,6 +5249,12 @@ async def generate_single_video(
         config["references"] = grok_video_references
     elif resolved_video_references:
         config["references"] = resolved_video_references
+    if custom_panel_ratio:
+        config["ratio"] = custom_panel_ratio
+    if custom_panel_gen_mode:
+        config["gen_mode"] = custom_panel_gen_mode
+    if custom_panel_generate_audio is not None:
+        config["generate_audio"] = custom_panel_generate_audio
 
     billing_resolution = single_video_resolution or _seedance2_resolution_for_backend(
         body.video_backend,

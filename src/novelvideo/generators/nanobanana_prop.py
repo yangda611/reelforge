@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Optional
 
 from novelvideo.config import (
-    IMAGE_GENERATION_SELECTIONS,
     get_grid_generation_config,
     get_style_preset,
     IMAGE_DEFAULT_STYLE,
@@ -27,6 +26,7 @@ from novelvideo.config import (
     PROP_REF_IMAGE_MODEL,
     PROP_REF_IMAGE_PROVIDER,
     normalize_image_generation_selection,
+    resolve_image_generation_selection_entry,
 )
 from novelvideo.shared.billing_errors import is_fatal_billing_error
 from novelvideo.generators.nanobanana_grid import (
@@ -61,7 +61,7 @@ def _prop_reference_image_source(selection: str | None) -> tuple[str | None, str
     if not selection:
         return None, None
     normalized = normalize_image_generation_selection(selection)
-    image_source = IMAGE_GENERATION_SELECTIONS[normalized]
+    image_source = resolve_image_generation_selection_entry(normalized)
     return image_source["provider"], image_source["model"]
 
 

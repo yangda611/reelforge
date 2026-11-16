@@ -725,6 +725,8 @@ async def generate_seedance2_prompt(
             manual_prompt_reference=body.manual_prompt_reference,
             prompt_guidance=body.prompt_guidance,
             prompt_guidance_template_keys=body.prompt_guidance_template_keys,
+            prompt_style=body.prompt_style,
+            video_backend=body.video_backend,
             language=language,
             prop_menu=list(script_data.get("prop_menu") or []),
         )

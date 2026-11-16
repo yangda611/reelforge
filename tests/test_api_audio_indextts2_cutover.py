@@ -153,9 +153,152 @@ def test_mainline_video_backend_options_hide_legacy_models_and_expose_mini() -> 
     mini = options["newapi_seedance-2.0-mini"]
     assert mini["label"] == "Seedance2.0 Mini"
     assert mini["is_seedance2"] is True
+    assert mini["supports_prompt_panel"] is True
     assert mini["is_happyhorse"] is False
     assert mini["min_duration"] == 4
     assert mini["max_duration"] == 15
+
+    sd10 = options["newapi_seedance-1.0-pro-fast"]
+    assert sd10["supports_prompt_panel"] is False
+
+
+def test_custom_video_backend_exposes_prompt_panel_and_catalog_capabilities(monkeypatch) -> None:
+    from novelvideo.api.routes import generation
+    from novelvideo.generators import video_generator
+
+    custom_mappings = {
+        "Seedance2.0": {
+            "provider": "openai",
+            "upstreamModel": "tr_seedance-2.0",
+            "mediaType": "video",
+            "label": "Seedance2.0",
+            "enabled": True,
+            "config": {
+                "minDuration": 4,
+                "maxDuration": 30,
+                "resolutionOptions": ["720p", "1080p"],
+                "ratioOptions": ["16:9", "9:16"],
+                "supportedModes": ["first_frame", "all_reference"],
+                "referenceImageMax": 9,
+                "referenceAudioMax": 3,
+            },
+        }
+    }
+    monkeypatch.setattr(
+        video_generator,
+        "newapi_video_backend_options",
+        lambda **_kwargs: {
+            "newapi_seedance-1.0-pro-fast": "Seedance 1.0 Pro Fast",
+            "newapi_Seedance2.0": "Seedance2.0",
+        },
+    )
+    monkeypatch.setattr(
+        generation,
+        "_catalog_video_model_configs",
+        lambda: {"Seedance2.0": custom_mappings["Seedance2.0"]["config"]},
+    )
+
+    options = {
+        item.value: item.model_dump()
+        for item in generation._api_video_backend_options()
+    }
+    custom = options["newapi_Seedance2.0"]
+    assert custom["is_seedance2"] is False
+    assert custom["supports_prompt_panel"] is True
+    assert custom["min_duration"] == 4
+    assert custom["max_duration"] == 30
+    assert custom["resolution_options"] == ["720p", "1080p"]
+    assert custom["ratio_options"] == ["16:9", "9:16"]
+    assert custom["reference_image_max"] == 9
+    assert custom["reference_audio_max"] == 3
+    assert options["newapi_seedance-1.0-pro-fast"]["supports_prompt_panel"] is False
+
+
+@pytest.mark.asyncio
+async def test_single_video_generation_uses_prompt_panel_config_for_custom_backend(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+    from pathlib import Path
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    calls = []
+
+    class _BeatStore(_FakeStore):
+        def __init__(self):
+            self.updated = []
+
+        async def get_beats_as_dicts(self, episode_num):
+            return [
+                {
+                    "beat_number": 1,
+                    "video_mode": "first_frame",
+                    "video_prompt": "",
+                    "seedance2_config_json": "{}",
+                }
+            ]
+
+        async def update_beat_asset(self, **kwargs):
+            self.updated.append(kwargs)
+            return True
+
+    store = _BeatStore()
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    from novelvideo.utils.path_resolver import PathResolver
+
+    frame_path = PathResolver(tmp_path, 1).frame(1)
+    frame_path.parent.mkdir(parents=True, exist_ok=True)
+    frame_path.write_bytes(b"png")
+
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+    monkeypatch.setattr(
+        "novelvideo.seedance2_i2v.assets.build_seedance2_project_assets",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "novelvideo.video_duration.video_duration_bounds_for_backend",
+        lambda _backend: (4, 30),
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=1,
+        beat_num=1,
+        body=SingleVideoRequest(
+            video_backend="newapi_Seedance2.0",
+            resolution="1080p",
+            duration=18,
+            ratio="16:9",
+            mode="multimodal_reference",
+            seedance2_config_json=json.dumps(
+                {
+                    "mode": "multimodal_reference",
+                    "duration": 18,
+                    "resolution": "1080p",
+                    "ratio": "16:9",
+                    "generate_audio": True,
+                    "prompt_style": "minimax_h3",
+                    "final_prompt": "@图片1 中的人物推门走入雨夜。",
+                }
+            ),
+        ),
+        user={"username": "alice"},
+    )
+
+    assert response["ok"] is True, response
+    assert len(calls) == 1
+    dispatched_config = calls[0]["payload"]["config"]
+    assert dispatched_config["prompt"] == "图片1 中的人物推门走入雨夜。"
+    assert dispatched_config["video_duration"] == 18
+    assert dispatched_config["resolution"] == "1080p"
+    assert dispatched_config["ratio"] == "16:9"
+    assert dispatched_config["gen_mode"] == "all_reference"
+    assert dispatched_config["generate_audio"] is True
 
 
 @pytest.mark.asyncio

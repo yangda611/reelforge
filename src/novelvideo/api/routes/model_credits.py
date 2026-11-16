@@ -154,8 +154,9 @@ def _image_selection_cost_model(selection: str) -> str:
         raise HTTPException(status_code=400, detail="selection is required")
 
     from novelvideo.config import (
-        IMAGE_GENERATION_SELECTIONS,
         character_image_selection_options,
+        is_registered_image_generation_selection,
+        resolve_image_generation_selection_entry,
     )
 
     options = character_image_selection_options()
@@ -165,9 +166,10 @@ def _image_selection_cost_model(selection: str) -> str:
         label_name="image selection",
     )
 
-    if clean_selection not in IMAGE_GENERATION_SELECTIONS:
+    if not is_registered_image_generation_selection(clean_selection):
         raise HTTPException(status_code=400, detail="invalid image selection")
-    return IMAGE_GENERATION_SELECTIONS[clean_selection]["model"]
+    entry = resolve_image_generation_selection_entry(clean_selection)
+    return str(entry.get("upstream_model") or entry.get("model") or "").strip()
 
 
 def _video_backend_cost_model(backend: str) -> str:
@@ -642,13 +644,15 @@ def freezone_image_feature_billing_params(feature_key: str, params: dict) -> dic
     if not image_selection:
         return params
     from novelvideo.config import (
-        IMAGE_GENERATION_SELECTIONS,
         normalize_image_generation_selection,
+        resolve_image_generation_selection_entry,
     )
 
     selection = normalize_image_generation_selection(image_selection)
-    model_cfg = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-    pricing_model = str(model_cfg.get("model") or "").strip()
+    model_cfg = resolve_image_generation_selection_entry(selection)
+    pricing_model = str(
+        model_cfg.get("upstream_model") or model_cfg.get("model") or ""
+    ).strip()
     if not pricing_model:
         return params
     try:
@@ -770,13 +774,15 @@ def _feature_billing_params(value: str, params: dict, *, mode_key: str = "") -> 
         if not image_selection:
             return params
         from novelvideo.config import (
-            IMAGE_GENERATION_SELECTIONS,
             normalize_image_generation_selection,
+            resolve_image_generation_selection_entry,
         )
 
         selection = normalize_image_generation_selection(image_selection)
-        model_cfg = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-        pricing_model = str(model_cfg.get("model") or "").strip()
+        model_cfg = resolve_image_generation_selection_entry(selection)
+        pricing_model = str(
+            model_cfg.get("upstream_model") or model_cfg.get("model") or ""
+        ).strip()
         if not pricing_model:
             return params
         return {
@@ -808,9 +814,9 @@ def _feature_billing_params(value: str, params: dict, *, mode_key: str = "") -> 
     if not image_selection:
         return params
     from novelvideo.config import (
-        IMAGE_GENERATION_SELECTIONS,
         normalize_character_image_selection,
         normalize_image_generation_selection,
+        resolve_image_generation_selection_entry,
     )
 
     selection = (
@@ -818,8 +824,10 @@ def _feature_billing_params(value: str, params: dict, *, mode_key: str = "") -> 
         if feature_image_role in {"sketch", "render", "prop"}
         else normalize_character_image_selection(image_selection)
     )
-    model_cfg = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-    pricing_model = str(model_cfg.get("model") or "").strip()
+    model_cfg = resolve_image_generation_selection_entry(selection)
+    pricing_model = str(
+        model_cfg.get("upstream_model") or model_cfg.get("model") or ""
+    ).strip()
     if not pricing_model:
         return params
     pricing_params = (

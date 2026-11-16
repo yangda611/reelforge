@@ -124,6 +124,47 @@ describe("Seedance2 prompt generation query", () => {
     });
   });
 
+  it("forwards promptStyle and videoBackend when provided", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(
+        "http://localhost:3000/api/v1/projects/demo/episodes/1/beats/2/seedance2-prompt/generate",
+        async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({
+            ok: true,
+            data: {
+              final_prompt: "optimized prompt",
+              seedance2_config_json: '{"final_prompt":"optimized prompt"}',
+              beat: {
+                beat_number: 2,
+                seedance2_config_json: '{"final_prompt":"optimized prompt"}',
+              },
+            },
+          });
+        },
+      ),
+    );
+
+    const { result } = renderHook(() => useGenerateSeedance2Prompt("demo", 1), {
+      wrapper,
+    });
+    result.current.mutate({
+      beatNum: 2,
+      promptStyle: "minimax_h3",
+      videoBackend: "newapi_Seedance2.0",
+    });
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(body).toEqual({
+      manual_prompt_reference: "",
+      prompt_guidance: "",
+      prompt_guidance_template_keys: [],
+      prompt_style: "minimax_h3",
+      video_backend: "newapi_Seedance2.0",
+    });
+  });
+
   it("parses feature billing errors from the Seedance2 prompt endpoint", async () => {
     server.use(
       http.post(

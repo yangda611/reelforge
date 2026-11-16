@@ -147,6 +147,14 @@ beforeAll(async () => {
                   realistic: "写实",
                 },
                 seedance2GeneratePrompt: "AI 优化",
+                promptStyleLabel: "提示词方向",
+                promptStyles: {
+                  seedance_2_0: "Seedance 2.0",
+                  seedance_2_5: "Seedance 2.5",
+                  minimax_h3: "MiniMax-H3",
+                  generic: "通用运动",
+                },
+                customVideoInspector: "视频参数与提示词",
                 seedance2PromptGenerated: "Seedance2 Prompt 已优化",
                 seedance2SubjectPromptGenerated: "主体提示词已优化",
                 grokVideoInspector: "Grok Video 检视器",
@@ -314,6 +322,18 @@ vi.mock("@/lib/queries/video", () => ({
           dialogue_only: false,
           min_duration: 4,
           max_duration: 15,
+        },
+        {
+          value: "newapi_Seedance2.0",
+          label: "Seedance2.0 (Custom)",
+          is_default: false,
+          is_seedance2: false,
+          supports_prompt_panel: true,
+          dialogue_only: false,
+          min_duration: 4,
+          max_duration: 30,
+          resolution_options: ["720p", "1080p"],
+          ratio_options: ["16:9", "9:16"],
         },
       ],
     },
@@ -2130,6 +2150,8 @@ describe("VideoPane Seedance2 inspector", () => {
       manualPromptReference: "manual reference prompt",
       promptGuidance: "more camera motion",
       promptGuidanceTemplateKeys: [],
+      promptStyle: "seedance_2_0",
+      videoBackend: "huimeng_seedance-2.0-fast",
     });
     expect(screen.getByLabelText("Seedance2.0主体提示词")).toHaveValue(
       "optimized seedance2 prompt",
@@ -2333,5 +2355,73 @@ describe("VideoPane Seedance2 inspector", () => {
     expect(screen.queryByText("assets/narrator/voice.wav")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "项目音频" })).not.toBeInTheDocument();
     expect(deleteNarratorVoiceMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the full prompt panel with prompt style selector for custom video backends", async () => {
+    const user = userEvent.setup();
+    renderPane(
+      makeBeat({
+        video_url: null,
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          duration: 6,
+          resolution: "1080p",
+          ratio: "16:9",
+          final_prompt: "图片1中主角在雨夜推门而出。",
+        }),
+      }),
+      { defaultBackend: "newapi_Seedance2.0" },
+    );
+
+    expect(screen.getByText("Seedance2.0 (Custom)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成本 Beat 提示词" })).not.toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "生成声音" })).toBeInTheDocument();
+
+    const styleTrigger = screen.getByRole("combobox", { name: "提示词方向" });
+    expect(styleTrigger).toHaveTextContent("Seedance 2.0");
+
+    await user.click(styleTrigger);
+    await user.click(await screen.findByRole("option", { name: "MiniMax-H3" }));
+
+    generateSeedance2PromptMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        final_prompt: "图片1中主角在雨夜推门而出，镜头缓缓推进。",
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          duration: 6,
+          duration_user_set: true,
+          resolution: "1080p",
+          ratio: "16:9",
+          ratio_user_set: true,
+          prompt_style: "minimax_h3",
+          prompt_source: "generated",
+          final_prompt: "图片1中主角在雨夜推门而出，镜头缓缓推进。",
+        }),
+        beat: makeBeat({ beat_number: 1 }),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "AI 优化" }));
+    expect(generateSeedance2PromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beatNum: 1,
+        promptStyle: "minimax_h3",
+        videoBackend: "newapi_Seedance2.0",
+      }),
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "重新生成" })[0]);
+    await user.click(screen.getByRole("button", { name: "确认" }));
+    expect(regenerateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beatNum: 1,
+        videoBackend: "newapi_Seedance2.0",
+        resolution: "1080p",
+        duration: 6,
+        ratio: "16:9",
+        mode: "multimodal_reference",
+        seedance2ConfigJson: expect.any(String),
+      }),
+    );
   });
 });

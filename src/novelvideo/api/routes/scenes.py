@@ -194,13 +194,15 @@ async def _start_or_enqueue_stage_asset(
 def _scene_reference_billing_metadata(model_selection: str) -> dict[str, Any]:
     from novelvideo.api.routes.model_credits import _fixed_image_billing_params
     from novelvideo.config import (
-        IMAGE_GENERATION_SELECTIONS,
         normalize_image_generation_selection,
+        resolve_image_generation_selection_entry,
     )
 
     selection = normalize_image_generation_selection(model_selection)
-    model_config = IMAGE_GENERATION_SELECTIONS.get(selection) or {}
-    pricing_model = str(model_config.get("model") or "").strip()
+    model_config = resolve_image_generation_selection_entry(selection)
+    pricing_model = str(
+        model_config.get("upstream_model") or model_config.get("model") or ""
+    ).strip()
     if not pricing_model:
         return {}
     return {

@@ -48,6 +48,7 @@ import {
   type Seedance2BeatStatus,
   type VideoBackendOption,
   type VideoInputCropTarget,
+  type VideoPromptStyle,
 } from "@/lib/queries/video";
 import {
   backendErrorToastMessage,
@@ -178,6 +179,21 @@ const SEEDANCE2_SEGMENTED_OPTION_CLASS =
 const SEEDANCE2_COLLAPSE_TRIGGER_CLASS =
   "-ml-1 h-6 gap-1.5 px-1 text-xs font-medium text-foreground/78 !bg-transparent hover:!bg-transparent hover:text-foreground aria-expanded:!bg-transparent dark:hover:!bg-transparent";
 const SEEDANCE2_DEFAULT_RESOLUTION_OPTIONS = ["480p", "720p"] as const;
+const CUSTOM_DEFAULT_RESOLUTION_OPTIONS = ["480p", "720p", "1080p"] as const;
+const CUSTOM_DEFAULT_RATIO_OPTIONS = [
+  "9:16",
+  "16:9",
+  "1:1",
+  "4:3",
+  "3:4",
+  "21:9",
+] as const;
+const VIDEO_PROMPT_STYLE_OPTIONS: readonly VideoPromptStyle[] = [
+  "seedance_2_0",
+  "seedance_2_5",
+  "minimax_h3",
+  "generic",
+];
 const HAPPYHORSE_RESOLUTION_OPTIONS = ["720p", "1080p"] as const;
 const HAPPYHORSE_RATIO_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "3:4"] as const;
 const GROK_VIDEO_RESOLUTION_OPTIONS = ["720p", "480p"] as const;
@@ -226,6 +242,7 @@ interface Seedance2ConfigDraft {
   human_review: boolean;
   human_review_user_set: boolean;
   prompt_source: string;
+  prompt_style: VideoPromptStyle | "";
   prompt_guidance: string;
   prompt_guidance_template_keys: string[];
   final_prompt: string;
@@ -389,12 +406,18 @@ export function VideoPane({
   const showSeedance2Config = selectedBackend?.is_seedance2 === true;
   const showHappyHorseConfig = selectedBackend?.is_happyhorse === true;
   const showGrokVideoConfig = selectedBackend?.is_grok_video === true;
+  const showCustomPromptConfig =
+    !showSeedance2Config &&
+    !showHappyHorseConfig &&
+    !showGrokVideoConfig &&
+    selectedBackend?.supports_prompt_panel === true;
   const showPromptConfig =
-    showSeedance2Config || showHappyHorseConfig || showGrokVideoConfig;
-  const showReferenceDetails =
     showSeedance2Config ||
     showHappyHorseConfig ||
     showGrokVideoConfig ||
+    showCustomPromptConfig;
+  const showReferenceDetails =
+    showPromptConfig ||
     isSeedanceReferenceCropBackend(defaultBackend);
   const legacyPromptField: "video_prompt" | "keyframe_prompt" =
     beat.video_mode === "keyframe" ? "keyframe_prompt" : "video_prompt";
@@ -410,9 +433,26 @@ export function VideoPane({
   );
   const showSeedance2ValueStyle =
     showSeedance2Config && isSeedance2ValueBackend(defaultBackend);
+  const [preferredPromptStyle, setPreferredPromptStyle] =
+    useState<VideoPromptStyle>(
+      () => storedPromptStyleForBackend(defaultBackend) || "seedance_2_0",
+    );
+  useEffect(() => {
+    const saved = storedPromptStyleForBackend(defaultBackend);
+    setPreferredPromptStyle(saved || "seedance_2_0");
+  }, [defaultBackend]);
   const seedance2ResolutionOptions = useMemo(
-    () => seedance2ResolutionOptionsForBackend(defaultBackend),
-    [defaultBackend],
+    () =>
+      seedance2ResolutionOptionsForBackend(
+        defaultBackend,
+        selectedBackend,
+        showCustomPromptConfig,
+      ),
+    [defaultBackend, selectedBackend, showCustomPromptConfig],
+  );
+  const customRatioOptions = useMemo(
+    () => customRatioOptionsForBackend(selectedBackend),
+    [selectedBackend],
   );
   const seedance2DurationBounds = useMemo(
     () => seedance2DurationBoundsForBackend(selectedBackend),
@@ -606,14 +646,17 @@ export function VideoPane({
     ],
   );
   const [seedance2Draft, setSeedance2Draft] = useState(seedance2Config);
+  const effectivePromptStyle: VideoPromptStyle =
+    normalizeVideoPromptStyle(seedance2Draft.prompt_style) ||
+    preferredPromptStyle;
   const videoPricingResolution =
-    showSeedance2Config || showHappyHorseConfig || showGrokVideoConfig
+    showPromptConfig
       ? seedance2Draft.resolution
       : isSd15ProConfig
         ? sd15Resolution
         : "720p";
   const configuredVideoPricingQuantity =
-    showSeedance2Config || showHappyHorseConfig || showGrokVideoConfig
+    showPromptConfig
       ? seedance2Draft.duration
       : isSd15ProConfig
         ? sd15Duration
@@ -667,7 +710,7 @@ export function VideoPane({
     );
   }, [beat.beat_number, seedance2Config]);
   useEffect(() => {
-    if (!showSeedance2Config && !showHappyHorseConfig && !showGrokVideoConfig) return;
+    if (!showPromptConfig) return;
     const current = seedance2DraftRef.current;
     const next = showGrokVideoConfig
       ? normalizeGrokVideoDraftForBackend(
@@ -699,11 +742,12 @@ export function VideoPane({
     happyHorseResolutionOptions,
     showHappyHorseConfig,
     seedance2ResolutionOptions,
+    showPromptConfig,
     showSeedance2Config,
     showSeedance2ValueStyle,
   ]);
   useEffect(() => {
-    if (!showSeedance2Config && !showHappyHorseConfig && !showGrokVideoConfig) return;
+    if (!showPromptConfig) return;
     const current = seedance2DraftRef.current;
     const nextDuration = clampDuration(
       Math.max(current.duration, audioFloorSeconds ?? 0),
@@ -805,7 +849,7 @@ export function VideoPane({
     return true;
   };
   const missingVoice =
-    showSeedance2Config &&
+    (showSeedance2Config || showCustomPromptConfig) &&
     seedance2Draft.mode === "multimodal_reference" &&
     seedance2StatusData != null &&
     seedance2StatusData.voice.required &&
@@ -851,11 +895,13 @@ export function VideoPane({
   const handleRegen = async () => {
     try {
       let seedance2ConfigJson: string | undefined;
+      let customDraft: Seedance2ConfigDraft | undefined;
+      let customConfigJson: string | undefined;
       let happyHorseConfigJson: string | undefined;
       let happyHorseDraft: Seedance2ConfigDraft | undefined;
       let grokVideoConfigJson: string | undefined;
       let grokVideoDraft: Seedance2ConfigDraft | undefined;
-      if (showSeedance2Config) {
+      if (showSeedance2Config || showCustomPromptConfig) {
         const normalizedDraft = normalizeSeedance2DraftForBackend(
           seedance2DraftRef.current,
           seedance2ResolutionOptions,
@@ -866,9 +912,15 @@ export function VideoPane({
           seedance2DraftRef.current = normalizedDraft;
           setSeedance2Draft(normalizedDraft);
         }
-        seedance2ConfigJson = JSON.stringify(
+        const serializedJson = JSON.stringify(
           serializeSeedance2Config(normalizedDraft, seedance2Config),
         );
+        if (showSeedance2Config) {
+          seedance2ConfigJson = serializedJson;
+        } else {
+          customDraft = normalizedDraft;
+          customConfigJson = serializedJson;
+        }
         if (
           seedance2Dirty ||
           !sameSeedance2Config(normalizedDraft, seedance2Config)
@@ -913,6 +965,15 @@ export function VideoPane({
         beatNum: beat.beat_number,
         videoBackend: defaultBackend,
         ...(showSeedance2Config ? { seedance2ConfigJson } : {}),
+        ...(showCustomPromptConfig && customDraft
+          ? {
+              resolution: customDraft.resolution,
+              duration: customDraft.duration,
+              ratio: customDraft.ratio,
+              mode: customDraft.mode,
+              seedance2ConfigJson: customConfigJson,
+            }
+          : {}),
         ...(showHappyHorseConfig && happyHorseDraft
           ? {
               resolution: happyHorseDraft.resolution,
@@ -1033,6 +1094,8 @@ export function VideoPane({
         manualPromptReference: seedance2Draft.final_prompt,
         promptGuidance: seedance2Draft.prompt_guidance,
         promptGuidanceTemplateKeys: seedance2Draft.prompt_guidance_template_keys,
+        promptStyle: effectivePromptStyle,
+        videoBackend: defaultBackend,
       });
       if (!res.ok) {
         toast.error(
@@ -2029,6 +2092,9 @@ export function VideoPane({
                 ? t("episode.workbench.video.grokVideoInspector")
                 : showHappyHorseConfig
                 ? t("episode.workbench.video.happyHorseInspector")
+                : showCustomPromptConfig
+                ? selectedBackend?.label ||
+                  t("episode.workbench.video.customVideoInspector")
                 : t("episode.workbench.video.seedance2Inspector")}
             </Label>
             <Seedance2SummaryPill
@@ -2436,7 +2502,7 @@ export function VideoPane({
                     ? happyHorseRatioOptions
                     : showGrokVideoConfig
                     ? grokVideoRatioOptions
-                    : (["9:16", "16:9", "1:1", "4:3", "3:4", "21:9"] as const)
+                    : customRatioOptions
                   ).map((ratio) => (
                     <SelectItem key={ratio} value={ratio}>
                       {ratio}
@@ -2448,7 +2514,7 @@ export function VideoPane({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 px-1 text-xs text-muted-foreground">
-            {showSeedance2Config && (
+            {(showSeedance2Config || showCustomPromptConfig) && (
               <Seedance2Checkbox
                 id={`${seedance2Id}-return-last-frame`}
                 checked={seedance2Draft.return_last_frame}
@@ -2679,7 +2745,7 @@ export function VideoPane({
                 />
                 {renderSeedance2ReferenceControls("final_prompt")}
               </div>
-              {showSeedance2Config && (
+              {(showSeedance2Config || showCustomPromptConfig) && (
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <button type="button" role="switch"
                     aria-label={t("episode.workbench.video.generateAudio")}
@@ -2706,7 +2772,41 @@ export function VideoPane({
                   {missingVoice && voiceConfigLink}
                 </div>
               )}
-              <div className="flex flex-wrap justify-start gap-2 pt-1">
+              <div className="flex flex-wrap items-center justify-start gap-2 pt-1">
+                {!showHappyHorseConfig && !showGrokVideoConfig && (
+                  <Select
+                    value={effectivePromptStyle}
+                    onValueChange={(value) => {
+                      const nextStyle = normalizeVideoPromptStyle(value);
+                      if (!nextStyle) return;
+                      setPreferredPromptStyle(nextStyle);
+                      persistPromptStyleForBackend(defaultBackend, nextStyle);
+                      updateSeedance2Draft("prompt_style", nextStyle);
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      aria-label={t("episode.workbench.video.promptStyleLabel")}
+                      className={cn(VIDEO_PARAM_CONTROL_CLASS, "w-auto min-w-[126px]")}
+                    >
+                      <span
+                        data-slot="select-value"
+                        className="flex flex-1 items-center gap-1.5 text-left"
+                      >
+                        {t(
+                          `episode.workbench.video.promptStyles.${effectivePromptStyle}`,
+                        )}
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      {VIDEO_PROMPT_STYLE_OPTIONS.map((style) => (
+                        <SelectItem key={style} value={style}>
+                          {t(`episode.workbench.video.promptStyles.${style}`)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 <Button
                   size="xs"
                   variant="outline"
@@ -3428,6 +3528,7 @@ function defaultSeedance2Config(
         ? false
         : true,
     prompt_source: String(raw.prompt_source ?? ""),
+    prompt_style: normalizeVideoPromptStyle(raw.prompt_style),
     prompt_guidance: String(raw.prompt_guidance ?? ""),
     prompt_guidance_template_keys: Array.isArray(raw.prompt_guidance_template_keys)
       ? raw.prompt_guidance_template_keys.map(String)
@@ -3483,15 +3584,88 @@ function isSeedance15ProBackend(value: string | null | undefined): boolean {
   return model === "seedance-1.5-pro" || model === "seedance_pro";
 }
 
+function normalizeVideoPromptStyle(value: unknown): VideoPromptStyle | "" {
+  const text = String(value ?? "").trim().toLowerCase();
+  return VIDEO_PROMPT_STYLE_OPTIONS.includes(text as VideoPromptStyle)
+    ? (text as VideoPromptStyle)
+    : "";
+}
+
+function promptStyleStorageKey(backend: string): string {
+  return `supertale-video-prompt-style:${backend.trim() || "default"}`;
+}
+
+function storedPromptStyleForBackend(backend: string): VideoPromptStyle | "" {
+  try {
+    return normalizeVideoPromptStyle(
+      window.localStorage.getItem(promptStyleStorageKey(backend)),
+    );
+  } catch {
+    return "";
+  }
+}
+
+function persistPromptStyleForBackend(
+  backend: string,
+  style: VideoPromptStyle,
+): void {
+  try {
+    window.localStorage.setItem(promptStyleStorageKey(backend), style);
+  } catch {
+    // Ignore storage quota / restricted environment errors.
+  }
+}
+
 function seedance2ResolutionOptionsForBackend(
   value: string | null | undefined,
+  backend?: VideoBackendOption | null,
+  isCustomPromptPanel = false,
 ): readonly Seedance2Resolution[] {
+  if (isCustomPromptPanel && backend?.resolution_options?.length) {
+    const customOptions = [
+      ...new Set(
+        backend.resolution_options
+          .map((item) => String(item).trim().toLowerCase())
+          .filter(
+            (item): item is Seedance2Resolution =>
+              item === "480p" || item === "720p" || item === "1080p",
+          ),
+      ),
+    ];
+    if (customOptions.length > 0) return customOptions;
+  }
+  if (isCustomPromptPanel) {
+    return CUSTOM_DEFAULT_RESOLUTION_OPTIONS;
+  }
   const model = seedance2ModelFromBackend(value);
   return (
     SEEDANCE2_RESOLUTION_OPTIONS_BY_MODEL[
       model as keyof typeof SEEDANCE2_RESOLUTION_OPTIONS_BY_MODEL
     ] ?? SEEDANCE2_DEFAULT_RESOLUTION_OPTIONS
   );
+}
+
+function customRatioOptionsForBackend(
+  backend?: VideoBackendOption | null,
+): readonly Seedance2ConfigDraft["ratio"][] {
+  if (backend?.ratio_options?.length) {
+    const allowed = new Set<Seedance2ConfigDraft["ratio"]>([
+      "9:16",
+      "16:9",
+      "1:1",
+      "4:3",
+      "3:4",
+      "21:9",
+      "2:3",
+      "3:2",
+    ]);
+    const filtered = backend.ratio_options.filter(
+      (item): item is Seedance2ConfigDraft["ratio"] =>
+        allowed.has(item as Seedance2ConfigDraft["ratio"]),
+    );
+    if (filtered.length > 0) return filtered;
+  }
+  return CUSTOM_DEFAULT_RATIO_OPTIONS;
 }
 
 function normalizeSeedance2DraftForBackend(
@@ -3792,6 +3966,7 @@ function sameSeedance2Config(
     left.scene_optimize === right.scene_optimize &&
     left.human_review === right.human_review &&
     left.human_review_user_set === right.human_review_user_set &&
+    left.prompt_style === right.prompt_style &&
     left.prompt_guidance === right.prompt_guidance &&
     JSON.stringify(left.prompt_guidance_template_keys) ===
       JSON.stringify(right.prompt_guidance_template_keys) &&
@@ -3827,6 +4002,7 @@ function serializeSeedance2Config(
     scene_optimize: draft.scene_optimize,
     human_review: draft.human_review,
     human_review_user_set: draft.human_review_user_set,
+    ...(draft.prompt_style ? { prompt_style: draft.prompt_style } : {}),
     prompt_guidance: draft.prompt_guidance.trim(),
     prompt_guidance_template_keys: draft.prompt_guidance_template_keys,
     final_prompt: finalPrompt,
