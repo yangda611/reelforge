@@ -496,9 +496,43 @@ class LiteralScriptWritingWorkflow:
         protagonist_name: str = "",
         on_progress: Optional[Callable[[float, str], None]] = None,
         on_log: Optional[Callable[[str], None]] = None,
-        **_: Any,
+        generation_mode: str | None = None,
+        max_segment_seconds: int | None = None,
+        tail_anchor: bool | None = None,
+        aspect_ratio: str | None = None,
+        video_backend: str | None = None,
+        spine_template: str | None = None,
+        **extra: Any,
     ) -> NarrationScript:
-        del target_duration, narration_style, protagonist_name
+        del target_duration, narration_style, protagonist_name, extra
+
+        if generation_mode == "s9" or max_segment_seconds is not None:
+            from novelvideo.workflows.s9_script_writing import S9ScriptWritingWorkflow
+
+            s9_workflow = S9ScriptWritingWorkflow(
+                cognee_store=self.cognee_store,
+                sqlite_store=self.sqlite_store,
+                output_dir=self.output_dir,
+            )
+            script = await s9_workflow.run(
+                episode_num=episode_num,
+                source_text=source_text,
+                max_segment_seconds=int(max_segment_seconds or 30),
+                tail_anchor=bool(tail_anchor),
+                visual_style=visual_style,
+                aspect_ratio=aspect_ratio,
+                video_backend=video_backend,
+                spine_template=spine_template or (
+                    "narrated" if self.audio_type_mode == "narrated_legacy" else "drama"
+                ),
+                on_progress=on_progress,
+                on_log=on_log,
+            )
+            self.last_review_passed = s9_workflow.last_review_passed
+            self.last_review_summary = s9_workflow.last_review_summary
+            self.last_review_issues = list(s9_workflow.last_review_issues)
+            self.last_degraded_lines = list(s9_workflow.last_degraded_lines)
+            return script
 
         def report_progress(progress: float, task: str) -> None:
             if on_progress:

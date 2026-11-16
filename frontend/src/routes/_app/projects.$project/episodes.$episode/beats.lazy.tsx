@@ -68,6 +68,12 @@ import { ActionPanel } from "@/components/episode/beat-workbench/action-panel";
 import { RenderPlanDialog } from "@/components/episode/beat-workbench/render-plan-dialog";
 import { useHideHeaderOnScroll } from "@/components/episode/header-collapse";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 import { EMPTY_STATE_ACTION_BUTTON_CLASS } from "@/components/ui/empty-state-styles";
 import { CreditCostInline } from "@/components/credit-cost-inline";
 import { formatCreditCost } from "@/components/credits/credit-visual";
@@ -516,6 +522,7 @@ export function BeatsTabContent() {
   }, [beats, clearSelection, isLoading, selection]);
 
   // Generate script for empty state
+  const [maxSegmentSeconds, setMaxSegmentSeconds] = useState<15 | 30>(30);
   const generateScript = useGenerateScript(project, epNum);
   const generateScriptCost = useGenerationCreditCost("feature", "mainline.script_writer");
   const generateScriptCostDisplay =
@@ -540,7 +547,10 @@ export function BeatsTabContent() {
       return;
     }
     try {
-      const res = await generateScript.mutateAsync({});
+      const res = await generateScript.mutateAsync({
+        max_segment_seconds: maxSegmentSeconds,
+        generation_mode: "s9",
+      });
       if (res.ok === false) {
         toast.error(backendErrorToastMessage(res.error, t));
         return;
@@ -601,37 +611,73 @@ export function BeatsTabContent() {
           description={t("episode.beats.noBeats")}
           className="h-auto p-0"
         />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            // 身份未规划时按钮不再直接禁用（禁用态点按零反馈，像死点击）。
-            // 改成可点：点后弹常驻提示，引导去脚本页规划身份。
-            if (!identityPlanReady) {
-              setIdentityRequiredOpen(true);
-              return;
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <div className="flex h-8 items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">
+              {t("episode.script.maxSegmentSecondsLabel")}
+            </span>
+            <Select
+              value={String(maxSegmentSeconds)}
+              onValueChange={(value) => {
+                const next = Number(value);
+                if (next === 15 || next === 30) {
+                  setMaxSegmentSeconds(next);
+                }
+              }}
+              disabled={generateScript.isPending || scriptTask.started}
+            >
+              <SelectTrigger
+                aria-label={t("episode.script.maxSegmentSecondsLabel")}
+                className="!h-8 min-w-[88px] rounded-[7px] px-2.5 text-xs"
+              >
+                <span data-slot="select-value" className="text-left">
+                  {maxSegmentSeconds === 15
+                    ? t("episode.script.segmentLimit15")
+                    : t("episode.script.segmentLimit30")}
+                </span>
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectItem value="30">
+                  {t("episode.script.segmentLimit30")}
+                </SelectItem>
+                <SelectItem value="15">
+                  {t("episode.script.segmentLimit15")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // 身份未规划时按钮不再直接禁用（禁用态点按零反馈，像死点击）。
+              // 改成可点：点后弹常驻提示，引导去脚本页规划身份。
+              if (!identityPlanReady) {
+                setIdentityRequiredOpen(true);
+                return;
+              }
+              setGenBeatsConfirm(true);
+            }}
+            disabled={generateScript.isPending || scriptTask.started}
+            className={cn(EMPTY_STATE_ACTION_BUTTON_CLASS, "mt-0 [&_svg]:size-3.5")}
+            title={
+              identityPlanReady
+                ? undefined
+                : t("episode.script.identityRequired")
             }
-            setGenBeatsConfirm(true);
-          }}
-          disabled={generateScript.isPending || scriptTask.started}
-          className={cn(EMPTY_STATE_ACTION_BUTTON_CLASS, "[&_svg]:size-3.5")}
-          title={
-            identityPlanReady
-              ? undefined
-              : t("episode.script.identityRequired")
-          }
-        >
-          {generateScript.isPending || scriptTask.started ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Play className="size-4" />
-          )}
-          {t("episode.beats.generateBeats")}
-          <CreditCostInline
-            display={generateScriptCostDisplay}
-            promotion={generateScriptCost.data?.data.promotion}
-          />
-        </Button>
+          >
+            {generateScript.isPending || scriptTask.started ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Play className="size-4" />
+            )}
+            {t("episode.beats.generateBeats")}
+            <CreditCostInline
+              display={generateScriptCostDisplay}
+              promotion={generateScriptCost.data?.data.promotion}
+            />
+          </Button>
+        </div>
         <AlertDialog open={genBeatsConfirm} onOpenChange={setGenBeatsConfirm}>
           <AlertDialogContent>
             <AlertDialogHeader>

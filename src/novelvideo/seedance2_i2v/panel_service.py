@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -97,6 +97,8 @@ class Seedance2VideoPanelState:
     prompt_inputs_hash: str
     current_prompt_inputs_hash: str
     prompt_status: str
+    s9_missing_assets: list[dict[str, str]] = field(default_factory=list)
+    s9_effective_prompt: str = ""
 
 
 async def save_seedance2_video_panel_config(
@@ -364,11 +366,6 @@ async def generate_seedance2_prompt_for_panel(
     )
     _append_seedance2_user_reference_assets(assets, config)
     initial_prompt = _seedance2_initial_prompt(beat)
-    reference_prompt = str(
-        manual_prompt_reference
-        if manual_prompt_reference is not None
-        else (config.final_prompt or initial_prompt or "")
-    ).strip()
     prompt_beat = _beat_with_seedance2_initial_prompt(beat, initial_prompt)
     output_language = language or detect_seedance2_prompt_language(prompt_beat)
     inputs_hash = _seedance2_prompt_inputs_hash(
@@ -377,6 +374,131 @@ async def generate_seedance2_prompt_for_panel(
         assets=assets,
         language=output_language,
     )
+
+    from novelvideo.s9_storyboard import (
+        S9AssetManifestItem,
+        S9SegmentAssetSlot,
+        S9SegmentPlan,
+        build_s9_slots_from_beat,
+        is_s9_segment_beat,
+        rebind_s9_prompt_with_active_assets,
+        renumber_resolved_seedance2_assets,
+        resolve_s9_style_context,
+        run_s9_stage2_segment_prompt,
+    )
+
+    if composer is None and is_s9_segment_beat(beat):
+        from novelvideo.project_config import load_project_config_from_state_dir
+
+        subshots, s9_meta, slots = build_s9_slots_from_beat(
+            beat,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        proj_cfg = load_project_config_from_state_dir(state_dir)
+        style_context = resolve_s9_style_context(
+            visual_style=proj_cfg.get("visual_style"),
+            aspect_ratio=proj_cfg.get("aspect_ratio"),
+            state_dir=state_dir,
+        )
+        planned_dur = int(
+            (s9_meta.planned_duration_seconds if s9_meta else 0)
+            or beat.get("duration_seconds")
+            or beat.get("estimated_duration")
+            or config.duration
+            or 15
+        )
+        segment_plan = S9SegmentPlan(
+            segment_number=int(beat.get("beat_number") or (s9_meta.segment_number if s9_meta else 1)),
+            title=str(beat.get("segment_title") or (s9_meta.segment_title if s9_meta else "") or ""),
+            planned_duration_seconds=planned_dur,
+            story_beat=str((s9_meta.story_beat if s9_meta else "") or beat.get("visual_description") or ""),
+            shots=subshots,
+        )
+
+        def _summary_seg(adj_beat: dict[str, Any] | None) -> S9SegmentPlan | None:
+            if not adj_beat:
+                return None
+            adj_sub, adj_meta, _ = build_s9_slots_from_beat(adj_beat)
+            return S9SegmentPlan(
+                segment_number=int(adj_beat.get("beat_number") or 0),
+                title=str(adj_beat.get("segment_title") or (adj_meta.segment_title if adj_meta else "") or ""),
+                planned_duration_seconds=int((adj_meta.planned_duration_seconds if adj_meta else 0) or 15),
+                story_beat=str((adj_meta.story_beat if adj_meta else "") or adj_beat.get("visual_description") or ""),
+                shots=adj_sub,
+            )
+
+        # Build live-bound active slot table if assets are on disk; keep manifest slots otherwise
+        _tmp, ordered_assets, _missing = rebind_s9_prompt_with_active_assets(
+            "",
+            slots=slots,
+            assets=assets,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        numbered_assets = renumber_resolved_seedance2_assets(ordered_assets)
+        active_img_slots: list[S9SegmentAssetSlot] = []
+        active_aud_slots: list[S9SegmentAssetSlot] = []
+        for a in numbered_assets:
+            if not getattr(a, "selected", False):
+                continue
+            key = str(getattr(a, "key", "") or "")
+            label = str(getattr(a, "label", "") or key)
+            if str(getattr(a, "media_type", "")) == "image":
+                kind = (
+                    "first_frame"
+                    if key == "first_frame"
+                    else ("identity" if key.startswith("identity:") else ("scene" if key.startswith("scene:") else "prop"))
+                )
+                active_img_slots.append(
+                    S9SegmentAssetSlot(
+                        slot=len(active_img_slots) + 1,
+                        media_type="image",
+                        asset_kind=kind,
+                        name=label.split(" · ")[-1],
+                        asset_id=str(getattr(a, "identity_id", "") or getattr(a, "prop_id", "") or key.split(":", 1)[-1]),
+                    )
+                )
+            elif str(getattr(a, "media_type", "")) == "audio":
+                active_aud_slots.append(
+                    S9SegmentAssetSlot(
+                        slot=len(active_aud_slots) + 1,
+                        media_type="audio",
+                        asset_kind="voice",
+                        name=label.replace("声线", "").strip() or label,
+                        asset_id=str(getattr(a, "identity_id", "") or key.split(":", 1)[-1]),
+                    )
+                )
+        stage2_slots = (active_img_slots + active_aud_slots) or slots
+        rendered_s9 = await run_s9_stage2_segment_prompt(
+            segment=segment_plan,
+            slots=stage2_slots,
+            style_context=style_context,
+            prev_segment=_summary_seg(prev_beat),
+            next_segment=_summary_seg(next_beat),
+            tail_anchor=bool(config.s9_tail_anchor),
+            include_first_frame=bool(config.s9_include_first_frame and any(s.asset_kind == "first_frame" for s in stage2_slots)),
+            user_guidance=config.prompt_guidance,
+        )
+        config.final_prompt = mark_seedance2_prompt_references_for_editor(rendered_s9)
+        if not config.duration_user_set:
+            config.duration = planned_dur
+        config.prompt_style = "s9_segment"
+        config.prompt_source = "s9_script"
+        config.prompt_inputs_hash = inputs_hash
+        config.prompt_updated_at = datetime.now().isoformat(timespec="seconds")
+        saved_json = dump_seedance2_config(config)
+        beat["seedance2_config_json"] = saved_json
+        await store.update_beat_asset(
+            episode_number=episode,
+            beat_number=int(beat.get("beat_number") or 0),
+            seedance2_config_json=saved_json,
+        )
+        return saved_json
+
+    reference_prompt = str(
+        manual_prompt_reference
+        if manual_prompt_reference is not None
+        else (config.final_prompt or initial_prompt or "")
+    ).strip()
     generate_kwargs: dict[str, Any] = {
         "mode": config.mode,
         "beat": prompt_beat,
@@ -946,6 +1068,30 @@ def build_seedance2_video_panel_state(
         )
         prompt_source = "fallback"
     assets = apply_prompt_audio_selection(assets, final_prompt)
+    s9_missing_assets: list[dict[str, str]] = []
+    s9_effective_prompt = final_prompt
+    from novelvideo.s9_storyboard import (
+        build_s9_slots_from_beat,
+        is_s9_segment_beat,
+        rebind_s9_prompt_with_active_assets,
+        renumber_resolved_seedance2_assets,
+    )
+
+    if is_s9_segment_beat(beat) and config.mode == Seedance2I2VMode.MULTIMODAL_REFERENCE:
+        _subshots, s9_meta, slots = build_s9_slots_from_beat(
+            beat,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        raw_slots = (
+            list(s9_meta.segment_asset_slots) if s9_meta and s9_meta.segment_asset_slots else slots
+        )
+        s9_effective_prompt, reordered_assets, s9_missing_assets = rebind_s9_prompt_with_active_assets(
+            final_prompt,
+            slots=raw_slots,
+            assets=assets,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        assets = renumber_resolved_seedance2_assets(reordered_assets)
     current_prompt_inputs_hash = _seedance2_prompt_inputs_hash(
         config=config,
         beat=beat,
@@ -970,6 +1116,8 @@ def build_seedance2_video_panel_state(
         prompt_inputs_hash=config.prompt_inputs_hash,
         current_prompt_inputs_hash=current_prompt_inputs_hash,
         prompt_status=_seedance2_prompt_status(config, current_prompt_inputs_hash),
+        s9_missing_assets=s9_missing_assets,
+        s9_effective_prompt=s9_effective_prompt,
     )
 
 

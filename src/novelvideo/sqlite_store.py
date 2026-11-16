@@ -399,7 +399,7 @@ _PROJECT_STORE_SCHEMA_COMPONENT = "project_store"
 # MIGRATION CONTRACT: increment this whenever SQLITE_SCHEMA_SQL or any
 # _ensure_*_columns migration above changes. Existing databases skip the
 # initializer after this version has been recorded.
-_PROJECT_STORE_SCHEMA_VERSION = 6
+_PROJECT_STORE_SCHEMA_VERSION = 7
 
 
 def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
@@ -609,6 +609,7 @@ class SQLiteStore:
             "scene_menu_json": "TEXT DEFAULT '[]'",
             "prop_menu_json": "TEXT DEFAULT '[]'",
             "identity_default_map_json": "TEXT DEFAULT '{}'",
+            "s9_preview_meta_json": "TEXT DEFAULT '{}'",
         }
         for name, definition in columns.items():
             _add_column_if_missing(db, "episodes", name, definition)
@@ -634,6 +635,9 @@ class SQLiteStore:
             "shot_order": "INTEGER",
             "duration_seconds": "REAL",
             "is_manual_shot": "INTEGER DEFAULT 0",
+            "segment_title": "TEXT DEFAULT ''",
+            "s9_subshots_json": "TEXT DEFAULT '[]'",
+            "s9_segment_meta_json": "TEXT DEFAULT '{}'",
         }
         for name, definition in columns.items():
             _add_column_if_missing(db, "beats", name, definition)
@@ -1826,8 +1830,8 @@ class SQLiteStore:
                 """INSERT INTO episodes (number, title, chapter_start, chapter_end,
                    raw_content, beat_source_text, content_summary, main_conflict, cliffhanger, key_events,
                    character_names, identity_ids, event_ids, scene_menu_json, prop_menu_json,
-                   identity_default_map_json, sketch_colors_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   identity_default_map_json, sketch_colors_json, s9_preview_meta_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(number) DO UPDATE SET
                    title=excluded.title, chapter_start=excluded.chapter_start,
                    chapter_end=excluded.chapter_end, raw_content=excluded.raw_content,
@@ -1839,6 +1843,7 @@ class SQLiteStore:
                    scene_menu_json=excluded.scene_menu_json, prop_menu_json=excluded.prop_menu_json,
                    identity_default_map_json=excluded.identity_default_map_json,
                    sketch_colors_json=excluded.sketch_colors_json,
+                   s9_preview_meta_json=excluded.s9_preview_meta_json,
                    updated_at=datetime('now')""",
                 (
                     ep.number,
@@ -1858,6 +1863,7 @@ class SQLiteStore:
                     ep.prop_menu_json,
                     ep.identity_default_map_json,
                     ep.sketch_colors_json,
+                    getattr(ep, "s9_preview_meta_json", "{}") or "{}",
                 ),
             )
 
@@ -2126,6 +2132,8 @@ class SQLiteStore:
         "beat_source_text": ("beat_source_text", "text"),
         "raw_content": ("raw_content", "text"),
         "adapted_content": ("adapted_content", "text"),
+        "s9_preview_meta_json": ("s9_preview_meta_json", "text"),
+        "s9_preview_meta": ("s9_preview_meta_json", "json_dict"),
         "chapter_start": ("chapter_start", "int"),
         "chapter_end": ("chapter_end", "int"),
     }
@@ -2453,6 +2461,11 @@ class SQLiteStore:
                     else "{}"
                 ),
                 sketch_colors_json=row["sketch_colors_json"] or "{}",
+                s9_preview_meta_json=(
+                    row["s9_preview_meta_json"]
+                    if "s9_preview_meta_json" in row.keys()
+                    else "{}"
+                ),
                 updated_at=row["updated_at"] if "updated_at" in row.keys() else "",
             )
             for row in rows
@@ -2500,6 +2513,11 @@ class SQLiteStore:
                     else "{}"
                 ),
                 sketch_colors_json=row["sketch_colors_json"] or "{}",
+                s9_preview_meta_json=(
+                    row["s9_preview_meta_json"]
+                    if "s9_preview_meta_json" in row.keys()
+                    else "{}"
+                ),
                 updated_at=row["updated_at"] if "updated_at" in row.keys() else "",
             )
 
@@ -2563,6 +2581,17 @@ class SQLiteStore:
             seedance2_config_json=(
                 row["seedance2_config_json"]
                 if "seedance2_config_json" in row.keys()
+                else "{}"
+            ),
+            segment_title=(
+                row["segment_title"] if "segment_title" in row.keys() else ""
+            ),
+            s9_subshots_json=(
+                row["s9_subshots_json"] if "s9_subshots_json" in row.keys() else "[]"
+            ),
+            s9_segment_meta_json=(
+                row["s9_segment_meta_json"]
+                if "s9_segment_meta_json" in row.keys()
                 else "{}"
             ),
             time_of_day=row["time_of_day"] if "time_of_day" in row.keys() else "",
@@ -2649,6 +2678,20 @@ class SQLiteStore:
             estimated_duration = float(getattr(b, "estimated_duration", 0.0) or 0.0)
             if estimated_duration <= 0 and b.narration:
                 estimated_duration = len(b.narration) / 4.0
+            s9_subshots_raw = getattr(b, "s9_subshots_json", "[]") or "[]"
+            s9_meta_raw = getattr(b, "s9_segment_meta_json", "{}") or "{}"
+            try:
+                parsed_subshots = json.loads(s9_subshots_raw)
+                if not isinstance(parsed_subshots, list):
+                    parsed_subshots = []
+            except (TypeError, json.JSONDecodeError):
+                parsed_subshots = []
+            try:
+                parsed_s9_meta = json.loads(s9_meta_raw)
+                if not isinstance(parsed_s9_meta, dict):
+                    parsed_s9_meta = {}
+            except (TypeError, json.JSONDecodeError):
+                parsed_s9_meta = {}
             result.append(
                 {
                     "beat_number": b.beat_number,
@@ -2668,6 +2711,11 @@ class SQLiteStore:
                     "video_prompt": getattr(b, "video_prompt", ""),
                     "keyframe_prompt": getattr(b, "keyframe_prompt", ""),
                     "seedance2_config_json": getattr(b, "seedance2_config_json", "{}"),
+                    "segment_title": getattr(b, "segment_title", "") or "",
+                    "s9_subshots_json": s9_subshots_raw,
+                    "s9_segment_meta_json": s9_meta_raw,
+                    "s9_subshots": parsed_subshots,
+                    "s9_segment_meta": parsed_s9_meta,
                     "detected_identities": normalize_detected_identities(
                         json.loads(b.detected_identities_json or "[]")
                     ),
@@ -2693,6 +2741,12 @@ class SQLiteStore:
         if not beats:
             return None
 
+        try:
+            s9_preview_meta = json.loads(
+                getattr(episode, "s9_preview_meta_json", "{}") or "{}"
+            )
+        except (TypeError, json.JSONDecodeError):
+            s9_preview_meta = {}
         return {
             "episode_number": episode_number,
             "title": episode.title,
@@ -2700,6 +2754,7 @@ class SQLiteStore:
             "scene_menu": [item.model_dump() for item in (episode.scene_menu or [])],
             "prop_menu": [item.model_dump() for item in (episode.prop_menu or [])],
             "sketch_colors": self.get_sketch_colors(episode_number),
+            "s9_preview_meta": s9_preview_meta if isinstance(s9_preview_meta, dict) else {},
         }
 
     async def update_beat_asset(
@@ -2721,6 +2776,10 @@ class SQLiteStore:
         shot_order: int | None = None,
         duration_seconds: float | None = None,
         is_manual_shot: bool | None = None,
+        segment_title: str | None = None,
+        s9_subshots_json: str | None = None,
+        s9_segment_meta_json: str | None = None,
+        estimated_duration: float | None = None,
     ) -> bool:
         bn = beat_number
         if bn is None:
@@ -2763,6 +2822,14 @@ class SQLiteStore:
             properties["duration_seconds"] = float(duration_seconds)
         if is_manual_shot is not None:
             properties["is_manual_shot"] = 1 if is_manual_shot else 0
+        if segment_title is not None:
+            properties["segment_title"] = str(segment_title)
+        if s9_subshots_json is not None:
+            properties["s9_subshots_json"] = str(s9_subshots_json or "[]")
+        if s9_segment_meta_json is not None:
+            properties["s9_segment_meta_json"] = str(s9_segment_meta_json or "{}")
+        if estimated_duration is not None:
+            properties["estimated_duration"] = float(estimated_duration)
 
         if scene_ref is not None:
             beat_payload = {"scene_ref": scene_ref}
@@ -2800,10 +2867,10 @@ class SQLiteStore:
                 """INSERT INTO beats (episode_number, beat_number, narration, visual_description,
                    detected_identities_json, detected_props_json, scene_ref_json,
                    audio_type, speaker, speaker_kind, time_of_day,
-                   video_mode, video_prompt, keyframe_prompt,
+                   video_mode, video_prompt, keyframe_prompt, seedance2_config_json,
                    shot_order, duration_seconds, is_manual_shot, source_text_sha256,
-                   estimated_duration)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   estimated_duration, segment_title, s9_subshots_json, s9_segment_meta_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(episode_number, beat_number) DO UPDATE SET
                    narration=excluded.narration, visual_description=excluded.visual_description,
                    detected_identities_json=excluded.detected_identities_json,
@@ -2815,11 +2882,15 @@ class SQLiteStore:
                    video_mode=excluded.video_mode,
                    video_prompt=excluded.video_prompt,
                    keyframe_prompt=excluded.keyframe_prompt,
+                   seedance2_config_json=excluded.seedance2_config_json,
                    shot_order=excluded.shot_order,
                    duration_seconds=excluded.duration_seconds,
                    is_manual_shot=excluded.is_manual_shot,
                    source_text_sha256=excluded.source_text_sha256,
                    estimated_duration=excluded.estimated_duration,
+                   segment_title=excluded.segment_title,
+                   s9_subshots_json=excluded.s9_subshots_json,
+                   s9_segment_meta_json=excluded.s9_segment_meta_json,
                    updated_at=datetime('now')""",
                 (
                     b.episode_number,
@@ -2836,11 +2907,15 @@ class SQLiteStore:
                     getattr(b, "video_mode", "first_frame"),
                     getattr(b, "video_prompt", ""),
                     getattr(b, "keyframe_prompt", ""),
+                    getattr(b, "seedance2_config_json", "{}") or "{}",
                     getattr(b, "shot_order", None),
                     getattr(b, "duration_seconds", None),
                     1 if getattr(b, "is_manual_shot", False) else 0,
                     getattr(b, "source_text_sha256", "") or "",
                     getattr(b, "estimated_duration", 0.0),
+                    getattr(b, "segment_title", "") or "",
+                    getattr(b, "s9_subshots_json", "[]") or "[]",
+                    getattr(b, "s9_segment_meta_json", "{}") or "{}",
                 ),
             )
         await db.commit()

@@ -78,6 +78,18 @@ def required_seedance2_dialogue_texts(beat: dict[str, Any]) -> list[str]:
     performance directions. This helper only unwraps one explicit leading
     parenthetical note so validation does not confuse it with spoken dialogue.
     """
+    from novelvideo.s9_storyboard import parse_s9_subshots
+
+    subshots = beat.get("s9_subshots") or parse_s9_subshots(beat.get("s9_subshots_json"))
+    if subshots:
+        sub_texts: list[str] = []
+        for s in subshots:
+            audio_t = getattr(s, "audio_type", "") if not isinstance(s, dict) else s.get("audio_type", "")
+            spoken = getattr(s, "spoken_text", "") if not isinstance(s, dict) else s.get("spoken_text", "")
+            if audio_t == "dialogue" and str(spoken or "").strip():
+                sub_texts.append(str(spoken).strip(" \t\r\n，,。；;“”\""))
+        if sub_texts:
+            return sub_texts
 
     lines = parse_seedance2_spoken_lines(beat)
     if lines:
@@ -96,9 +108,22 @@ def required_seedance2_dialogue_texts(beat: dict[str, Any]) -> list[str]:
 
 def unique_seedance2_dialogue_speakers(beat: dict[str, Any]) -> list[str]:
     """Return dialogue speakers in first-spoken order."""
+    from novelvideo.s9_storyboard import parse_s9_subshots
 
     seen: set[str] = set()
     speakers: list[str] = []
+    subshots = beat.get("s9_subshots") or parse_s9_subshots(beat.get("s9_subshots_json"))
+    if subshots:
+        for s in subshots:
+            audio_t = getattr(s, "audio_type", "") if not isinstance(s, dict) else s.get("audio_type", "")
+            raw_spk = getattr(s, "speaker", "") if not isinstance(s, dict) else s.get("speaker", "")
+            spk = _text(raw_spk)
+            if audio_t == "dialogue" and spk and spk not in seen:
+                seen.add(spk)
+                speakers.append(spk)
+        if speakers:
+            return speakers
+
     for line in parse_seedance2_spoken_lines(beat):
         if line.speaker in seen:
             continue

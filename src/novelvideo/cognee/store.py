@@ -2306,9 +2306,14 @@ class CogneeStore:
                     speaker=beat.speaker,
                     speaker_kind=getattr(beat, "speaker_kind", "character"),
                     estimated_duration=getattr(beat, "estimated_duration", 0.0),
+                    duration_seconds=getattr(beat, "duration_seconds", None),
                     video_mode=getattr(beat, "video_mode", "first_frame"),
                     video_prompt=getattr(beat, "video_prompt", "") or "",
                     keyframe_prompt=getattr(beat, "keyframe_prompt", "") or "",
+                    seedance2_config_json=getattr(beat, "seedance2_config_json", "{}") or "{}",
+                    segment_title=getattr(beat, "segment_title", "") or "",
+                    s9_subshots_json=getattr(beat, "s9_subshots_json", "[]") or "[]",
+                    s9_segment_meta_json=getattr(beat, "s9_segment_meta_json", "{}") or "{}",
                 )
             )
 
@@ -2317,6 +2322,14 @@ class CogneeStore:
 
         await self.delete_beats_for_episode(script.episode_number)
         await self.add_visual_beats(beats)
+        preview_meta_json = str(getattr(script, "s9_preview_meta_json", "") or "").strip()
+        if preview_meta_json and hasattr(self, "patch_episode"):
+            try:
+                await self.patch_episode(
+                    script.episode_number, s9_preview_meta_json=preview_meta_json
+                )
+            except Exception:
+                pass
 
     # ============================================================
     # SQLite 辅助方法

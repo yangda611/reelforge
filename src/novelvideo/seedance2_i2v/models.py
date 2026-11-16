@@ -14,7 +14,7 @@ SEEDANCE2_PROMPT_GUIDANCE_TEMPLATE_KEYS = frozenset(
     {"subject", "scene", "lighting", "camera", "style", "no_subtitle"}
 )
 VIDEO_PROMPT_STYLE_VALUES = frozenset(
-    {"seedance_2_0", "seedance_2_5", "minimax_h3", "generic"}
+    {"seedance_2_0", "seedance_2_5", "minimax_h3", "generic", "s9_segment"}
 )
 
 
@@ -56,6 +56,8 @@ class Seedance2VideoConfig(BaseModel):
     reference_audio_paths: list[str] = Field(default_factory=list)
     text_overlay: dict[str, Any] = Field(default_factory=dict)
     selected_asset_keys: list[str] = Field(default_factory=list)
+    s9_tail_anchor: bool = False
+    s9_include_first_frame: bool = False
 
     @field_validator(
         "final_prompt",
@@ -122,6 +124,25 @@ def default_seedance2_ratio_for_state_dir(state_dir: str | Path | None) -> str |
     return default_seedance2_ratio_for_project_aspect(aspect_ratio)
 
 
+def _is_s9_preserved_duration(source: Any) -> bool:
+    """Return True when config holds a valid s9-calculated segment duration (>= 4s)."""
+
+    if isinstance(source, Seedance2VideoConfig):
+        prompt_source = source.prompt_source
+        prompt_style = source.prompt_style
+        duration = source.duration
+    elif isinstance(source, dict):
+        prompt_source = str(source.get("prompt_source") or "").strip()
+        prompt_style = str(source.get("prompt_style") or "").strip()
+        try:
+            duration = int(float(source.get("duration") or 0))
+        except (TypeError, ValueError):
+            duration = 0
+    else:
+        return False
+    return duration >= 4 and (prompt_source == "s9_script" or prompt_style == "s9_segment")
+
+
 def parse_seedance2_config(
     value: Any,
     *,
@@ -141,7 +162,7 @@ def parse_seedance2_config(
         result = value.model_copy()
         if safe_default_ratio and not result.ratio_user_set:
             result.ratio = safe_default_ratio
-        if safe_default_duration and not result.duration_user_set:
+        if safe_default_duration and not result.duration_user_set and not _is_s9_preserved_duration(result):
             result.duration = safe_default_duration
         return result
 
@@ -171,7 +192,7 @@ def parse_seedance2_config(
             value["human_review"] = True
         if safe_default_ratio and not value.get("ratio_user_set"):
             value["ratio"] = safe_default_ratio
-        if safe_default_duration and not value.get("duration_user_set"):
+        if safe_default_duration and not value.get("duration_user_set") and not _is_s9_preserved_duration(value):
             value["duration"] = safe_default_duration
         return Seedance2VideoConfig.model_validate(value)
     kwargs = {}

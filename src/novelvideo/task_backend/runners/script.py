@@ -155,16 +155,44 @@ async def _run_script_writer_scoped(
             spine_template=merged_config.get("spine_template", "drama"),
         )
 
-        script = await workflow.run(
-            episode_num=episode,
-            on_progress=update_progress,
-            on_log=lambda message: manager.update_progress_for_project(
+        import inspect
+
+        run_kwargs: dict[str, Any] = {
+            "episode_num": episode,
+            "on_progress": update_progress,
+            "on_log": lambda message: manager.update_progress_for_project(
                 ctx,
                 "script_writer",
                 episode,
                 logs=[message],
             ),
-        )
+        }
+        try:
+            sig = inspect.signature(workflow.run)
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+        except (TypeError, ValueError):
+            accepts_kwargs = False
+
+        if accepts_kwargs or "generation_mode" in getattr(sig, "parameters", {}):
+            run_kwargs.update(
+                {
+                    "generation_mode": str(merged_config.get("generation_mode") or "s9"),
+                    "max_segment_seconds": int(
+                        merged_config.get("max_segment_seconds") or 30
+                    ),
+                    "tail_anchor": bool(merged_config.get("tail_anchor", False)),
+                    "visual_style": str(
+                        merged_config.get("visual_style") or "chinese_period_drama"
+                    ),
+                    "aspect_ratio": str(merged_config.get("aspect_ratio") or "2:3"),
+                    "video_backend": str(merged_config.get("video_backend") or ""),
+                    "spine_template": str(merged_config.get("spine_template") or "drama"),
+                }
+            )
+
+        script = await workflow.run(**run_kwargs)
 
         paths = PathResolver(output_dir, episode)
         deleted = paths.clean_sketches()
@@ -200,29 +228,38 @@ async def _run_script_writer_scoped(
                 logs=[f"自动配色失败（不影响脚本）: {exc}"],
             )
 
-        try:
-            from novelvideo.agents.fixed_camera_planner import (
-                apply_fixed_camera_plan_for_episode,
-            )
+        is_s9_script = any(
+            str(getattr(beat, "s9_subshots_json", "") or "").strip() not in {"", "[]"}
+            for beat in (script.beats or [])
+        )
+        if not is_s9_script:
+            try:
+                from novelvideo.agents.fixed_camera_planner import (
+                    apply_fixed_camera_plan_for_episode,
+                )
 
-            lock_plan = await apply_fixed_camera_plan_for_episode(store, episode)
-            locked_beats = list(lock_plan.get("locked_beats") or [])
-            if locked_beats:
+                lock_plan = await apply_fixed_camera_plan_for_episode(store, episode)
+                locked_beats = list(lock_plan.get("locked_beats") or [])
+                if locked_beats:
+                    manager.update_progress_for_project(
+                        ctx,
+                        "script_writer",
+                        episode,
+                        logs=[f"已自动规划 {len(locked_beats)} 个固定机位锁定镜头: {locked_beats}"],
+                    )
+            except Exception as exc:  # noqa: BLE001
                 manager.update_progress_for_project(
                     ctx,
                     "script_writer",
                     episode,
-                    logs=[f"已自动规划 {len(locked_beats)} 个固定机位锁定镜头: {locked_beats}"],
+                    logs=[f"自动固定机位规划失败（不影响脚本）: {exc}"],
                 )
-        except Exception as exc:  # noqa: BLE001
-            manager.update_progress_for_project(
-                ctx,
-                "script_writer",
-                episode,
-                logs=[f"自动固定机位规划失败（不影响脚本）: {exc}"],
-            )
 
-        refreshed_beats = await store.get_beats_as_dicts(episode)
+        refreshed_beats = (
+            await store.get_beats_as_dicts(episode)
+            if hasattr(store, "get_beats_as_dicts")
+            else []
+        )
         result = {
             "episode": episode,
             "beats": len(script.beats),

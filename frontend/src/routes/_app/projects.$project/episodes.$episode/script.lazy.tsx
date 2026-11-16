@@ -18,7 +18,8 @@ import {
 } from "@/lib/queries/episodes";
 import { useCharacters } from "@/lib/queries/characters";
 import { useProject } from "@/lib/queries/projects";
-import { useGenerateRewrite, useGenerateScript } from "@/lib/queries/scripts";
+import { useGenerateRewrite, useGenerateScript, useScript, useUpdateBeat } from "@/lib/queries/scripts";
+import { useGenerateSeedance2Prompt } from "@/lib/queries/video";
 import { useTaskController } from "@/hooks/use-task-controller";
 import { useTaskActivity } from "@/task-center/use-task-activity";
 import { queryKeys } from "@/lib/query-keys";
@@ -52,6 +53,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { saveScopes, trackSave } from "@/stores/save-status-store";
 import type { Character } from "@/types/character";
+import type { S9SubShot } from "@/types/episode";
 
 const REWRITE_TARGET_BEATS_MIN = 5;
 const REWRITE_TARGET_BEATS_MAX = 80;
@@ -87,6 +89,7 @@ function ScriptTabContent() {
 
   const { data: episodeRes } = useEpisodeDetail(project, epNum);
   const { data: projectRes } = useProject(project);
+  const { data: scriptRes } = useScript(project, epNum);
   const { data: beatsRes, isLoading: beatsLoading } = useEpisodeBeats(
     project,
     epNum,
@@ -122,6 +125,12 @@ function ScriptTabContent() {
       ? t("common.billingRuleNotConfiguredShort")
       : null);
   const generateScript = useGenerateScript(project, epNum);
+  const updateBeat = useUpdateBeat(project, epNum);
+  const generateSeedance2Prompt = useGenerateSeedance2Prompt(project, epNum);
+  const [maxSegmentSeconds, setMaxSegmentSeconds] = useState<15 | 30>(30);
+  const [tailAnchor, setTailAnchor] = useState<boolean>(false);
+  const [savingBeatNumber, setSavingBeatNumber] = useState<number | null>(null);
+  const [regeneratingBeatNumber, setRegeneratingBeatNumber] = useState<number | null>(null);
   const generateScriptCost = useGenerationCreditCost("feature", "mainline.script_writer");
   const generateScriptCostDisplay =
     generateScriptCost.data?.data.display ??
@@ -407,7 +416,11 @@ function ScriptTabContent() {
         setPickerOpen(true);
         return;
       }
-      const res = await generateScript.mutateAsync({});
+      const res = await generateScript.mutateAsync({
+        max_segment_seconds: maxSegmentSeconds,
+        tail_anchor: tailAnchor,
+        generation_mode: "s9",
+      });
       if (res.ok === false) {
         toast.error(backendErrorToastMessage(res.error, t));
         return;
@@ -415,6 +428,44 @@ function ScriptTabContent() {
       scriptTask.start({ scope: res.scope });
     } catch (err) {
       toast.error(backendErrorToastMessage(err, t));
+    }
+  };
+
+  const handleUpdateSegmentSubshots = async (
+    beatNumber: number,
+    payload: { segment_title?: string; s9_subshots: S9SubShot[] },
+  ) => {
+    setSavingBeatNumber(beatNumber);
+    try {
+      await updateBeat.mutateAsync({
+        beatNum: beatNumber,
+        data: payload,
+      });
+      toast.success(t("episode.script.subshotsSaved"));
+    } catch (err) {
+      toast.error(backendErrorToastMessage(err, t));
+    } finally {
+      setSavingBeatNumber((prev) => (prev === beatNumber ? null : prev));
+    }
+  };
+
+  const handleRegenerateSegmentPrompt = async (beatNumber: number) => {
+    setRegeneratingBeatNumber(beatNumber);
+    try {
+      const res = await generateSeedance2Prompt.mutateAsync({
+        beatNum: beatNumber,
+        promptStyle: "s9_segment",
+        s9TailAnchor: tailAnchor,
+      });
+      if (!res.ok) {
+        toast.error(res.error || t("episode.script.segmentPromptUpdateFailed"));
+        return;
+      }
+      toast.success(t("episode.script.segmentPromptUpdated"));
+    } catch (err) {
+      toast.error(backendErrorToastMessage(err, t));
+    } finally {
+      setRegeneratingBeatNumber((prev) => (prev === beatNumber ? null : prev));
     }
   };
 
@@ -502,7 +553,7 @@ function ScriptTabContent() {
         <div className="inline-flex h-7 items-center gap-2 text-muted-foreground">
           <span className="text-[11px]">{t("episode.script.modeLabel")}</span>
           <span className="text-[11px] text-foreground/68">
-            {t("episode.script.modeLiteral")}
+            {t("episode.script.modeS9")}
           </span>
         </div>
 
@@ -636,6 +687,63 @@ function ScriptTabContent() {
               </span>
             </div>
           )}
+          <div className="flex h-7 items-center gap-1.5">
+            <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
+              {t("episode.script.maxSegmentSecondsLabel")}
+            </span>
+            <Select
+              value={String(maxSegmentSeconds)}
+              onValueChange={(value) => {
+                const next = Number(value);
+                if (next === 15 || next === 30) {
+                  setMaxSegmentSeconds(next);
+                }
+              }}
+              disabled={generating || generateButtonBusy}
+            >
+              <SelectTrigger
+                aria-label={t("episode.script.maxSegmentSecondsLabel")}
+                className="!h-7 min-w-[82px] rounded-[7px] px-2 text-xs"
+              >
+                <span data-slot="select-value" className="text-left">
+                  {maxSegmentSeconds === 15
+                    ? t("episode.script.segmentLimit15")
+                    : t("episode.script.segmentLimit30")}
+                </span>
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectItem value="30">
+                  {t("episode.script.segmentLimit30")}
+                </SelectItem>
+                <SelectItem value="15">
+                  {t("episode.script.segmentLimit15")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-label={t("episode.script.tailAnchorLabel")}
+            aria-checked={tailAnchor}
+            disabled={generating || generateButtonBusy}
+            onClick={() => setTailAnchor((prev) => !prev)}
+            className="inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-white/[0.1] bg-white/[0.02] px-2 text-[11px] text-muted-foreground transition-colors hover:border-white/[0.18] hover:text-foreground disabled:opacity-50"
+            title={t("episode.script.tailAnchorHint")}
+          >
+            <span>{t("episode.script.tailAnchorLabel")}</span>
+            <span
+              className={`relative inline-flex h-4 w-7 rounded-full transition-colors ${
+                tailAnchor ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 size-3 rounded-full bg-background transition-transform ${
+                  tailAnchor ? "translate-x-3.5" : "translate-x-0.5"
+                }`}
+              />
+            </span>
+          </button>
           <Button
             size="sm"
             onClick={handleGenerateButtonClick}
@@ -807,11 +915,22 @@ function ScriptTabContent() {
           <div className="min-w-0">
             <ScriptBeatPreview
               beats={beats}
+              s9PreviewMeta={scriptRes?.data?.s9_preview_meta ?? episodeData?.s9_preview_meta ?? null}
               loading={beatsLoading}
+              savingBeatNumber={savingBeatNumber}
+              regeneratingBeatNumber={regeneratingBeatNumber}
+              onUpdateSegmentSubshots={handleUpdateSegmentSubshots}
+              onRegenerateSegmentPrompt={handleRegenerateSegmentPrompt}
               className="px-0 pb-0"
               labels={{
                 title: t("episode.script.previewTitle"),
                 count: (count) => t("episode.script.previewCount", { count }),
+                segmentCountSummary: (segments, shots, totalSeconds) =>
+                  t("episode.script.previewSegmentSummary", {
+                    segments,
+                    shots,
+                    totalSeconds,
+                  }),
                 loading: t("episode.script.previewLoading"),
                 emptyTitle: t("episode.script.previewEmptyTitle"),
                 empty: t("episode.script.previewEmpty"),
@@ -824,6 +943,21 @@ function ScriptTabContent() {
                 noNarration: t("episode.script.previewNoNarration"),
                 visualDescription: t("episode.script.previewVisualDescription"),
                 noVisualDescription: t("episode.script.previewNoVisualDescription"),
+                durationAssessmentTitle: t("episode.script.durationAssessmentTitle"),
+                assetManifestTitle: t("episode.script.assetManifestTitle"),
+                plannedDurationBadge: (seconds) =>
+                  t("episode.script.plannedDurationBadge", { seconds }),
+                shotCountBadge: (shots) =>
+                  t("episode.script.shotCountBadge", { shots }),
+                shotBasicInfoLabel: t("episode.script.shotBasicInfoLabel"),
+                shotContentLabel: t("episode.script.shotContentLabel"),
+                editShot: t("episode.script.editShot"),
+                saveShot: t("episode.script.saveShot"),
+                cancelEdit: t("episode.script.cancelEdit"),
+                syncPrompt: t("episode.script.syncPrompt"),
+                syncingPrompt: t("episode.script.syncingPrompt"),
+                assetReady: t("episode.script.assetReady"),
+                assetPending: t("episode.script.assetPending"),
               }}
             />
           </div>

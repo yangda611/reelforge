@@ -108,19 +108,15 @@ def _selected_audio_assets(assets: list[Seedance2ResolvedAsset]) -> list[Seedanc
     ]
 
 
-def _validate_reference_audio_request(audio_paths: list[str]) -> None:
-    """Seedance2 参考音频的条数 + 时长校验。
-
-    时长判定复用画布那条 `validate_omni_reference_audio_durations`：厂商规则是同一套
-    （逐条 1.8~15.2s、再加一条总时长），两边各写一遍必然会漂——本次故障的根因就是前端
-    和后端对同一条规则的理解走散了。这里只多做两件事：把 ffprobe 的 ValueError 收成
-    `None`（测不出就不判，与画布同口径），以及把英文报错包回中文并补上「去哪儿改」。
-
-    总时长仍用本模块的 15.0s 而不是厂商的 15.2s：这条路径的参考声线本来就该是 3-5s 的
-    样例，收紧 0.2s 不会误伤，而放宽是产品口径变化，不该顺手做。
-    """
-    if len(audio_paths) > MAX_SEEDANCE2_REFERENCE_AUDIOS:
-        raise ValueError("Seedance2 参考音频最多 3 段")
+def _validate_reference_audio_request(
+    audio_paths: list[str],
+    *,
+    max_audios: int = MAX_SEEDANCE2_REFERENCE_AUDIOS,
+    total_max_seconds: float = MAX_SEEDANCE2_REFERENCE_AUDIO_TOTAL_SECONDS,
+) -> None:
+    """Seedance2 参考音频的条数 + 时长校验。"""
+    if len(audio_paths) > max_audios:
+        raise ValueError(f"Seedance2 参考音频最多 {max_audios} 段")
 
     def _probe(path: str) -> float | None:
         try:
@@ -135,7 +131,7 @@ def _validate_reference_audio_request(audio_paths: list[str]) -> None:
     try:
         validate_omni_reference_audio_durations(
             measured,
-            total_max_seconds=MAX_SEEDANCE2_REFERENCE_AUDIO_TOTAL_SECONDS,
+            total_max_seconds=total_max_seconds,
         )
     except ValueError as exc:
         raise ValueError(
@@ -187,9 +183,14 @@ def collect_seedance2_video_prereq_errors(
     beats: list[dict[str, Any]],
     characters: list[Any] | None = None,
     prop_menu: list[Any] | None = None,
+    video_backend: str | None = None,
 ) -> list[Seedance2VideoPrereqError]:
     """Return missing/invalid Seedance 2.0 project references before video generation."""
 
+    from novelvideo.video_duration import seedance2_media_limits_for_backend
+
+    limits = seedance2_media_limits_for_backend(video_backend)
+    max_audios = int(limits["max_audios"])
     project_output = Path(project_output)
     default_ratio = default_seedance2_ratio_for_state_dir(state_dir)
     errors: list[Seedance2VideoPrereqError] = []
@@ -235,12 +236,12 @@ def collect_seedance2_video_prereq_errors(
         )
         beat_number = int(beat.get("beat_number") or index + 1)
         selected_audio_assets = _selected_audio_assets(assets)
-        if len(selected_audio_assets) > MAX_SEEDANCE2_REFERENCE_AUDIOS:
+        if len(selected_audio_assets) > max_audios:
             errors.append(
                 Seedance2VideoPrereqError(
                     beat_number=beat_number,
                     key="reference_audios",
-                    label="Seedance2 参考音频最多 3 段，请减少同一 Beat 的 speaker 或合并台词",
+                    label=f"Seedance2 参考音频最多 {max_audios} 段，请减少同一 Beat 的 speaker 或合并台词",
                     media_type="audio",
                     path="",
                     reason="reference_audio_count_exceeded",
@@ -278,6 +279,7 @@ async def prepare_seedance2_generation_inputs(
     next_beat: dict[str, Any] | None = None,
     characters: list[Any] | None = None,
     prop_menu: list[Any] | None = None,
+    video_backend: str | None = None,
 ) -> Seedance2PreparedGeneration:
     """Prepare prompt, config, and media references for one Seedance 2.0 beat."""
 
@@ -326,7 +328,33 @@ async def prepare_seedance2_generation_inputs(
         raise ValueError(
             f"{prefix}Seedance 2.0 最终提示词为空，请先在 Seedance 2.0 Prompt 面板生成或填写最终提示词"
         )
-    if config.generate_audio:
+
+    from novelvideo.s9_storyboard import (
+        build_s9_slots_from_beat,
+        is_s9_segment_beat,
+        rebind_s9_prompt_with_active_assets,
+        renumber_resolved_seedance2_assets,
+    )
+    from novelvideo.video_duration import seedance2_media_limits_for_backend
+
+    limits = seedance2_media_limits_for_backend(video_backend)
+    s9_mode = is_s9_segment_beat(beat) or config.prompt_source in {"s9_script", "s9_generated"}
+    if s9_mode and config.mode == Seedance2I2VMode.MULTIMODAL_REFERENCE:
+        _subshots, s9_meta, slots = build_s9_slots_from_beat(
+            beat,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        raw_slots = (
+            list(s9_meta.segment_asset_slots) if s9_meta and s9_meta.segment_asset_slots else slots
+        )
+        final_prompt, reordered_assets, _missing = rebind_s9_prompt_with_active_assets(
+            final_prompt,
+            slots=raw_slots,
+            assets=assets,
+            include_first_frame=bool(config.s9_include_first_frame),
+        )
+        assets = renumber_resolved_seedance2_assets(reordered_assets)
+    elif config.generate_audio and "【角色声音】" not in final_prompt and not s9_mode:
         voice_mappings = [
             f"Voice mapping: {asset.label}: use the voice from {asset.reference_label}."
             for asset in assets
@@ -346,14 +374,19 @@ async def prepare_seedance2_generation_inputs(
     auto_audios = selected_reference_paths(assets, "reference_audios")
     config.reference_image_paths = _unique_paths(auto_images)
     config.reference_audio_paths = _unique_paths(auto_audios)
-    _validate_reference_audio_request(config.reference_audio_paths)
-
-    _validate_dialogue_final_prompt(
-        beat=beat,
-        final_prompt=final_prompt,
-        assets=assets,
-        generate_audio=config.generate_audio,
+    _validate_reference_audio_request(
+        config.reference_audio_paths,
+        max_audios=int(limits["max_audios"]),
+        total_max_seconds=float(limits["max_audio_seconds"]),
     )
+
+    if not s9_mode:
+        _validate_dialogue_final_prompt(
+            beat=beat,
+            final_prompt=final_prompt,
+            assets=assets,
+            generate_audio=config.generate_audio,
+        )
 
     image_path: str | None = None
     last_frame_path: str | None = None

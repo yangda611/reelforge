@@ -78,7 +78,10 @@ describe("script workflow canonical contract", () => {
     expect(route).not.toContain("refreshScript");
     expect(route).not.toContain("loadScript");
     expect(route).not.toContain("FolderOpen");
-    expect(route).toContain("modeLiteral");
+    expect(route).toContain("modeS9");
+    expect(route).toContain("maxSegmentSecondsLabel");
+    expect(route).toContain("tailAnchorLabel");
+    expect(route).toContain("s9PreviewMeta");
     expect(route).not.toContain("useRawContent");
     expect(route).not.toContain("useAdaptedContent");
     expect(route).not.toContain("useGenerateStaging");

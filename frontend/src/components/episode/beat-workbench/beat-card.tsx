@@ -72,6 +72,45 @@ function BeatCardImpl({
   const freezonePrimarySlot = mainAlt === "render" ? "frame" : "sketch";
   const useHorizontalActions = aspectRatio === "landscape";
 
+  const s9SubshotCount = (() => {
+    if (Array.isArray(beat.s9_subshots) && beat.s9_subshots.length > 0) {
+      return beat.s9_subshots.length;
+    }
+    if (beat.s9_subshots_json) {
+      try {
+        const parsed = JSON.parse(beat.s9_subshots_json);
+        return Array.isArray(parsed) ? parsed.length : 0;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
+  })();
+  const s9Meta = (() => {
+    if (beat.s9_segment_meta && typeof beat.s9_segment_meta === "object") {
+      return beat.s9_segment_meta;
+    }
+    if (beat.s9_segment_meta_json) {
+      try {
+        const parsed = JSON.parse(beat.s9_segment_meta_json);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  })();
+  const s9PlannedSeconds =
+    typeof s9Meta?.planned_duration_seconds === "number" &&
+    s9Meta.planned_duration_seconds > 0
+      ? Math.round(s9Meta.planned_duration_seconds * 10) / 10
+      : typeof beat.estimated_duration === "number" &&
+          beat.estimated_duration > 0 &&
+          s9SubshotCount > 0
+        ? Math.round(beat.estimated_duration * 10) / 10
+        : null;
+  const isS9Segment = s9SubshotCount > 0 || s9Meta !== null;
+
   return (
     <article
       data-beat-number={beat.beat_number}
@@ -84,16 +123,31 @@ function BeatCardImpl({
         !hasVisibleMedia && "min-h-[100px]",
       )}
     >
-      <span
-        className={cn(
-          "absolute left-1.5 top-1.5 z-20 rounded-[4px] border px-2 py-1 font-mono text-[11px] font-medium leading-none tabular-nums backdrop-blur-md",
-          isSelected
-            ? "border-primary/45 bg-black/55 text-primary/90"
-            : "border-white/[0.10] bg-black/45 text-white/78",
+      <div className="absolute left-1.5 top-1.5 z-20 flex max-w-[calc(100%-3.75rem)] flex-wrap items-center gap-1">
+        <span
+          className={cn(
+            "rounded-[4px] border px-2 py-1 font-mono text-[11px] font-medium leading-none tabular-nums backdrop-blur-md",
+            isSelected
+              ? "border-primary/45 bg-black/55 text-primary/90"
+              : "border-white/[0.10] bg-black/45 text-white/78",
+          )}
+        >
+          {t("episode.beat.badge", { n: displayNumber })}
+        </span>
+        {isS9Segment && s9PlannedSeconds !== null && (
+          <span
+            className="rounded-[4px] border border-cyan-400/25 bg-black/55 px-1.5 py-1 font-mono text-[10px] font-medium leading-none tabular-nums text-cyan-200 backdrop-blur-md"
+            title={beat.segment_title || undefined}
+          >
+            {s9SubshotCount > 0
+              ? t("episode.beat.s9Badge", {
+                  seconds: s9PlannedSeconds,
+                  shots: s9SubshotCount,
+                })
+              : `${s9PlannedSeconds}s`}
+          </span>
         )}
-      >
-        {t("episode.beat.badge", { n: displayNumber })}
-      </span>
+      </div>
 
       <div className="absolute right-1.5 top-1.5 z-20 flex items-center gap-1">
         {beat.is_manual_shot && onDeleteManual && (

@@ -191,6 +191,7 @@ async def _run_single_video_async(
             ),
             ratio=str(config["ratio"]) if config.get("ratio") is not None else None,
             prop_menu=config.get("prop_menu"),
+            video_backend=backend_str,
         )
         prompt = prepared.prompt
         video_duration = prepared.duration
@@ -397,7 +398,17 @@ async def _run_video_generation_async(
             beat_num,
             use_director_render=use_director_render,
         )
-        if not frame_path.exists():
+        from novelvideo.seedance2_i2v.models import Seedance2I2VMode, parse_seedance2_config
+        from novelvideo.seedance2_i2v.pipeline import is_huimeng_seedance2_backend
+
+        beat_sd_cfg = parse_seedance2_config(beat.get("seedance2_config_json"))
+        allow_no_first_frame = (
+            is_huimeng_seedance2_backend(video_backend)
+            and beat_sd_cfg.mode
+            in {Seedance2I2VMode.MULTIMODAL_REFERENCE, Seedance2I2VMode.TEXT_TO_VIDEO}
+            and not bool(beat_sd_cfg.s9_include_first_frame)
+        )
+        if not frame_path.exists() and not allow_no_first_frame:
             manager.update_progress_for_project(
                 ctx,
                 "video_generation",
@@ -440,7 +451,7 @@ async def _run_video_generation_async(
                 "config": {
                     "beat": beat,
                     "next_beat": beats[index + 1] if index + 1 < len(beats) else None,
-                    "frame_path": str(frame_path),
+                    "frame_path": str(frame_path) if frame_path.exists() else None,
                     "video_mode": video_mode,
                     "prompt": prompt,
                     "video_duration": duration,

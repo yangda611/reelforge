@@ -954,6 +954,10 @@ class NarrationScript(BaseModel):
 
     # 元数据
     total_duration_seconds: float = Field(default=120.0, description="预估总时长（秒）")
+    s9_preview_meta_json: str = Field(
+        default="{}",
+        description="JSON: s9 Stage 1 简易预览元数据（时长评估、素材准备清单等）",
+    )
     created_at: datetime = Field(default_factory=datetime.now)
 
     def get_total_duration(self) -> float:
@@ -1013,6 +1017,19 @@ class VisualBeat(BaseModel):
         default=None, description="用户指定目标时长（秒）"
     )
     is_manual_shot: bool = Field(default=False, description="是否为用户手工插入的分镜")
+    video_mode: str = Field(default="first_frame", description="first_frame / keyframe")
+    video_prompt: str = Field(default="", description="视频运动提示词")
+    keyframe_prompt: str = Field(default="", description="首尾帧过渡提示词")
+    seedance2_config_json: str = Field(
+        default="{}", description="Seedance 2.0 per-beat 覆写 JSON"
+    )
+    segment_title: str = Field(default="", description="s9 大段标题")
+    s9_subshots_json: str = Field(
+        default="[]", description="JSON: s9 大段内部分镜（S9SubShot）列表"
+    )
+    s9_segment_meta_json: str = Field(
+        default="{}", description="JSON: s9 大段元数据（时长与资产槽位等）"
+    )
 
     # ==========================================================================
     # 资产生成状态（Phase 5 新增）
@@ -1462,6 +1479,10 @@ class NovelEpisode(BaseModel):
         default="{}",
         description='JSON: 本集角色默认身份映射，如 {"杜晨": "杜晨_中年时期"}',
     )
+    s9_preview_meta_json: str = Field(
+        default="{}",
+        description="JSON: 本集 s9 分镜预览元数据（时长评估、素材准备清单、分段上限等）",
+    )
     updated_at: str = Field(
         default="", description="剧集规划最后一次内容变化时间 ISO 字符串"
     )
@@ -1607,6 +1628,13 @@ class NovelVisualBeat(BaseModel):
     seedance2_config_json: str = Field(
         default="{}",
         description="Seedance 2.0 per-beat 覆写 JSON（Stage B 真正使用，Stage A 仅落库占位）",
+    )
+    segment_title: str = Field(default="", description="s9 大段标题")
+    s9_subshots_json: str = Field(
+        default="[]", description="JSON: s9 大段内部分镜列表"
+    )
+    s9_segment_meta_json: str = Field(
+        default="{}", description="JSON: s9 大段元数据"
     )
 
     # 对话支持

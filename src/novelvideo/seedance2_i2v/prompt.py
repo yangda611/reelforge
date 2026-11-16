@@ -59,7 +59,7 @@ class Seedance2PromptComposerOutput(BaseModel):
     )
 
 
-VideoPromptStyle = Literal["seedance_2_0", "seedance_2_5", "minimax_h3", "generic"]
+VideoPromptStyle = Literal["seedance_2_0", "seedance_2_5", "minimax_h3", "generic", "s9_segment"]
 DEFAULT_VIDEO_PROMPT_STYLE: VideoPromptStyle = "seedance_2_0"
 
 
@@ -121,6 +121,23 @@ def resolve_video_prompt_style(value: str | None) -> VideoPromptStyle:
     if text in VIDEO_PROMPT_STYLE_PROFILES:
         return text  # type: ignore[return-value]
     return DEFAULT_VIDEO_PROMPT_STYLE
+
+
+def _ensure_s9_profile() -> None:
+    if "s9_segment" not in VIDEO_PROMPT_STYLE_PROFILES:
+        VIDEO_PROMPT_STYLE_PROFILES["s9_segment"] = VideoPromptStyleProfile(
+            key="s9_segment",
+            label="s9 大段连续分镜",
+            default_min_duration=4,
+            default_max_duration=30,
+            system_directive=(
+                "Follow s9 continuous multi-shot segment choreography with 【参考职责】, "
+                "【全局光影画风】, 【注意事项】, 【角色声音】, and timed 分镜 blocks."
+            ),
+        )
+
+
+_ensure_s9_profile()
 
 
 def style_duration_bounds(

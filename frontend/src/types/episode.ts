@@ -25,6 +25,77 @@ export interface EpisodePropMenuItem {
   marker_color?: string;
 }
 
+export interface S9DurationAssessment {
+  language: string;
+  constraint_summary: string;
+  core_chain_seconds: string;
+  estimated_total_seconds: number;
+  segment_count: number;
+  conclusion: string;
+}
+
+export interface S9AssetManifestItem {
+  slot_label: string;
+  media_type: "image" | "audio";
+  asset_kind: "identity" | "scene" | "prop" | "voice" | "first_frame";
+  name: string;
+  asset_id: string;
+  variant_id?: string;
+  status_label?: string;
+}
+
+export interface S9SegmentAssetSlot {
+  slot: number;
+  media_type: "image" | "audio";
+  asset_kind: "first_frame" | "identity" | "scene" | "prop" | "voice";
+  name: string;
+  asset_id: string;
+  variant_id?: string;
+}
+
+export interface S9SubShot {
+  shot_number: number;
+  label: string;
+  title: string;
+  planned_duration_seconds: number;
+  start_seconds: number;
+  end_seconds: number;
+  shot_scale_movement: string;
+  camera_angle: string;
+  camera_motion: string;
+  content: string;
+  audio_type: "dialogue" | "narration" | "silence";
+  speaker: string;
+  spoken_text: string;
+  identity_ids: string[];
+  scene_id: string;
+  scene_variant_id?: string;
+  prop_ids: string[];
+}
+
+export interface S9SegmentMeta {
+  segment_number: number;
+  segment_title: string;
+  planned_duration_seconds: number;
+  max_segment_seconds: number;
+  story_beat: string;
+  tail_anchor: boolean;
+  include_first_frame: boolean;
+  segment_asset_slots: S9SegmentAssetSlot[];
+}
+
+export interface S9EpisodePreviewMeta {
+  version: number;
+  generation_mode: string;
+  max_segment_seconds: number;
+  tail_anchor: boolean;
+  visual_style_id: string;
+  visual_style_label: string;
+  aspect_ratio: string;
+  duration_assessment?: S9DurationAssessment | null;
+  asset_manifest: S9AssetManifestItem[];
+}
+
 export interface Episode {
   number: number;
   title: string;
@@ -41,6 +112,7 @@ export interface Episode {
   prop_menu?: EpisodePropMenuItem[];
   /** 该集已拆出的镜头数，由列表接口一次分组查询带出。未拆镜为 0。 */
   beat_count?: number;
+  s9_preview_meta?: S9EpisodePreviewMeta | null;
 }
 
 export interface Chapter {
@@ -86,6 +158,12 @@ export interface Beat {
   video_mode?: string; // "first_frame" | "keyframe"
   seedance2_config_json?: string;
   estimated_duration?: number;
+  duration_seconds?: number | null;
+  segment_title?: string;
+  s9_subshots_json?: string;
+  s9_segment_meta_json?: string;
+  s9_subshots?: S9SubShot[];
+  s9_segment_meta?: S9SegmentMeta | null;
   /** Identity IDs detected on the sketch for this beat (color-bound). */
   detected_identities?: string[];
   /** Prop IDs detected on the sketch for this beat (color-bound). */

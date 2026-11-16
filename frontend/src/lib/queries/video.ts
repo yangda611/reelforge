@@ -15,7 +15,8 @@ export type VideoPromptStyle =
   | "seedance_2_0"
   | "seedance_2_5"
   | "minimax_h3"
-  | "generic";
+  | "generic"
+  | "s9_segment";
 
 export interface VideoBackendOption {
   value: string;
@@ -433,6 +434,16 @@ export interface Seedance2BeatStatus {
       can_delete?: boolean;
     }>;
   };
+  s9?: {
+    missing_assets: Array<{
+      slot_label: string;
+      media_type: "image" | "audio";
+      asset_kind: string;
+      name: string;
+      asset_id: string;
+    }>;
+    effective_prompt: string;
+  };
 }
 
 export type VideoInputCropTarget =
@@ -648,6 +659,8 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
       promptGuidanceTemplateKeys,
       promptStyle,
       videoBackend,
+      s9TailAnchor,
+      s9IncludeFirstFrame,
     }: {
       beatNum: number;
       manualPromptReference?: string;
@@ -655,6 +668,8 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
       promptGuidanceTemplateKeys?: string[];
       promptStyle?: VideoPromptStyle;
       videoBackend?: string;
+      s9TailAnchor?: boolean;
+      s9IncludeFirstFrame?: boolean;
     }) =>
       jsonWithBackendError<OkResponse<Seedance2PromptResult> | ErrorResponse>(
         api.post(
@@ -666,6 +681,10 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
               prompt_guidance_template_keys: promptGuidanceTemplateKeys ?? [],
               ...(promptStyle ? { prompt_style: promptStyle } : {}),
               ...(videoBackend ? { video_backend: videoBackend } : {}),
+              ...(s9TailAnchor !== undefined ? { s9_tail_anchor: s9TailAnchor } : {}),
+              ...(s9IncludeFirstFrame !== undefined
+                ? { s9_include_first_frame: s9IncludeFirstFrame }
+                : {}),
             },
             throwHttpErrors: false,
           },

@@ -27,7 +27,13 @@ export function useScript(project: string, episode: number) {
 
 export function useGenerateScript(project: string, episode: number) {
   return useMutation({
-    mutationFn: (params?: { target_duration_total?: number; rhythm?: string }) =>
+    mutationFn: (params?: {
+      max_segment_seconds?: 15 | 30;
+      tail_anchor?: boolean;
+      generation_mode?: "s9" | "literal";
+      target_duration_total?: number;
+      rhythm?: string;
+    }) =>
       jsonWithBackendError<TaskResponse | ErrorResponse>(
         api.post(p`api/v1/projects/${project}/episodes/${episode}/script/generate`, {
           json: params ?? {},

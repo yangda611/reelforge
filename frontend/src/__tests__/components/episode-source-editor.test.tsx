@@ -33,7 +33,7 @@ describe("EpisodeSourceEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "点击查看原文" }));
     expect(screen.getByText("第一章原文")).toBeInTheDocument();
 
-    const source = screen.getByLabelText("分镜源文本 1");
+    const source = screen.getByLabelText("分镜源文本");
     expect(source).toHaveValue("旧分镜源文本");
 
     fireEvent.change(source, { target: { value: "新分镜源文本" } });
@@ -42,44 +42,39 @@ describe("EpisodeSourceEditor", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("新分镜源文本"));
   });
 
-  it("edits source text as one input per generated line", () => {
+  it("edits multiline story paragraphs in a unified textarea without forced line numbering", () => {
     render(
       <EpisodeSourceEditor
         rawContent=""
-        sourceText={" 第一行\n\n第二行 \r\n 第三行 "}
+        sourceText={"第一段暴雨深夜。\r\n\r\n第二段推门而入。"}
         labels={labels}
         onSave={vi.fn()}
       />,
     );
 
-    expect(
-      screen.getByText("(编辑后的内容自动保存，当前共 3 行)"),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText("分镜源文本 1")).toHaveValue("第一行");
-    expect(screen.getByLabelText("分镜源文本 2")).toHaveValue("第二行");
-    expect(screen.getByLabelText("分镜源文本 3")).toHaveValue("第三行");
+    expect(screen.queryByLabelText("分镜源文本 1")).not.toBeInTheDocument();
+    const source = screen.getByLabelText("分镜源文本");
+    expect(source).toHaveValue("第一段暴雨深夜。\n\n第二段推门而入。");
+    expect(screen.getByText(/2 段/)).toBeInTheDocument();
   });
 
-  it("splits pasted multiline text into editable lines and saves normalized text", async () => {
+  it("saves normalized multiline paragraphs on blur without splitting into separate inputs", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(
       <EpisodeSourceEditor
         rawContent=""
-        sourceText="第一行"
+        sourceText="第一段"
         labels={labels}
         onSave={onSave}
       />,
     );
 
-    const source = screen.getByLabelText("分镜源文本 1");
-    fireEvent.change(source, { target: { value: "改写第一行\n改写第二行" } });
-    expect(screen.getByLabelText("分镜源文本 1")).toHaveValue("改写第一行");
-    expect(screen.getByLabelText("分镜源文本 2")).toHaveValue("改写第二行");
-
-    fireEvent.blur(screen.getByLabelText("分镜源文本 2"));
+    const source = screen.getByLabelText("分镜源文本");
+    fireEvent.change(source, { target: { value: "改写第一段\r\n改写第二段" } });
+    fireEvent.blur(source);
 
     await waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith("改写第一行\n改写第二行"),
+      expect(onSave).toHaveBeenCalledWith("改写第一段\n改写第二段"),
     );
   });
 });

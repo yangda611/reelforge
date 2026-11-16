@@ -332,6 +332,20 @@ async def get_script(project: str, episode_num: int, user: dict = Depends(get_ap
         )
         script_data = await store.get_script_as_dict(episode_num)
         if script_data:
+            raw_meta = script_data.get("s9_preview_meta") or {}
+            if isinstance(raw_meta, dict) and raw_meta:
+                from novelvideo.s9_storyboard import compute_s9_manifest_with_live_status
+
+                ep_obj = store.get_episode(episode_num)
+                chars = list(store.get_all_characters() or [])
+                if not chars and hasattr(store, "list_characters"):
+                    chars = list(await store.list_characters() or [])
+                script_data["s9_preview_meta"] = compute_s9_manifest_with_live_status(
+                    raw_meta,
+                    output_dir=resolved.output_dir,
+                    characters=chars,
+                    episode=ep_obj,
+                )
             return {"ok": True, "data": script_data}
     except Exception as exc:
         logger.exception("从 store 读取剧本失败: episode=%s", episode_num)
@@ -367,7 +381,11 @@ async def generate_script(
             "error": f"第 {episode_num} 集尚未规划角色身份，请先规划身份",
         }
 
-    config = {}
+    config: dict[str, Any] = {
+        "max_segment_seconds": int(getattr(body, "max_segment_seconds", 30) or 30),
+        "tail_anchor": bool(getattr(body, "tail_anchor", False)),
+        "generation_mode": str(getattr(body, "generation_mode", "s9") or "s9"),
+    }
 
     # 启动前清理旧 sketch 展示文件，确保即使任务失败画廊也不展示旧草图
     from novelvideo.utils.path_resolver import PathResolver
@@ -428,6 +446,58 @@ async def update_beat(
         raise HTTPException(status_code=404, detail=f"Beat {beat_num} not found")
 
     updates = body.model_dump(exclude_none=True)
+    if "s9_subshots" in updates or "planned_duration_seconds" in updates or "segment_title" in updates:
+        from novelvideo.models import build_scene_ref
+        from novelvideo.s9_storyboard import (
+            S9SegmentMeta,
+            S9SubShot,
+            compute_segment_subshots_update,
+            parse_s9_segment_meta,
+            parse_s9_subshots,
+        )
+        from novelvideo.seedance2_i2v.models import dump_seedance2_config, parse_seedance2_config
+
+        existing_meta = parse_s9_segment_meta(target.get("s9_segment_meta_json") or target.get("s9_segment_meta"))
+        raw_subshots = updates.pop("s9_subshots", None)
+        subshots = (
+            [S9SubShot.model_validate(item) for item in raw_subshots]
+            if raw_subshots is not None
+            else parse_s9_subshots(target.get("s9_subshots_json") or target.get("s9_subshots"))
+        )
+        if "s9_segment_meta" in updates and isinstance(updates["s9_segment_meta"], dict):
+            existing_meta = parse_s9_segment_meta(updates.pop("s9_segment_meta")) or existing_meta
+        recomputed = compute_segment_subshots_update(
+            subshots=subshots,
+            existing_meta=existing_meta,
+            segment_title=updates.pop("segment_title", None),
+            planned_duration_seconds=updates.pop("planned_duration_seconds", None),
+        )
+        updates["segment_title"] = recomputed["segment_title"]
+        updates["s9_subshots_json"] = recomputed["s9_subshots_json"]
+        updates["s9_segment_meta_json"] = recomputed["s9_segment_meta_json"]
+        updates["audio_type"] = recomputed["audio_type"]
+        updates["speaker"] = recomputed["speaker"]
+        updates["narration_segment"] = recomputed["narration_segment"]
+        if recomputed["visual_description"]:
+            updates["visual_description"] = recomputed["visual_description"]
+        updates["detected_identities"] = recomputed["detected_identities"]
+        updates["detected_props"] = recomputed["detected_props"]
+        if recomputed["scene_id"]:
+            updates["scene_ref"] = build_scene_ref(
+                recomputed["scene_id"], recomputed["scene_variant_id"]
+            ).model_dump()
+        updates["duration_seconds"] = recomputed["duration_seconds"]
+        updates["estimated_duration"] = recomputed["estimated_duration"]
+
+        # Keep seedance2_config duration aligned when user hasn't manually pinned another number
+        sd_cfg = parse_seedance2_config(target.get("seedance2_config_json"))
+        if not sd_cfg.duration_user_set:
+            sd_cfg.duration = int(recomputed["planned_duration_seconds"])
+            updates["seedance2_config_json"] = dump_seedance2_config(sd_cfg)
+
+        target["s9_subshots"] = json.loads(recomputed["s9_subshots_json"])
+        target["s9_segment_meta"] = json.loads(recomputed["s9_segment_meta_json"])
+
     for key, value in updates.items():
         target[key] = value
     sync_beat_asset_refs(target)
@@ -453,6 +523,11 @@ async def update_beat(
                     "video_prompt",
                     "keyframe_prompt",
                     "seedance2_config_json",
+                    "segment_title",
+                    "s9_subshots_json",
+                    "s9_segment_meta_json",
+                    "duration_seconds",
+                    "estimated_duration",
                 )
             },
         )
@@ -666,6 +741,14 @@ async def generate_seedance2_prompt(
 
     default_ratio = default_seedance2_ratio_for_state_dir(Path(resolved.state_dir))
     config = parse_seedance2_config(target.get("seedance2_config_json"), default_ratio=default_ratio)
+    if getattr(body, "s9_tail_anchor", None) is not None or getattr(body, "s9_include_first_frame", None) is not None:
+        from novelvideo.seedance2_i2v.models import dump_seedance2_config
+
+        if getattr(body, "s9_tail_anchor", None) is not None:
+            config.s9_tail_anchor = bool(body.s9_tail_anchor)
+        if getattr(body, "s9_include_first_frame", None) is not None:
+            config.s9_include_first_frame = bool(body.s9_include_first_frame)
+        target["seedance2_config_json"] = dump_seedance2_config(config)
     mode = getattr(config.mode, "value", str(config.mode))
     if mode == "first_last_frame" and next_beat is None:
         return {"ok": False, "error": "这是最后一个 Beat，无法使用首尾帧模式"}

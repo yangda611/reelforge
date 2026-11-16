@@ -900,6 +900,8 @@ SEEDANCE2_SINGLE_VIDEO_CONFIG_FIELDS = {
     "prompt_style",
     "prompt_guidance",
     "text_overlay",
+    "s9_tail_anchor",
+    "s9_include_first_frame",
 }
 
 
@@ -1006,6 +1008,7 @@ async def _prepare_seedance2_api_beat(
         ),
         ratio=ratio,
         prop_menu=prop_menu,
+        video_backend=video_backend,
     )
     if not str(prepared.prompt or "").strip():
         raise ValueError(
@@ -1509,6 +1512,10 @@ def _seedance2_status_response(
                 "audios": len([asset for asset in selected_assets if asset.media_type == "audio"]),
                 "fallbacks": len(fallback_assets),
                 "items": asset_items,
+            },
+            "s9": {
+                "missing_assets": list(getattr(state, "s9_missing_assets", []) or []),
+                "effective_prompt": str(getattr(state, "s9_effective_prompt", "") or ""),
             },
         },
     }
@@ -4878,6 +4885,7 @@ async def generate_single_video(
     is_grok_video = _is_grok_video_backend(body.video_backend)
 
     # 首帧路径
+    from novelvideo.seedance2_i2v.models import Seedance2I2VMode, parse_seedance2_config
     from novelvideo.utils.path_resolver import PathResolver
 
     paths = PathResolver(output_dir, episode_num)
@@ -4885,8 +4893,34 @@ async def generate_single_video(
         beat_num,
         use_director_render=bool(body.use_director_render),
     )
+    pre_merged_config_json = None
+    if is_seedance2 or is_happyhorse or is_grok_video:
+        pre_merged_config_json = _merge_seedance2_request_config(
+            beat,
+            seedance2_config_json=body.seedance2_config_json,
+            config_overrides=_seedance2_request_config_overrides(body),
+        )
+    pre_sd_config = parse_seedance2_config(
+        pre_merged_config_json or beat.get("seedance2_config_json")
+    )
+    skip_first_frame_guard = False
+    if is_seedance2:
+        if pre_sd_config.mode in {
+            Seedance2I2VMode.MULTIMODAL_REFERENCE,
+            Seedance2I2VMode.TEXT_TO_VIDEO,
+        } and not bool(pre_sd_config.s9_include_first_frame):
+            skip_first_frame_guard = True
+    elif is_happyhorse or is_grok_video:
+        if pre_sd_config.mode in {
+            Seedance2I2VMode.MULTIMODAL_REFERENCE,
+            Seedance2I2VMode.TEXT_TO_VIDEO,
+        }:
+            skip_first_frame_guard = True
+
     if not frame_path.exists():
-        return {"ok": False, "error": f"Beat {beat_num} 首帧不存在，请先生成预览"}
+        if not skip_first_frame_guard:
+            return {"ok": False, "error": f"Beat {beat_num} 首帧不存在，请先生成预览"}
+        frame_path = None
 
     # 视频模式与提示词
     video_mode = beat.get("video_mode", "first_frame")
@@ -4928,6 +4962,8 @@ async def generate_single_video(
                 seedance2_config_json=body.seedance2_config_json,
                 config_overrides=_seedance2_request_config_overrides(body),
             )
+            if request_config_json:
+                beat["seedance2_config_json"] = request_config_json
             if request_config_json and hasattr(store, "update_beat_asset"):
                 await store.update_beat_asset(
                     episode_number=episode_num,
@@ -4953,7 +4989,7 @@ async def generate_single_video(
             return {"ok": False, "error": str(exc)}
         prompt = prepared.prompt
         video_duration = prepared.duration
-        frame_path = Path(prepared.image_path) if prepared.image_path else frame_path
+        frame_path = Path(prepared.image_path) if prepared.image_path else (frame_path if pre_sd_config.mode != Seedance2I2VMode.MULTIMODAL_REFERENCE or pre_sd_config.s9_include_first_frame else None)
         last_frame_path = prepared.last_frame_path
         seedance2_config_json = prepared.seedance2_config_json
         from novelvideo.seedance2_i2v.models import parse_seedance2_config
@@ -4969,6 +5005,8 @@ async def generate_single_video(
                 seedance2_config_json=body.seedance2_config_json,
                 config_overrides=_seedance2_request_config_overrides(body),
             )
+            if request_config_json:
+                beat["seedance2_config_json"] = request_config_json
             if request_config_json and hasattr(store, "update_beat_asset"):
                 await store.update_beat_asset(
                     episode_number=episode_num,
@@ -5016,6 +5054,8 @@ async def generate_single_video(
                 seedance2_config_json=body.seedance2_config_json,
                 config_overrides=_seedance2_request_config_overrides(body),
             )
+            if request_config_json:
+                beat["seedance2_config_json"] = request_config_json
             if request_config_json and hasattr(store, "update_beat_asset"):
                 await store.update_beat_asset(
                     episode_number=episode_num,
@@ -5063,6 +5103,8 @@ async def generate_single_video(
                 seedance2_config_json=body.seedance2_config_json,
                 config_overrides=_seedance2_request_config_overrides(body),
             )
+            if request_config_json:
+                beat["seedance2_config_json"] = request_config_json
             if request_config_json and hasattr(store, "update_beat_asset"):
                 await store.update_beat_asset(
                     episode_number=episode_num,
@@ -5217,7 +5259,35 @@ async def generate_single_video(
                 body.video_backend, merged_config.resolution
             )
 
-    from novelvideo.video_duration import normalize_video_duration_for_backend
+    from novelvideo.video_duration import (
+        normalize_video_duration_for_backend,
+        video_duration_bounds_for_backend,
+    )
+
+    _min_dur, backend_max_dur = video_duration_bounds_for_backend(body.video_backend)
+    planned_seg_dur = 0.0
+    if isinstance(beat.get("s9_segment_meta"), dict):
+        planned_seg_dur = float(beat["s9_segment_meta"].get("planned_duration_seconds") or 0)
+    if planned_seg_dur <= 0:
+        planned_seg_dur = float(beat.get("duration_seconds") or beat.get("estimated_duration") or 0)
+    requested_raw_dur = (
+        float(body.duration)
+        if "duration" in body.model_fields_set and body.duration is not None
+        else float(video_duration or 0)
+    )
+    check_dur = requested_raw_dur or planned_seg_dur
+    if (
+        backend_max_dur is not None
+        and check_dur > backend_max_dur
+        and not ("duration" in body.model_fields_set and body.duration is not None and float(body.duration) <= backend_max_dur)
+    ):
+        return {
+            "ok": False,
+            "error": (
+                f"当前大段推算时长为 {int(round(check_dur))} 秒，超过所选视频模型上限（{backend_max_dur} 秒）。"
+                "请切换支持 30 秒的模型（如 Seedance 2.5），或在脚本页选择「15秒」重新拆分。"
+            ),
+        }
 
     video_duration = normalize_video_duration_for_backend(
         body.video_backend,

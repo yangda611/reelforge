@@ -123,3 +123,63 @@ def normalize_video_duration_for_backend(
     if max_duration is not None:
         duration = min(duration, max_duration)
     return duration
+
+
+def _catalog_model_config(model: str) -> dict:
+    if not model:
+        return {}
+    try:
+        from novelvideo.model_gateway_settings import (
+            get_newapi_media_model_mappings,
+            get_official_media_model_mappings,
+        )
+        from novelvideo.shared.runtime_env import is_ce_effective
+
+        mappings: dict[str, dict] = {}
+        if is_ce_effective():
+            mappings.update(get_newapi_media_model_mappings())
+        entry = mappings.get(model)
+        if not isinstance(entry, dict):
+            entry = get_official_media_model_mappings().get(model)
+        if isinstance(entry, dict) and isinstance(entry.get("config"), dict):
+            return dict(entry["config"])
+    except (RuntimeError, ImportError, TypeError, ValueError):
+        return {}
+    return {}
+
+
+def seedance2_media_limits_for_backend(backend: str | None) -> dict[str, float | int]:
+    """Return Seedance 2.0/2.5 backend limits (duration + max ref counts/audio length)."""
+    model = _gateway_model_from_backend(backend)
+    cfg = _catalog_model_config(model)
+    min_d, max_d = video_duration_bounds_for_backend(backend)
+
+    def _int_opt(key: str, default: int) -> int:
+        raw = cfg.get(key)
+        try:
+            parsed = int(raw)
+            return parsed if parsed >= 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    def _float_opt(key: str, default: float) -> float:
+        raw = cfg.get(key)
+        try:
+            parsed = float(raw)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    is_25 = "2.5" in str(model or "").lower()
+    default_imgs = 30 if is_25 else 9
+    default_auds = 10 if is_25 else 3
+    default_aud_sec = 30.0 if is_25 else 15.2
+    default_max_d = 30 if is_25 else 15
+    return {
+        "min_duration": int(min_d or 4),
+        "max_duration": int(max_d or default_max_d),
+        "max_images": _int_opt("referenceImageMax", default_imgs),
+        "max_videos": _int_opt("referenceVideoMax", 3),
+        "max_audios": _int_opt("referenceAudioMax", default_auds),
+        "max_audio_seconds": _float_opt("referenceAudioMaxSeconds", default_aud_sec),
+    }

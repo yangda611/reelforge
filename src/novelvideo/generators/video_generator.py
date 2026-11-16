@@ -1722,7 +1722,9 @@ class HuimengVideoGenerator(VideoGeneratorBase):
         if is_seedance2_model:
             from novelvideo.seedance2_i2v.models import Seedance2I2VMode
             from novelvideo.seedance2_i2v.request import build_seedance2_huimeng_params
+            from novelvideo.video_duration import seedance2_media_limits_for_backend
 
+            backend_limits = seedance2_media_limits_for_backend(f"huimeng_{self.model}")
             if last_frame:
                 mode = Seedance2I2VMode.FIRST_LAST_FRAME
             elif has_multimodal_refs:
@@ -1768,6 +1770,9 @@ class HuimengVideoGenerator(VideoGeneratorBase):
                     reference_images=reference_params.get("reference_images"),
                     reference_videos=reference_params.get("reference_videos"),
                     reference_audios=reference_params.get("reference_audios"),
+                    max_images=int(backend_limits["max_images"]),
+                    max_videos=int(backend_limits["max_videos"]),
+                    max_audios=int(backend_limits["max_audios"]),
                 )
             except ValueError as exc:
                 return VideoGenResult(
@@ -3411,7 +3416,9 @@ class NewApiVideoGenerator(VideoGeneratorBase):
 
             from novelvideo.seedance2_i2v.models import Seedance2I2VMode
             from novelvideo.seedance2_i2v.request import build_seedance2_huimeng_params
+            from novelvideo.video_duration import seedance2_media_limits_for_backend
 
+            backend_limits = seedance2_media_limits_for_backend(f"newapi_{self.model}")
             has_references = any(reference_params.values())
             declared_reference_paths = (
                 list(seedance2_config.get("reference_image_paths") or [])
@@ -3466,6 +3473,9 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     reference_images=reference_params.get("reference_images"),
                     reference_videos=reference_params.get("reference_videos"),
                     reference_audios=reference_params.get("reference_audios"),
+                    max_images=int(backend_limits["max_images"]),
+                    max_videos=int(backend_limits["max_videos"]),
+                    max_audios=int(backend_limits["max_audios"]),
                 )
             except ValueError as exc:
                 return await fail_before_submit(str(exc))

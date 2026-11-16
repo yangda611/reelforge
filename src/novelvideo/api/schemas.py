@@ -162,7 +162,9 @@ class RewriteGenerateRequest(BaseModel):
 
 
 class ScriptGenerateRequest(BaseModel):
-    pass
+    max_segment_seconds: Literal[15, 30] = 30
+    tail_anchor: bool = False
+    generation_mode: Literal["s9", "literal"] = "s9"
 
 
 class BeatUpdate(BaseModel):
@@ -178,6 +180,12 @@ class BeatUpdate(BaseModel):
     speaker: Optional[str] = None  # 说话人身份ID（dialogue 时必填）
     detected_identities: Optional[list[str]] = None
     detected_props: Optional[list[str]] = None
+    segment_title: Optional[str] = None
+    s9_subshots: Optional[list[dict[str, Any]]] = None
+    s9_segment_meta: Optional[dict[str, Any]] = None
+    planned_duration_seconds: Optional[int] = None
+    duration_seconds: Optional[float] = None
+    estimated_duration: Optional[float] = None
 
 
 class Seedance2PromptGenerateRequest(BaseModel):
@@ -186,6 +194,8 @@ class Seedance2PromptGenerateRequest(BaseModel):
     prompt_guidance_template_keys: Optional[list[str]] = None
     prompt_style: Optional[str] = None
     video_backend: Optional[str] = None
+    s9_tail_anchor: Optional[bool] = None
+    s9_include_first_frame: Optional[bool] = None
 
 
 class BeatVideoPromptGenerateRequest(BaseModel):

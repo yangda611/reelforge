@@ -1078,15 +1078,28 @@ def build_seedance2_project_assets(
         )
         return assets
 
-    add_image(
-        key="first_frame",
-        label=f"当前 render · Beat {beat_num}",
-        path=first_frame_path,
-        selected=True,
-        request_field="reference_images",
-        note="多参考模式下作为参考图发送，不作为严格首帧。",
-        crop_source_path=first_frame_source,
-    )
+    from novelvideo.s9_storyboard import is_s9_segment_beat, parse_s9_segment_meta, parse_s9_subshots
+    from novelvideo.seedance2_i2v.models import parse_seedance2_config
+
+    s9_mode = is_s9_segment_beat(beat)
+    s9_config = parse_seedance2_config(beat.get("seedance2_config_json")) if s9_mode else None
+    include_first_frame = bool(getattr(s9_config, "s9_include_first_frame", False)) if s9_mode else True
+
+    if not s9_mode or include_first_frame:
+        add_image(
+            key="first_frame",
+            label=f"当前 render · Beat {beat_num}",
+            path=first_frame_path,
+            selected=True,
+            request_field="reference_images",
+            note=(
+                "已启用首帧渲染参考，首镜动作自此帧起始构图向后发生。"
+                if s9_mode
+                else "多参考模式下作为参考图发送，不作为严格首帧。"
+            ),
+            crop_source_path=first_frame_source,
+            required=not s9_mode,
+        )
 
     resolved_characters = (
         list(characters) if characters is not None else _load_sqlite_characters(project_output)
@@ -1098,6 +1111,12 @@ def build_seedance2_project_assets(
         else _load_sqlite_episode_prop_menu(project_output, episode)
     )
 
+    s9_subshots = (
+        beat.get("s9_subshots") or parse_s9_subshots(beat.get("s9_subshots_json"))
+        if s9_mode
+        else []
+    )
+
     identity_ids: list[str] = []
     for identity_id in resolve_beat_identity_ids(
         beat,
@@ -1106,6 +1125,13 @@ def build_seedance2_project_assets(
     ):
         if identity_id not in identity_ids:
             identity_ids.append(identity_id)
+    for shot in s9_subshots:
+        shot_ids = getattr(shot, "identity_ids", None) if not isinstance(shot, dict) else shot.get("identity_ids")
+        for iid in list(shot_ids or []):
+            clean = _text(iid)
+            if clean and clean not in identity_ids:
+                identity_ids.append(clean)
+
     for identity_id in identity_ids:
         character, identity = _split_identity_label(identity_id)
         identity_fallback = _identity_prompt_fallback(identity_id, resolved_characters)
@@ -1129,47 +1155,96 @@ def build_seedance2_project_assets(
     ):
         if prop_id not in prop_ids:
             prop_ids.append(prop_id)
-    for prop_id in prop_ids:
-        prop_obj = _find_prop(prop_id, resolved_props)
-        base_prop_id = _text(getattr(prop_obj, "name", "")) or prop_id
-        prop_path = _prop_asset_path(project_output, base_prop_id)
-        menu_meta = _prop_menu_metadata(prop_id, resolved_prop_menu) or _prop_menu_metadata(
-            base_prop_id,
-            resolved_prop_menu,
-        )
-        is_global_prop = (
-            prop_obj is not None or bool(menu_meta.get("is_global_asset")) or prop_path.exists()
-        )
-        prop_scope = "global" if is_global_prop else "episode"
-        prop_fallback = _prop_prompt_fallback(prop_id, resolved_props, menu_meta)
-        label_prefix = "全局道具" if prop_scope == "global" else "剧集道具"
-        note = (
-            "全局道具有图时作为参考保持造型、材质和细节一致；无图时使用道具提示词约束。"
-            if prop_scope == "global"
-            else "剧集道具使用道具提示词约束造型、材质和细节。"
-        )
+    for shot in s9_subshots:
+        shot_props = getattr(shot, "prop_ids", None) if not isinstance(shot, dict) else shot.get("prop_ids")
+        for pid in list(shot_props or []):
+            clean = _text(pid)
+            if clean and clean not in prop_ids:
+                prop_ids.append(clean)
+
+    def _add_scene_entries() -> None:
+        if s9_mode:
+            seen_scenes: list[tuple[str, str]] = []
+            for shot in s9_subshots:
+                sid = _text(getattr(shot, "scene_id", "") if not isinstance(shot, dict) else shot.get("scene_id"))
+                vid = _text(getattr(shot, "scene_variant_id", "") if not isinstance(shot, dict) else shot.get("scene_variant_id"))
+                if sid and (sid, vid) not in seen_scenes:
+                    seen_scenes.append((sid, vid))
+            scene_ref = beat_scene_ref(beat)
+            if scene_ref and scene_ref.scene_id:
+                pair = (scene_ref.scene_id, scene_ref.variant_id or "")
+                if pair not in seen_scenes:
+                    seen_scenes.append(pair)
+            if seen_scenes:
+                for sid, vid in seen_scenes:
+                    label_key = f"{sid}_{vid}" if vid else sid
+                    candidate = canonical_scene_master_path(project_output, label_key)
+                    if vid and not candidate.exists():
+                        base_candidate = canonical_scene_master_path(project_output, sid)
+                        if base_candidate.exists():
+                            candidate = base_candidate
+                    add_image(
+                        key=f"scene:{sid}",
+                        label=f"场景锚点 · {label_key}",
+                        path=candidate,
+                        selected=True,
+                        request_field="reference_images",
+                        required=False,
+                        fallback_text=label_key,
+                        note="用于约束场景结构、材质和空间关系。",
+                    )
+                return
+        location, scene_path = _beat_scene_asset(project_output, beat)
         add_image(
-            key=f"prop:{prop_id}",
-            label=f"{label_prefix} · {prop_id}",
-            path=prop_path,
+            key=f"scene:{location}",
+            label=f"场景锚点 · {location}",
+            path=scene_path,
             selected=True,
             request_field="reference_images",
-            note=note,
-            prop_id=prop_id,
-            prop_scope=prop_scope,
-            required=False,
-            fallback_text=prop_fallback,
+            required=not s9_mode,
+            note="用于约束场景结构、材质和空间关系。",
         )
 
-    location, scene_path = _beat_scene_asset(project_output, beat)
-    add_image(
-        key=f"scene:{location}",
-        label=f"场景锚点 · {location}",
-        path=scene_path,
-        selected=True,
-        request_field="reference_images",
-        note="用于约束场景结构、材质和空间关系。",
-    )
+    def _add_prop_entries() -> None:
+        for prop_id in prop_ids:
+            prop_obj = _find_prop(prop_id, resolved_props)
+            base_prop_id = _text(getattr(prop_obj, "name", "")) or prop_id
+            prop_path = _prop_asset_path(project_output, base_prop_id)
+            menu_meta = _prop_menu_metadata(prop_id, resolved_prop_menu) or _prop_menu_metadata(
+                base_prop_id,
+                resolved_prop_menu,
+            )
+            is_global_prop = (
+                prop_obj is not None or bool(menu_meta.get("is_global_asset")) or prop_path.exists()
+            )
+            prop_scope = "global" if is_global_prop else "episode"
+            prop_fallback = _prop_prompt_fallback(prop_id, resolved_props, menu_meta)
+            label_prefix = "全局道具" if prop_scope == "global" else "剧集道具"
+            note = (
+                "全局道具有图时作为参考保持造型、材质和细节一致；无图时使用道具提示词约束。"
+                if prop_scope == "global"
+                else "剧集道具使用道具提示词约束造型、材质和细节。"
+            )
+            add_image(
+                key=f"prop:{prop_id}",
+                label=f"{label_prefix} · {prop_id}",
+                path=prop_path,
+                selected=True,
+                request_field="reference_images",
+                note=note,
+                prop_id=prop_id,
+                prop_scope=prop_scope,
+                required=False,
+                fallback_text=prop_fallback,
+            )
+
+    if s9_mode:
+        # s9 规范顺序：角色 -> 场景 -> 道具
+        _add_scene_entries()
+        _add_prop_entries()
+    else:
+        _add_prop_entries()
+        _add_scene_entries()
 
     audio_type = normalize_seedance2_audio_type(beat)
     if audio_type == "dialogue":

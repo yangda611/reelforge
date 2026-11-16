@@ -15,6 +15,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   Download,
   Film,
   ChevronDown,
@@ -103,7 +104,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { BeatStageState } from "@/types/beat-state";
-import type { Beat } from "@/types/episode";
+import type { Beat, S9SegmentMeta } from "@/types/episode";
 import {
   MEDIA_PRIMARY_ACTION_BUTTON_CLASS,
   MEDIA_THUMB_ACTIVE_CLASS,
@@ -189,6 +190,7 @@ const CUSTOM_DEFAULT_RATIO_OPTIONS = [
   "21:9",
 ] as const;
 const VIDEO_PROMPT_STYLE_OPTIONS: readonly VideoPromptStyle[] = [
+  "s9_segment",
   "seedance_2_0",
   "seedance_2_5",
   "minimax_h3",
@@ -246,6 +248,8 @@ interface Seedance2ConfigDraft {
   prompt_guidance: string;
   prompt_guidance_template_keys: string[];
   final_prompt: string;
+  s9_tail_anchor: boolean;
+  s9_include_first_frame: boolean;
   text_overlay: {
     enabled: boolean;
     kind: string;
@@ -488,6 +492,22 @@ export function VideoPane({
     beat.estimated_duration > 0
       ? beat.estimated_duration
       : 0;
+  const s9SegmentMeta = useMemo(() => resolveBeatS9SegmentMeta(beat), [beat]);
+  const s9SubshotCount = useMemo(() => countBeatS9Subshots(beat), [beat]);
+  const hasS9ConfigMarker = useMemo(() => {
+    const raw = String(beat.seedance2_config_json ?? "").trim();
+    return raw.includes('"s9_script"') || raw.includes('"s9_segment"');
+  }, [beat.seedance2_config_json]);
+  const isS9Beat =
+    s9SegmentMeta !== null || s9SubshotCount > 0 || hasS9ConfigMarker;
+  const s9PlannedDurationSeconds =
+    typeof s9SegmentMeta?.planned_duration_seconds === "number" &&
+    Number.isFinite(s9SegmentMeta.planned_duration_seconds) &&
+    s9SegmentMeta.planned_duration_seconds > 0
+      ? Math.round(s9SegmentMeta.planned_duration_seconds * 10) / 10
+      : isS9Beat && estimatedDurationSeconds > 0
+        ? Math.round(estimatedDurationSeconds * 10) / 10
+        : null;
   const seedance2VideoDurationBounds = useMemo<Seedance2DurationBounds>(() => {
     const max = seedance2DurationBounds.max;
     const min = Math.min(
@@ -500,14 +520,15 @@ export function VideoPane({
     seedance2DurationBounds.max,
     audioFloorSeconds,
   ]);
-  const suggestedVideoDuration = clampDuration(
-    Math.max(
-      estimatedDurationSeconds,
-      audioFloorSeconds ?? 0,
-      seedance2VideoDurationBounds.min,
-    ),
-    seedance2VideoDurationBounds,
+  const rawSuggestedVideoDuration = Math.max(
+    estimatedDurationSeconds,
+    s9PlannedDurationSeconds ?? 0,
+    audioFloorSeconds ?? 0,
+    seedance2VideoDurationBounds.min,
   );
+  const suggestedVideoDuration = isS9Beat
+    ? Math.max(seedance2VideoDurationBounds.min, Math.round(rawSuggestedVideoDuration))
+    : clampDuration(rawSuggestedVideoDuration, seedance2VideoDurationBounds);
   // 时长下限 = max(模型下限, 音频时长)；视频时长须 >= 音频时长。
   const sd15DurationBounds = useMemo<Seedance2DurationBounds>(
     () => ({
@@ -637,18 +658,26 @@ export function VideoPane({
         seedance2DefaultRatioForProjectAspect(spec.renderAspect),
         suggestedVideoDuration,
         seedance2VideoDurationBounds,
+        isS9Beat,
       ),
     [
       beat.seedance2_config_json,
       spec.renderAspect,
       suggestedVideoDuration,
       seedance2VideoDurationBounds,
+      isS9Beat,
     ],
   );
   const [seedance2Draft, setSeedance2Draft] = useState(seedance2Config);
   const effectivePromptStyle: VideoPromptStyle =
     normalizeVideoPromptStyle(seedance2Draft.prompt_style) ||
     preferredPromptStyle;
+  const isS9Segment =
+    isS9Beat ||
+    effectivePromptStyle === "s9_segment" ||
+    seedance2Draft.prompt_source === "s9_script";
+  const s9DurationExceedsModelMax =
+    isS9Segment && seedance2Draft.duration > seedance2VideoDurationBounds.max;
   const videoPricingResolution =
     showPromptConfig
       ? seedance2Draft.resolution
@@ -749,9 +778,20 @@ export function VideoPane({
   useEffect(() => {
     if (!showPromptConfig) return;
     const current = seedance2DraftRef.current;
+    const preserveOverMax =
+      !current.duration_user_set &&
+      (isS9Segment ||
+        current.prompt_source === "s9_script" ||
+        current.prompt_style === "s9_segment");
+    const effectiveBounds = preserveOverMax
+      ? {
+          min: seedance2VideoDurationBounds.min,
+          max: Math.max(seedance2VideoDurationBounds.max, current.duration),
+        }
+      : seedance2VideoDurationBounds;
     const nextDuration = clampDuration(
       Math.max(current.duration, audioFloorSeconds ?? 0),
-      seedance2VideoDurationBounds,
+      effectiveBounds,
     );
     if (current.duration === nextDuration) return;
     const next = { ...current, duration: nextDuration };
@@ -761,6 +801,7 @@ export function VideoPane({
     seedance2VideoDurationBounds.max,
     seedance2VideoDurationBounds.min,
     audioFloorSeconds,
+    isS9Segment,
     showGrokVideoConfig,
     showHappyHorseConfig,
     showSeedance2Config,
@@ -832,6 +873,18 @@ export function VideoPane({
         toast.error(
           t("episode.workbench.video.seedance2PromptRequired", {
             n: beat.beat_number,
+          }),
+        );
+        return false;
+      }
+      if (
+        (isS9Segment || seedance2DraftRef.current.prompt_source === "s9_script") &&
+        seedance2DraftRef.current.duration > seedance2VideoDurationBounds.max
+      ) {
+        toast.error(
+          t("episode.workbench.video.s9DurationExceedsModelMax", {
+            planned: seedance2DraftRef.current.duration,
+            max: seedance2VideoDurationBounds.max,
           }),
         );
         return false;
@@ -1096,6 +1149,12 @@ export function VideoPane({
         promptGuidanceTemplateKeys: seedance2Draft.prompt_guidance_template_keys,
         promptStyle: effectivePromptStyle,
         videoBackend: defaultBackend,
+        ...(isS9Segment
+          ? {
+              s9TailAnchor: seedance2Draft.s9_tail_anchor,
+              s9IncludeFirstFrame: seedance2Draft.s9_include_first_frame,
+            }
+          : {}),
       });
       if (!res.ok) {
         toast.error(
@@ -1118,6 +1177,7 @@ export function VideoPane({
         seedance2DefaultRatioForProjectAspect(spec.renderAspect),
         suggestedVideoDuration,
         seedance2VideoDurationBounds,
+        isS9Segment,
       );
       const nextDraft = showGrokVideoConfig
         ? normalizeGrokVideoDraftForBackend(
@@ -2432,8 +2492,20 @@ export function VideoPane({
                     clampDuration(e.target.value, seedance2VideoDurationBounds),
                   )
                 }
-                className={cn("!h-9", SEEDANCE2_CONTROL_CLASS)}
+                className={cn(
+                  "!h-9",
+                  SEEDANCE2_CONTROL_CLASS,
+                  s9DurationExceedsModelMax &&
+                    "border-amber-400/60 text-amber-200",
+                )}
               />
+              {isS9Segment && s9PlannedDurationSeconds !== null && !s9DurationExceedsModelMax && (
+                <p className="text-[10px] leading-tight text-muted-foreground">
+                  {t("episode.workbench.video.s9PlannedDurationHint", {
+                    seconds: s9PlannedDurationSeconds,
+                  })}
+                </p>
+              )}
             </Seedance2Field>
             <Seedance2Field
               label={t("episode.workbench.video.resolution")}
@@ -2513,6 +2585,21 @@ export function VideoPane({
             </Seedance2Field>
           </div>
 
+          {s9DurationExceedsModelMax && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-[7px] border border-amber-400/35 bg-amber-400/[0.08] px-2.5 py-2 text-[11px] leading-relaxed text-amber-200"
+            >
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+              <span>
+                {t("episode.workbench.video.s9DurationExceedsModelMax", {
+                  planned: seedance2Draft.duration,
+                  max: seedance2VideoDurationBounds.max,
+                })}
+              </span>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-3 px-1 text-xs text-muted-foreground">
             {(showSeedance2Config || showCustomPromptConfig) && (
               <Seedance2Checkbox
@@ -2521,6 +2608,26 @@ export function VideoPane({
                 label={t("episode.workbench.video.returnLastFrame")}
                 onChange={(checked) => updateSeedance2Draft("return_last_frame", checked)}
               />
+            )}
+            {(showSeedance2Config || showCustomPromptConfig) && isS9Segment && (
+              <>
+                <Seedance2Checkbox
+                  id={`${seedance2Id}-s9-include-first-frame`}
+                  checked={seedance2Draft.s9_include_first_frame}
+                  label={t("episode.workbench.video.s9IncludeFirstFrame")}
+                  onChange={(checked) =>
+                    updateSeedance2Draft("s9_include_first_frame", checked)
+                  }
+                />
+                <Seedance2Checkbox
+                  id={`${seedance2Id}-s9-tail-anchor`}
+                  checked={seedance2Draft.s9_tail_anchor}
+                  label={t("episode.workbench.video.s9TailAnchor")}
+                  onChange={(checked) =>
+                    updateSeedance2Draft("s9_tail_anchor", checked)
+                  }
+                />
+              </>
             )}
             {showSeedance2ValueStyle && (
               <div className="flex items-center gap-1.5">
@@ -2740,10 +2847,57 @@ export function VideoPane({
                   onDrop={(e) => handleSeedance2ReferenceDrop("final_prompt", e)}
                   mentionLabels={seedance2ReferenceLabels}
                   mentionPreviews={seedance2MentionPreviews}
-                  rows={2}
-                  className={cn("min-h-[72px]", SEEDANCE2_TEXTAREA_CLASS)}
+                  rows={isS9Segment ? 7 : 2}
+                  className={cn(
+                    isS9Segment ? "min-h-[190px]" : "min-h-[72px]",
+                    SEEDANCE2_TEXTAREA_CLASS,
+                  )}
                 />
                 {renderSeedance2ReferenceControls("final_prompt")}
+                {isS9Segment &&
+                  seedance2StatusData?.s9 &&
+                  ((seedance2StatusData.s9.missing_assets?.length ?? 0) > 0 ||
+                    (seedance2StatusData.s9.effective_prompt &&
+                      seedance2StatusData.s9.effective_prompt.trim() !==
+                        seedance2Draft.final_prompt.trim())) && (
+                    <div className="space-y-1.5 rounded-[7px] border border-white/[0.08] bg-white/[0.025] px-2.5 py-2 text-[11px]">
+                      {(seedance2StatusData.s9.missing_assets?.length ?? 0) > 0 && (
+                        <div className="flex items-start gap-1.5 text-amber-200/90">
+                          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+                          <span>
+                            {t("episode.workbench.video.s9MissingAssetsNotice", {
+                              assets: seedance2StatusData.s9.missing_assets
+                                .map((item) => `${item.name} (${item.slot_label})`)
+                                .join("、"),
+                            })}
+                          </span>
+                        </div>
+                      )}
+                      {seedance2StatusData.s9.effective_prompt &&
+                        seedance2StatusData.s9.effective_prompt.trim() !==
+                          seedance2Draft.final_prompt.trim() && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
+                            <span>
+                              {t("episode.workbench.video.s9PromptReboundHint")}
+                            </span>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={() =>
+                                updateSeedance2Draft(
+                                  "final_prompt",
+                                  seedance2StatusData.s9?.effective_prompt ?? "",
+                                )
+                              }
+                            >
+                              {t("episode.workbench.video.s9ApplyReboundPrompt")}
+                            </Button>
+                          </div>
+                        )}
+                    </div>
+                  )}
               </div>
               {(showSeedance2Config || showCustomPromptConfig) && (
                 <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -3416,19 +3570,66 @@ function Seedance2Checkbox({
   );
 }
 
+function resolveBeatS9SegmentMeta(beat: Beat): S9SegmentMeta | null {
+  if (beat.s9_segment_meta && typeof beat.s9_segment_meta === "object") {
+    return beat.s9_segment_meta;
+  }
+  if (beat.s9_segment_meta_json) {
+    try {
+      const parsed = JSON.parse(beat.s9_segment_meta_json);
+      return parsed && typeof parsed === "object"
+        ? (parsed as S9SegmentMeta)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function countBeatS9Subshots(beat: Beat): number {
+  if (Array.isArray(beat.s9_subshots) && beat.s9_subshots.length > 0) {
+    return beat.s9_subshots.length;
+  }
+  if (beat.s9_subshots_json) {
+    try {
+      const parsed = JSON.parse(beat.s9_subshots_json);
+      return Array.isArray(parsed) ? parsed.length : 0;
+    } catch {
+      return 0;
+    }
+  }
+  return 0;
+}
+
 function parseSeedance2Config(
   value: string | null | undefined,
   defaultRatio: Seedance2ConfigDraft["ratio"] = "9:16",
   defaultDuration = 5,
   durationBounds: Seedance2DurationBounds = { min: 1, max: 15 },
+  preserveS9Duration = false,
 ): Seedance2ConfigDraft {
   const text = String(value ?? "").trim();
-  if (!text) return defaultSeedance2Config({}, defaultRatio, defaultDuration, durationBounds);
+  if (!text) {
+    return defaultSeedance2Config(
+      {},
+      defaultRatio,
+      defaultDuration,
+      durationBounds,
+      preserveS9Duration,
+    );
+  }
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const raw = parsed as Record<string, unknown>;
-      return defaultSeedance2Config(raw, defaultRatio, defaultDuration, durationBounds);
+      return defaultSeedance2Config(
+        raw,
+        defaultRatio,
+        defaultDuration,
+        durationBounds,
+        preserveS9Duration,
+      );
     }
   } catch {
     return defaultSeedance2Config(
@@ -3436,9 +3637,16 @@ function parseSeedance2Config(
       defaultRatio,
       defaultDuration,
       durationBounds,
+      preserveS9Duration,
     );
   }
-  return defaultSeedance2Config({}, defaultRatio, defaultDuration, durationBounds);
+  return defaultSeedance2Config(
+    {},
+    defaultRatio,
+    defaultDuration,
+    durationBounds,
+    preserveS9Duration,
+  );
 }
 
 function isSeedanceReferenceCropBackend(value: string | null | undefined): boolean {
@@ -3484,6 +3692,7 @@ function defaultSeedance2Config(
   defaultRatio: Seedance2ConfigDraft["ratio"],
   defaultDuration = 5,
   durationBounds: Seedance2DurationBounds = { min: 1, max: 15 },
+  preserveS9Duration = false,
 ): Seedance2ConfigDraft {
   const textOverlay =
     raw.text_overlay && typeof raw.text_overlay === "object" && !Array.isArray(raw.text_overlay)
@@ -3499,6 +3708,10 @@ function defaultSeedance2Config(
     String(raw.prompt_source ?? "").trim().length > 0 &&
     Number.isFinite(parsedDuration) &&
     parsedDuration > 0;
+  const isS9Raw =
+    preserveS9Duration ||
+    String(raw.prompt_source ?? "") === "s9_script" ||
+    String(raw.prompt_style ?? "") === "s9_segment";
   const duration =
     durationUserSet && Number.isFinite(parsedDuration) && parsedDuration > 0
       ? parsedDuration
@@ -3507,11 +3720,15 @@ function defaultSeedance2Config(
       : Number.isFinite(parsedDuration) && parsedDuration > 0 && parsedDuration !== 4
       ? parsedDuration
       : defaultDuration;
+  const resolvedDuration =
+    isS9Raw && !durationUserSet
+      ? Math.max(durationBounds.min, Math.round(duration))
+      : clampDuration(duration, durationBounds);
   return {
     raw,
     mode: !modeUserSet && raw.mode === "first_frame" ? "multimodal_reference" : rawMode,
     mode_user_set: modeUserSet,
-    duration: clampDuration(duration, durationBounds),
+    duration: resolvedDuration,
     duration_user_set: durationUserSet,
     resolution: normalizeSeedance2Resolution(raw.resolution),
     ratio: ratioUserSet
@@ -3534,6 +3751,8 @@ function defaultSeedance2Config(
       ? raw.prompt_guidance_template_keys.map(String)
       : [],
     final_prompt: String(raw.final_prompt ?? ""),
+    s9_tail_anchor: raw.s9_tail_anchor === true,
+    s9_include_first_frame: raw.s9_include_first_frame === true,
     text_overlay: {
       enabled: textOverlay.enabled === true,
       kind: normalizeSeedance2TextOverlayKind(textOverlay.kind),
@@ -3971,6 +4190,8 @@ function sameSeedance2Config(
     JSON.stringify(left.prompt_guidance_template_keys) ===
       JSON.stringify(right.prompt_guidance_template_keys) &&
     left.final_prompt === right.final_prompt &&
+    left.s9_tail_anchor === right.s9_tail_anchor &&
+    left.s9_include_first_frame === right.s9_include_first_frame &&
     JSON.stringify(left.text_overlay) === JSON.stringify(right.text_overlay)
   );
 }
@@ -4006,6 +4227,8 @@ function serializeSeedance2Config(
     prompt_guidance: draft.prompt_guidance.trim(),
     prompt_guidance_template_keys: draft.prompt_guidance_template_keys,
     final_prompt: finalPrompt,
+    s9_tail_anchor: draft.s9_tail_anchor,
+    s9_include_first_frame: draft.s9_include_first_frame,
     text_overlay: {
       ...draft.text_overlay,
       enabled: false,

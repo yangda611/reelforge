@@ -208,6 +208,20 @@ def resolve_target_video_duration(
                 return parsed
         except (TypeError, ValueError):
             pass
+    s9_meta = beat.get("s9_segment_meta")
+    if s9_meta is None and isinstance(beat.get("s9_segment_meta_json"), str):
+        try:
+            s9_meta = json.loads(beat["s9_segment_meta_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            s9_meta = None
+    if isinstance(s9_meta, dict):
+        planned = s9_meta.get("planned_duration_seconds")
+        try:
+            parsed_planned = float(planned or 0)
+            if parsed_planned > 0:
+                return max(parsed_planned, float(audio_duration or 0))
+        except (TypeError, ValueError):
+            pass
     if audio_duration is not None:
         try:
             parsed = float(audio_duration)

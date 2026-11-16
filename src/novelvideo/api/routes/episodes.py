@@ -1,10 +1,11 @@
 """分集列表 & 规划 & 身份端点。"""
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
@@ -91,7 +92,19 @@ def _episode_detail_payload(ep, episode_num: int) -> dict:
         "identity_default_map": dict(getattr(ep, "identity_default_map", {}) or {}),
         "scene_menu": _dump_episode_items(getattr(ep, "scene_menu", []) or []),
         "prop_menu": _dump_episode_items(getattr(ep, "prop_menu", []) or []),
+        "s9_preview_meta": _parse_s9_preview_meta(ep),
     }
+
+
+def _parse_s9_preview_meta(ep: Any) -> dict[str, Any]:
+    raw = getattr(ep, "s9_preview_meta_json", "{}") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
 
 
 def _asset_compiler_cls():

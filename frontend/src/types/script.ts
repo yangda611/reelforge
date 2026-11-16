@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import type { Beat, SceneRef } from "./episode";
+import type {
+  Beat,
+  S9EpisodePreviewMeta,
+  S9SegmentMeta,
+  S9SubShot,
+  SceneRef,
+} from "./episode";
 
 export interface Script {
   beats: Beat[];
@@ -9,6 +15,7 @@ export interface Script {
   // EpisodeOptimizer.assign_sketch_colors on the backend; the whole string
   // is the value — FE parses out the hex for UI.
   sketch_colors?: Record<string, string>;
+  s9_preview_meta?: S9EpisodePreviewMeta | null;
 }
 
 export interface BeatUpdate {
@@ -24,4 +31,10 @@ export interface BeatUpdate {
   speaker?: string;
   detected_identities?: string[];
   detected_props?: string[];
+  segment_title?: string;
+  s9_subshots?: S9SubShot[];
+  s9_segment_meta?: S9SegmentMeta;
+  planned_duration_seconds?: number;
+  duration_seconds?: number;
+  estimated_duration?: number;
 }

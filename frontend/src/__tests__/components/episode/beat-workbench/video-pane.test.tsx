@@ -149,11 +149,19 @@ beforeAll(async () => {
                 seedance2GeneratePrompt: "AI 优化",
                 promptStyleLabel: "提示词方向",
                 promptStyles: {
+                  s9_segment: "老唐 s9 连续分镜",
                   seedance_2_0: "Seedance 2.0",
                   seedance_2_5: "Seedance 2.5",
                   minimax_h3: "MiniMax-H3",
                   generic: "通用运动",
                 },
+                s9PlannedDurationHint: "s9 推算段长 {{seconds}} 秒（按分镜结构计算）",
+                s9DurationExceedsModelMax: "s9 推算时长 {{planned}} 秒超出当前模型上限 {{max}} 秒，请切换至 Seedance 2.5 或回「脚本」页按 15 秒重新拆镜",
+                s9IncludeFirstFrame: "纳入首帧渲染图 (@图片1)",
+                s9TailAnchor: "尾帧锚点镜",
+                s9MissingAssetsNotice: "待绑定虾塘素材：{{assets}}",
+                s9PromptReboundHint: "检测到虾塘素材变化，可同步重排 @图片N / @音频N 编号",
+                s9ApplyReboundPrompt: "应用重排后提示词",
                 customVideoInspector: "视频参数与提示词",
                 seedance2PromptGenerated: "Seedance2 Prompt 已优化",
                 seedance2SubjectPromptGenerated: "主体提示词已优化",
@@ -233,6 +241,19 @@ const videoQueryMockState = vi.hoisted(() => ({
   hideReturnedLastFrame: false,
   includeAudioAsset: false,
   seedance2AssetsOverride: null as Array<Record<string, unknown>> | null,
+  s9StatusOverride: null as {
+    is_s9: boolean;
+    segment_title: string;
+    planned_duration_seconds: number;
+    missing_assets: Array<{
+      slot_label: string;
+      media_type: "image" | "audio";
+      asset_kind: string;
+      name: string;
+      asset_id: string;
+    }>;
+    effective_prompt: string;
+  } | null,
 }));
 
 vi.mock("@/lib/queries/video", () => ({
@@ -286,6 +307,15 @@ vi.mock("@/lib/queries/video", () => ({
           dialogue_only: false,
           min_duration: 4,
           max_duration: 15,
+        },
+        {
+          value: "huimeng_seedance-2.5",
+          label: "HuiMeng Seedance 2.5",
+          is_default: false,
+          is_seedance2: true,
+          dialogue_only: false,
+          min_duration: 4,
+          max_duration: 30,
         },
         {
           value: "newapi_seedance-2.0-fast",
@@ -616,6 +646,9 @@ vi.mock("@/lib/queries/video", () => ({
               asset.key !== "returned_last_frame",
           ),
         },
+        ...(videoQueryMockState.s9StatusOverride
+          ? { s9: videoQueryMockState.s9StatusOverride }
+          : {}),
       },
     } : undefined,
     isLoading: false,
@@ -732,6 +765,7 @@ beforeEach(() => {
   videoQueryMockState.hideReturnedLastFrame = false;
   videoQueryMockState.includeAudioAsset = false;
   videoQueryMockState.seedance2AssetsOverride = null;
+  videoQueryMockState.s9StatusOverride = null;
   useAspectRatioStore.getState().reset();
   updateBeatMock.mockReset();
   updateBeatMock.mockResolvedValue({ ok: true, data: makeBeat() });
@@ -2421,6 +2455,138 @@ describe("VideoPane Seedance2 inspector", () => {
         ratio: "16:9",
         mode: "multimodal_reference",
         seedance2ConfigJson: expect.any(String),
+      }),
+    );
+  });
+});
+
+describe("VideoPane s9 segment integration", () => {
+  it("preserves s9 calculated duration above 15s, warns & blocks submit on 2.0, and unlocks on Seedance 2.5", async () => {
+    const user = userEvent.setup();
+    const s9Beat = makeBeat({
+      estimated_duration: 22,
+      s9_segment_meta: {
+        segment_number: 1,
+        segment_title: "便利店夜哨与交易",
+        planned_duration_seconds: 22,
+        max_segment_seconds: 30,
+        story_beat: "完整夜晚交易段落",
+        tail_anchor: false,
+        include_first_frame: false,
+        segment_asset_slots: [],
+      },
+      seedance2_config_json: JSON.stringify({
+        mode: "multimodal_reference",
+        duration: 22,
+        duration_user_set: false,
+        resolution: "720p",
+        ratio: "9:16",
+        prompt_source: "s9_script",
+        prompt_style: "s9_segment",
+        final_prompt: "【参考职责】@图片1约束林默。分镜1至分镜5连续推进。",
+      }),
+    });
+
+    const { rerender } = renderPane(s9Beat, {
+      defaultBackend: "huimeng_seedance-2.0-fast",
+    });
+
+    const durationInput = screen.getByLabelText("时长");
+    expect(durationInput).toHaveValue(22);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "s9 推算时长 22 秒超出当前模型上限 15 秒",
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "重新生成" })[0]);
+    expect(screen.queryByRole("button", { name: "确认" })).not.toBeInTheDocument();
+    expect(regenerateMock).not.toHaveBeenCalled();
+
+    rerender(
+      <I18nextProvider i18n={i18n}>
+        <VideoPane
+          beat={s9Beat}
+          project="demo"
+          episode={1}
+          state="ready"
+          defaultBackend="huimeng_seedance-2.5"
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByLabelText("时长")).toHaveValue(22);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(/s9 推算段长 22 秒/)).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "重新生成" })[0]);
+    await user.click(screen.getByRole("button", { name: "确认" }));
+    await waitFor(() => expect(regenerateMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("renders s9 controls, forwards toggles to AI optimize, and applies rebound prompts", async () => {
+    const user = userEvent.setup();
+    videoQueryMockState.s9StatusOverride = {
+      is_s9: true,
+      segment_title: "便利店",
+      planned_duration_seconds: 14,
+      missing_assets: [
+        {
+          slot_label: "@图片2",
+          media_type: "image",
+          asset_kind: "scene",
+          name: "深夜便利店",
+          asset_id: "scene_store",
+        },
+      ],
+      effective_prompt: "以@图片1保持林默一致。深夜便利店内暴雨落于窗外。",
+    };
+
+    renderPane(
+      makeBeat({
+        estimated_duration: 14,
+        seedance2_config_json: JSON.stringify({
+          mode: "multimodal_reference",
+          duration: 14,
+          duration_user_set: false,
+          resolution: "720p",
+          ratio: "9:16",
+          prompt_source: "s9_script",
+          prompt_style: "s9_segment",
+          s9_include_first_frame: false,
+          s9_tail_anchor: false,
+          final_prompt: "以@图片1保持林默一致，@图片2约束场景。",
+        }),
+      }),
+      { defaultBackend: "huimeng_seedance-2.0-fast" },
+    );
+
+    expect(screen.getByText(/待绑定虾塘素材：深夜便利店 \(@图片2\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "应用重排后提示词" }));
+    expect(screen.getByLabelText("Seedance2.0主体提示词")).toHaveValue(
+      "以@图片1保持林默一致。深夜便利店内暴雨落于窗外。",
+    );
+
+    const includeFirstFrame = screen.getByRole("checkbox", {
+      name: "纳入首帧渲染图 (@图片1)",
+    });
+    const tailAnchor = screen.getByRole("checkbox", { name: "尾帧锚点镜" });
+    await user.click(includeFirstFrame);
+    await user.click(tailAnchor);
+
+    await waitForSeedance2Autosave();
+    const lastSavedPayload =
+      updateBeatMock.mock.calls[updateBeatMock.mock.calls.length - 1][0];
+    expect(JSON.parse(lastSavedPayload.data.seedance2_config_json)).toMatchObject({
+      s9_include_first_frame: true,
+      s9_tail_anchor: true,
+    });
+
+    await user.click(screen.getByRole("button", { name: "AI 优化" }));
+    await waitFor(() => expect(generateSeedance2PromptMock).toHaveBeenCalled());
+    expect(generateSeedance2PromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptStyle: "s9_segment",
+        s9IncludeFirstFrame: true,
+        s9TailAnchor: true,
       }),
     );
   });

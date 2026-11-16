@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
 import { useEffect, useState } from "react";
-import { FileText } from "lucide-react";
+import { BookOpen } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { splitLiteralSourceText } from "@/lib/literal-source-text";
 import { cn } from "@/lib/utils";
 
 interface EpisodeSourceEditorLabels {
@@ -22,135 +19,118 @@ interface EpisodeSourceEditorLabels {
   sourceLabel: string;
   sourceMeta: (count: number) => string;
   sourcePlaceholder: string;
-  linePreviewLabel: string;
-  lineCount: (count: number) => string;
-  noLines: string;
+  linePreviewLabel?: string;
+  lineCount?: (count: number) => string;
+  noLines?: string;
 }
 
 interface EpisodeSourceEditorProps {
   rawContent: string;
   sourceText: string;
   labels: EpisodeSourceEditorLabels;
-  onSave: (next: string) => void | Promise<void>;
+  disabled?: boolean;
   saving?: boolean;
+  headerRight?: React.ReactNode;
+  onSave: (value: string) => void | Promise<void>;
   className?: string;
 }
 
-const SCRIPT_PANEL_CONTROL_CLASS =
-  "!h-6 gap-1 !rounded-[6px] border-white/[0.12] bg-white/[0.04] px-2 text-[11px] font-normal text-foreground/78 shadow-none transition-colors hover:border-white/[0.2] hover:bg-white/[0.05] hover:text-foreground focus-visible:border-white/24 focus-visible:ring-0 focus-visible:outline-none [&_svg]:!size-3";
+function normalizeSourceText(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
+function countNonEmptyParagraphs(value: string): number {
+  const normalized = normalizeSourceText(value).trim();
+  if (!normalized) return 0;
+  return normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
+}
 
 export function EpisodeSourceEditor({
   rawContent,
   sourceText,
   labels,
-  onSave,
+  disabled = false,
   saving = false,
+  headerRight,
+  onSave,
   className,
 }: EpisodeSourceEditorProps) {
-  const [draftLines, setDraftLines] = useState<string[]>(() =>
-    splitLiteralSourceText(sourceText),
-  );
-  const lineCount = draftLines.filter((line) => line.trim()).length;
+  void saving;
+  const [draft, setDraft] = useState(() => normalizeSourceText(sourceText));
+  const [rawOpen, setRawOpen] = useState(false);
 
   useEffect(() => {
-    setDraftLines(splitLiteralSourceText(sourceText));
+    setDraft(normalizeSourceText(sourceText));
   }, [sourceText]);
 
-  const serializeDraft = (lines: string[]) =>
-    lines
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join("\n");
+  const trimmedDraft = draft.trim();
+  const savedTrimmed = normalizeSourceText(sourceText).trim();
+  const charCount = trimmedDraft.length;
+  const paragraphCount = countNonEmptyParagraphs(draft);
 
-  const commit = () => {
-    const next = serializeDraft(draftLines);
-    if (saving || next === sourceText) return;
-    void onSave(next);
+  const commitValue = (rawValue: string) => {
+    const nextTrimmed = normalizeSourceText(rawValue).trim();
+    if (nextTrimmed === savedTrimmed) return;
+    void onSave(nextTrimmed);
   };
-
-  const handleLineChange = (index: number, value: string) => {
-    const parts = value.split(/\r?\n/);
-    setDraftLines((current) => {
-      const next = current.length > 0 ? [...current] : [""];
-      next.splice(index, 1, ...parts);
-      return next;
-    });
-  };
-  const visibleLines = draftLines.length > 0 ? draftLines : [""];
 
   return (
-    <div
-      className={cn(
-        "flex min-h-0 flex-col",
-        className,
-      )}
-    >
-      <div className="flex min-h-0 flex-col">
-        <div className="mb-2 flex h-6 shrink-0 items-center justify-between gap-3">
-          <Label
-            className="flex min-w-0 items-baseline gap-2 text-muted-foreground"
-          >
-            <span className="truncate text-sm font-semibold tracking-tight text-foreground">
+    <div className={cn("space-y-4", className)}>
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+            <h2 className="text-sm font-semibold tracking-tight text-foreground">
               {labels.sourceLabel}
+            </h2>
+            <span className="text-[11px] text-muted-foreground/68">
+              ({labels.sourceMeta(charCount)}
+              {paragraphCount > 0 ? ` · ${paragraphCount} 段` : ""})
             </span>
-            <span className="shrink-0 text-xs">
-              ({labels.sourceMeta(lineCount)})
-            </span>
-          </Label>
-          <Dialog>
-            <DialogTrigger
-              className={cn(
-                "inline-flex w-[112px] shrink-0 items-center justify-center border",
-                SCRIPT_PANEL_CONTROL_CLASS,
-              )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setRawOpen(true)}
+              className="h-7 gap-1.5 rounded-[7px] border border-white/[0.08] bg-white/[0.025] px-2.5 text-xs font-normal text-foreground/78 shadow-none hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-foreground dark:border-white/[0.08] dark:bg-white/[0.025] dark:hover:bg-white/[0.05] [&_svg]:size-3.5"
             >
-              <FileText className="size-3" />
+              <BookOpen />
               {labels.rawActionLabel}
-            </DialogTrigger>
-            <DialogContent className="gap-4 overflow-hidden rounded-2xl border border-white/8 bg-background/68 p-7 shadow-none backdrop-blur-3xl sm:max-w-3xl">
-              <DialogHeader className="gap-2">
-                <DialogTitle className="text-lg font-medium tracking-tight">
-                  {labels.rawLabel}
-                </DialogTitle>
-              </DialogHeader>
-              <div className="max-h-[68vh] overflow-y-auto px-1 py-1 font-mono text-sm leading-relaxed">
-                {rawContent ? (
-                  <p className="whitespace-pre-wrap text-foreground/85">
-                    {rawContent}
-                  </p>
-                ) : (
-                  <p className="italic text-muted-foreground/60">
-                    {labels.noRawText}
-                  </p>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
+            </Button>
+            {headerRight}
+          </div>
         </div>
-        <div className="rounded-[10px] border border-white/[0.06] px-2 py-4">
-          <ol className="space-y-3">
-            {visibleLines.map((line, index) => (
-              <li
-                key={index}
-                className="relative min-h-9 rounded-[7px] border border-white/[0.08] bg-white/[0.025] transition-colors focus-within:border-white/[0.2] focus-within:bg-white/[0.04] focus-within:ring-2 focus-within:ring-white/[0.08]"
-              >
-                <span className="pointer-events-none absolute left-3 top-2 font-mono text-xs leading-relaxed tabular-nums text-muted-foreground">
-                  {index + 1}.
-                </span>
-                <Textarea
-                  aria-label={`${labels.sourceLabel} ${index + 1}`}
-                  value={line}
-                  onChange={(e) => handleLineChange(index, e.target.value)}
-                  onBlur={commit}
-                  disabled={saving}
-                  placeholder={index === 0 ? labels.sourcePlaceholder : undefined}
-                  className="min-h-9 resize-none rounded-none border-0 bg-transparent py-1.5 pl-12 pr-3 font-mono text-sm leading-relaxed shadow-none focus-visible:border-transparent focus-visible:ring-0"
-                />
-              </li>
-            ))}
-          </ol>
-        </div>
-      </div>
+
+        <textarea
+          aria-label={labels.sourceLabel}
+          value={draft}
+          disabled={disabled}
+          rows={14}
+          placeholder={labels.sourcePlaceholder}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={(event) => commitValue(event.target.value)}
+          className={cn(
+            "ui-scrollbar min-h-[280px] w-full resize-y rounded-[12px] border border-white/[0.08] bg-[#0d0e14] px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground outline-none transition-[border-color,box-shadow] duration-150",
+            "placeholder:text-muted-foreground/50 hover:border-white/[0.14] focus:border-[var(--accent)]/60 focus:ring-[3px] focus:ring-[var(--accent)]/15",
+            "disabled:cursor-not-allowed disabled:opacity-55",
+          )}
+        />
+      </section>
+
+      <Dialog open={rawOpen} onOpenChange={setRawOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{labels.rawLabel}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-border/60 bg-background/40 p-3 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+            {rawContent.trim() ? rawContent : labels.noRawText}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

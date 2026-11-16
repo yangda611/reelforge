@@ -131,6 +131,9 @@ def build_seedance2_huimeng_params(
     reference_images: list[str] | tuple[str, ...] | None = None,
     reference_videos: list[str] | tuple[str, ...] | None = None,
     reference_audios: list[str] | tuple[str, ...] | None = None,
+    max_images: int = 9,
+    max_videos: int = 3,
+    max_audios: int = 3,
 ) -> dict[str, Any]:
     """Build mutually exclusive Seedance 2.0 params for HuiMeng."""
 
@@ -159,12 +162,12 @@ def build_seedance2_huimeng_params(
             raise ValueError(
                 "reference_images or reference_videos is required for Seedance 2.0 multimodal mode"
             )
-        if len(images) > 9:
-            raise ValueError("reference_images supports at most 9 images")
-        if len(videos) > 3:
-            raise ValueError("reference_videos supports at most 3 videos")
-        if len(audios) > 3:
-            raise ValueError("reference_audios supports at most 3 audios")
+        if len(images) > max(1, int(max_images)):
+            raise ValueError(f"reference_images supports at most {int(max_images)} images")
+        if len(videos) > max(1, int(max_videos)):
+            raise ValueError(f"reference_videos supports at most {int(max_videos)} videos")
+        if len(audios) > max(0, int(max_audios)):
+            raise ValueError(f"reference_audios supports at most {int(max_audios)} audios")
         if images:
             params["reference_images"] = images
         if videos:

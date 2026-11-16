@@ -14,6 +14,7 @@ vi.mock("react-i18next", () => ({
       if (key === "episode.beat.deselect") return "取消选择 Beat";
       if (key === "episode.beat.insertAfter") return `在第 ${vars?.n} 个 beat 后插入`;
       if (key === "episode.beat.openFreezone") return "进入虾画 Beat 工作台";
+      if (key === "episode.beat.s9Badge") return `${vars?.seconds}s · ${vars?.shots}镜`;
       return key;
     },
   }),
@@ -119,5 +120,34 @@ describe("BeatCard", () => {
     expect(onOpenFreezone).toHaveBeenCalledWith(4, "frame");
     expect(onCardClick).not.toHaveBeenCalled();
     expect(screen.queryByText("进入虾画 Beat 工作台")).not.toBeInTheDocument();
+  });
+
+  it("renders s9 planned duration and subshot count badge next to beat badge when present", () => {
+    renderBeatCard({
+      beat: {
+        ...beat,
+        segment_title: "大段1 · 便利店夜哨",
+        estimated_duration: 18,
+        s9_segment_meta: {
+          segment_number: 1,
+          segment_title: "大段1 · 便利店夜哨",
+          planned_duration_seconds: 18,
+          max_segment_seconds: 30,
+          story_beat: "守夜遇不速之客",
+          tail_anchor: false,
+          include_first_frame: false,
+          segment_asset_slots: [],
+        },
+        s9_subshots: [
+          { shot_number: 1 } as never,
+          { shot_number: 2 } as never,
+          { shot_number: 3 } as never,
+          { shot_number: 4 } as never,
+        ],
+      } as Beat,
+    });
+
+    expect(screen.getByText("episode.beat.badge")).toBeInTheDocument();
+    expect(screen.getByText("18s · 4镜")).toBeInTheDocument();
   });
 });
