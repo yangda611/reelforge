@@ -12,13 +12,4 @@ export const GLASS_DIALOG_EMPTY_SIZE_CLASS =
 export const GLASS_DIALOG_EMPTY_BODY_CLASS =
   "flex min-h-[220px] items-center justify-center px-8 text-center text-sm text-muted-foreground";
 
-export const GLASS_DIALOG_HEADER_CLASS =
-  "border-b border-white/[0.1] bg-black/10 backdrop-blur-xl";
-
-export const GLASS_DIALOG_TOOLBAR_CLASS =
-  "border-b border-white/[0.1] bg-black/10 backdrop-blur-xl";
-
-export const GLASS_DIALOG_SIDEBAR_CLASS =
-  "border-r border-white/[0.1] bg-black/15 backdrop-blur-xl";
-
 export const TRANSPARENT_DIALOG_FOOTER_CLASS = "border-t-0 !bg-transparent";

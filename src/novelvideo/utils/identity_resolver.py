@@ -60,10 +60,7 @@ def resolve_visual_description_markers(
     visual_description: str,
     character_map: dict[str, dict],
     identity_to_char: dict[str, str] | None = None,
-    use_names: bool = False,
-    keep_identity_suffix: bool = False,
     use_identity_id: bool = False,
-    append_char_name: bool = False,
 ) -> str:
     """替换 visual_description 中的 {{}} 标记为 character_tag 或角色名。
 
@@ -76,11 +73,7 @@ def resolve_visual_description_markers(
         visual_description: 包含 {{}} 标记的画面描述
         character_map: {角色名: {character_tag, ...}} 或 {角色名: CharConfig}
         identity_to_char: {identity_id: 角色名} 反向映射（可选）
-        use_names: True 时返回角色名而非 tag（Sketch 模式用）
-        keep_identity_suffix: True 时保留身份后缀，如 唐若瑜(婚后时期)（Sketch 模式用）
         use_identity_id: True 时直接返回 identity_id 原文（如 唐若瑜_婚后时期）
-        append_char_name: True 时在 identity tag 后附加角色中文名，
-            如 [TRY_2ec7·唐若瑜]（仅 use_identity_id=True 时生效，Sketch 模式用）
 
     Returns:
         替换后的文本
@@ -95,16 +88,7 @@ def resolve_visual_description_markers(
             if use_identity_id:
                 # 身份级 tag：同一角色不同身份产生不同 hash
                 identity_tag = compute_char_tag(char_name, identity_id=marker)
-                if append_char_name and char_name:
-                    # [TRY_2ec7] → [TRY_2ec7·唐若瑜]
-                    identity_tag = identity_tag[:-1] + f"·{char_name}]"
                 return f"{identity_tag} "
-            if use_names:
-                # 保留身份后缀：{{唐若瑜_婚后时期}} → 唐若瑜(婚后时期)
-                if keep_identity_suffix and marker != char_name and marker.startswith(char_name + "_"):
-                    suffix = marker[len(char_name) + 1:]
-                    return f"{char_name}({suffix})"
-                return char_name
             return char_tag
         # 未匹配：原样保留（不丢括号）
         return m.group(0)

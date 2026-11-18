@@ -161,35 +161,11 @@ def m03_completion_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         finally:
             await store.close()
 
-    async def write_video_prompt() -> dict:
-        from novelvideo.api.deps import make_sqlite_store_for_context
-
-        store = await make_sqlite_store_for_context(ctx)
-        try:
-            await store.update_beat_asset(
-                1,
-                1,
-                video_prompt="fixed video prompt",
-                keyframe_prompt="fixed keyframe prompt",
-            )
-            return (await store.get_beats_as_dicts(1))[0]
-        finally:
-            await store.close()
-
     def fake_build_episodes(envelope, task_ctx):
         return {"episodes": asyncio.run(write_episode())}
 
     def fake_script_writer(envelope, task_ctx):
         return {"episode": 1, "beats": asyncio.run(write_beats()), "review_passed": True}
-
-    def fake_beat_video_prompt(envelope, task_ctx):
-        beat = asyncio.run(write_video_prompt())
-        return {
-            "episode": 1,
-            "beat_num": 1,
-            "field": "video_prompt",
-            "prompt": beat["video_prompt"],
-        }
 
     async def fake_seedance2_prompt_for_panel(**kwargs):
         from novelvideo.seedance2_i2v.models import dump_seedance2_config
@@ -203,7 +179,6 @@ def m03_completion_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     register_project_task_runner("build_episodes", fake_build_episodes)
     register_project_task_runner("script_writer", fake_script_writer)
-    register_project_task_runner("beat_video_prompt", fake_beat_video_prompt)
     monkeypatch.setattr(episodes, "resolve_project_scope", resolve_project_scope)
     monkeypatch.setattr(scripts, "resolve_project_scope", resolve_project_scope)
     monkeypatch.setattr(tasks, "resolve_project_context", resolve_project_context)
@@ -330,7 +305,7 @@ def test_plan_task_completion_writes_episodes_and_task_envelope(m03_completion_c
     assert payload["metadata"]["backend"] == "inline"
 
 
-def test_script_and_video_prompt_tasks_complete_with_sorted_persisted_beats(m03_completion_client):
+def test_script_task_completes_with_sorted_persisted_beats(m03_completion_client):
     client, ctx = m03_completion_client
     client.post(
         "/api/v1/projects/proj_m03_completion/episodes/plan",
@@ -357,28 +332,6 @@ def test_script_and_video_prompt_tasks_complete_with_sorted_persisted_beats(m03_
         (20, 2),
         (20, 3),
     ]
-
-    from novelvideo.utils.path_resolver import PathResolver
-
-    sketch_path = PathResolver(str(ctx.output_dir), 1).sketch(1)
-    sketch_path.parent.mkdir(parents=True, exist_ok=True)
-    sketch_path.write_bytes(b"sketch")
-
-    video_prompt_response = client.post(
-        "/api/v1/projects/proj_m03_completion/episodes/1/beats/1/video-prompt/generate",
-        json={},
-    )
-    assert video_prompt_response.status_code == 200
-    assert video_prompt_response.json()["task_type"] == "beat_video_prompt"
-    prompt_state = _wait_for_task(ctx, "beat_video_prompt", 1, beat_num=1)
-    assert prompt_state.status == "completed"
-    assert prompt_state.result["prompt"] == "fixed video prompt"
-    assert prompt_state.logs
-    assert prompt_state.metadata["backend"] == "inline"
-
-    beats = asyncio.run(_load_beats(ctx))
-    assert beats[0]["video_prompt"] == "fixed video prompt"
-    assert beats[0]["keyframe_prompt"] == "fixed keyframe prompt"
 
 
 def test_negative_manual_shot_delete_rejects_regular_beat(m03_completion_client):

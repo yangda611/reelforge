@@ -51,18 +51,6 @@
     },
     {
       "id": 5,
-      "prompt": "展示第 1 集第 3 个 beat 的当前草图",
-      "expected_output": "Activate dramaclaw and use the formal sketch display path, not sketch candidates, URLs, or text-only media output.",
-      "files": [],
-      "expectations": [
-        "Uses the current-sketch display behavior",
-        "Does not substitute candidate images or first frames",
-        "Does not print a media URL or markdown image",
-        "Keeps final natural-language text brief"
-      ]
-    },
-    {
-      "id": 6,
       "prompt": "帮我写一个赛博朋克女总裁复仇短剧",
       "expected_output": "Activate dramaclaw because this is an explicit production request, but do not create or ingest a screenplay from the one-line idea; direct the user to upload an existing screenplay in 虾料.",
       "files": [],
@@ -74,7 +62,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 6,
       "prompt": "这个软件项目目前进度怎么样？",
       "expected_output": "Do not activate dramaclaw without DramaClaw production context; ask which software project or answer from the active non-DramaClaw context.",
       "files": [],
@@ -85,7 +73,7 @@
       ]
     },
     {
-      "id": 8,
+      "id": 7,
       "prompt": "你好，在吗？",
       "expected_output": "Reply briefly without activating dramaclaw or calling project APIs.",
       "files": [],

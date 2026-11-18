@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-from novelvideo.generators.nanobanana_grid import NanoBananaGridGenerator
 from novelvideo.generators.prompt_builder import (
     CharacterConfig,
     GridConfig,
@@ -148,36 +147,3 @@ def test_color_identification_binds_combined_board_marker_to_shared_image_slot()
     assert "GREEN sketch figure must use Image 2" in color_map
     assert "full uploaded multi-view sheet in that combined reference board" in color_map
 
-
-def test_combined_composite_attachment_uses_full_sheets_not_center_crops(tmp_path) -> None:
-    from PIL import Image
-
-    sizes = [(300, 100), (420, 120), (510, 140), (630, 160)]
-    ctx = _render_context_with_composite_references(4, tmp_path=tmp_path)
-    for idx, char_cfg in enumerate(ctx.characters.values()):
-        Image.new("RGB", sizes[idx], (idx * 40, 0, 0)).save(char_cfg.reference_path)
-
-    generator = NanoBananaGridGenerator.__new__(NanoBananaGridGenerator)
-    captured_sizes = []
-
-    def fail_crop_center_panel(_path):
-        raise AssertionError("_crop_center_panel should not be called for combined_composite")
-
-    def fake_merge_character_panels(images, compress_quality=60):
-        captured_sizes.extend(image.size for image in images)
-        return "merged-full-sheet-part"
-
-    generator._crop_center_panel = fail_crop_center_panel
-    generator._merge_character_panels = fake_merge_character_panels
-
-    contents = []
-    generator._append_reference_parts_from_plan(
-        contents,
-        ctx,
-        list(ctx.characters),
-        {},
-        allowed_kinds={"combined_composite"},
-    )
-
-    assert contents == ["merged-full-sheet-part"]
-    assert captured_sizes == sizes

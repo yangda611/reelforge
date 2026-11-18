@@ -161,7 +161,7 @@
         },
         "canvasOverwrite": {
           "question": "Os resultados no Shrimp Canvas substituem automaticamente os meus recursos da linha principal?",
-          "answer": "Não. Tudo o que for gerado ou carregado no Shrimp Canvas é, por predefinição, uma proposta. Só entra na linha principal do projeto quando o confirmar explicitamente e escolher um destino — personagem, cena, adereço, esboço de momento narrativo, primeiro fotograma ou vídeo."
+          "answer": "Não. Tudo o que for gerado ou carregado no Shrimp Canvas é, por predefinição, uma proposta. Só entra na linha principal do projeto quando o confirmar explicitamente e escolher um destino — personagem, cena, adereço, primeiro fotograma do momento narrativo ou vídeo."
         },
         "whyAssetsFirst": {
           "question": "Porquê organizar primeiro as personagens, cenas, adereços e vozes?",
@@ -177,7 +177,7 @@
         },
         "unstableResults": {
           "question": "O que devo verificar primeiro quando os resultados são incoerentes?",
-          "answer": "Identifique a etapa que está a falhar: o texto é claro, a identidade da personagem está correta, a cena e os adereços têm referências, o esboço descreve o plano, o primeiro fotograma é estável, o áudio corresponde? Não comece por voltar a gerar o vídeo repetidamente — corrija primeiro os recursos das etapas anteriores e a descrição do plano."
+          "answer": "Identifique a etapa que está a falhar: o texto é claro, a identidade da personagem está correta, a cena e os adereços têm referências, a descrição do plano diz claramente o que é o plano, o primeiro fotograma é estável, o áudio corresponde? Não comece por voltar a gerar o vídeo repetidamente — corrija primeiro os recursos das etapas anteriores e a descrição do plano."
         },
         "dcUniverse": {
           "question": "O que significa «Make Your DC Universe.»?",
@@ -1198,7 +1198,6 @@
         "assets": "Biblioteca de recursos"
       },
       "roles": {
-        "current_sketch": "Esboço",
         "current_frame": "Fotograma",
         "current_video": "Vídeo",
         "current_audio": "Áudio",
@@ -1309,7 +1308,6 @@
         "scene": "Cena",
         "prop": "Adereço",
         "beat": "Beat",
-        "sketch": "Esboço",
         "frame": "Fotograma",
         "video": "Vídeo",
         "audio": "Áudio",
@@ -1318,10 +1316,8 @@
       },
       "binding": {
         "background_candidate": "Fundo candidato",
-        "sketch_candidate": "Esboço candidato",
         "frame_candidate": "Fotograma candidato",
         "selected_background": "Fundo atual",
-        "current_sketch": "Esboço atual",
         "current_frame": "Fotograma atual"
       },
       "withEpisodeBeat": "{{label}} · EP{{episode}}/B{{beat}}",
@@ -1392,7 +1388,6 @@
       },
       "kinds": {
         "frame": "Primeiro fotograma",
-        "sketch": "Esboço",
         "director_render": "Recurso de composição do realizador",
         "selected_background": "Fundo atual",
         "identity": "Imagem de identidade da personagem",
@@ -1417,7 +1412,6 @@
       },
       "shortKinds": {
         "frame": "Primeiro fotograma",
-        "sketch": "Esboço",
         "director_render": "Composição do realizador",
         "selected_background": "Fundo atual",
         "video": "Vídeo",
@@ -1442,7 +1436,6 @@
       },
       "nodeLabels": {
         "frame": "Fotograma",
-        "sketch": "Esboço",
         "director_render": "Renderização do realizador",
         "selected_background": "Fundo atual",
         "video": "Vídeo",
@@ -2034,7 +2027,6 @@
     "episodes": "Estúdio de episódios",
     "script": "Argumento",
     "literalScript": "Argumento literal",
-    "sketches": "Esboços",
     "audio": "Áudio",
     "video": "Vídeo",
     "compose": "Compor",
@@ -2553,7 +2545,7 @@
     "gatewayNotConfiguredAction": "Configure gateway",
     "gatewayNotConfiguredToast": "Configure the model gateway first",
     "emptyTitle": "Comece a sua primeira história",
-    "emptyDescription": "Crie um projeto para começar a escrever guiões, gerar esboços e produzir episódios.",
+    "emptyDescription": "Crie um projeto para começar a escrever guiões, gerar storyboards e produzir episódios.",
     "heroTitle": "Comece a sua jornada criativa",
     "heroDescription": "Transforme a sua história em conteúdo de vídeo apelativo, importando guiões, definindo estilos e criando personagens.",
     "heroButton": "Novo projeto",
@@ -2634,7 +2626,7 @@
     },
     "purgeDialog": {
       "title": "Eliminar permanentemente \"{{name}}\"?",
-      "description": "Todos os guiões, esboços, áudio e vídeo deste projeto serão removidos. Isto não pode ser desfeito.",
+      "description": "Todos os guiões, áudio e vídeo deste projeto serão removidos. Isto não pode ser desfeito.",
       "typeHint": "Introduza o nome do projeto para confirmar",
       "confirm": "Eliminar definitivamente"
     },
@@ -2936,7 +2928,7 @@
       "world": "mundo",
       "ffmpeg": "composição"
     },
-    "generationChannelPolicyBlocked": "Este pedido foi bloqueado pela política de canal do modelo (não por um limite real de pedidos) — os pedidos de regeneração de esboços de baixa qualidade são normalmente ignorados. Tente novamente mais tarde ou aumente a qualidade da geração e volte a tentar.",
+    "generationChannelPolicyBlocked": "Este pedido foi bloqueado pela política de canal do modelo (não por um limite real de pedidos) — os pedidos de regeneração de imagens de baixa qualidade são normalmente ignorados. Tente novamente mais tarde ou aumente a qualidade da geração e volte a tentar.",
     "generationInputContentPolicyBlocked": "Tipo de erro: a revisão de segurança de conteúdo falhou (imagem de entrada). Se contiver uma pessoa real autorizada, ative a revisão de pessoas reais e tente novamente; caso contrário, substitua a entrada.",
     "generationOutputContentPolicyBlocked": "Tipo de erro: a revisão de segurança de conteúdo falhou (vídeo ou imagem de saída). O modelo rejeitou este resultado. Ajuste as descrições que envolvam violência, danos, privacidade ou outro conteúdo sensível e tente novamente.",
     "generationContentPolicyBlocked": "Tipo de erro: a revisão de segurança de conteúdo falhou. O modelo rejeitou este pedido de geração. Ajuste o prompt ou substitua a entrada e tente novamente.",
@@ -2953,24 +2945,18 @@
     "stop": "Parar",
     "reupload": "Carregar novamente",
     "regenerate": "Regenerar",
-    "generateNew": "Gerar novo",
     "regenerateSelected": "Regenerar selecionado",
     "preview": "Visualização",
-    "cutToPool": "Mover para o pool",
     "noAudio": "Sem áudio",
     "noVideo": "Nenhum vídeo",
     "noBeatData": "Sem dados do beat",
     "download": "Transferir",
-    "copy": "Copiar",
-    "comingSoon": "Em breve",
-    "forceUse": "Forçar utilização",
     "use": "Utilizar",
     "confirmExecute": "Confirmar",
     "refresh": "Atualizar",
     "refreshDone": "Concluído",
     "preparing": "A preparar...",
     "removed": "(removido)",
-    "new": "NOVO",
     "saveStatus": {
       "saving": "A guardar…",
       "saved": "Guardado",
@@ -3232,7 +3218,6 @@
     "generateAudio": "Gerar áudio",
     "audioGenerating": "A gerar áudio...",
     "generateAllVideos": "Gerar todos os vídeos",
-    "globalOptimize": "Otimizar globalmente",
     "videoGenerating": "A gerar vídeo...",
     "addSubtitles": "Adicionar legendas",
     "composeVideo": "Compor vídeo",
@@ -3244,20 +3229,9 @@
     "audioTab": "Áudio",
     "videoTab": "Vídeo",
     "composeTab": "Compor",
-    "globalOptimizeStarted": "Tarefa de otimização global iniciada",
     "ttsComplete": "Geração TTS concluída",
     "ttsPreview": "Visualização",
     "ttsPreviewPlaying": "A reproduzir pré-visualização..."
-  },
-  "sketches": {
-    "assignColors": "Atribuir cores",
-    "batchSketches": "Esboços em lote",
-    "generateSketches": "Gerar esboços",
-    "generating": "A gerar esboços...",
-    "noSketches": "Ainda não há esboços. Clique em \"Gerar esboços\" para começar.",
-    "gridGallery": "Galeria de grelha",
-    "noGrids": "Ainda não há grelhas",
-    "beatThumbnails": "Miniaturas dos beats"
   },
   "tasks": {
     "taskCount": "{{count}} tarefas",
@@ -3296,30 +3270,17 @@
       "episode_scene_planner": "Planear cenas",
       "episode_prop_planner": "Planear adereços",
       "content_rewriter": "Reescrita de IA",
-      "sketch_generation": "Geração de esboços",
-      "batch_sketch": "Esboço em lote",
-      "sketch_regen": "Regeneração de esboço",
-      "grid_preview": "Visualização da grelha",
-      "batch_render": "Renderização em lote",
-      "grid_regenerate": "Regeneração de grelha",
       "audio_generation": "Geração de áudio",
       "audio_generation_indextts2": "Geração de áudio IndexTTS2",
       "system_voice_setup": "Configuração da voz do sistema",
       "video_generation": "Geração de vídeo",
       "single_video": "Vídeo único",
-      "global_optimize_video": "Otimização global de vídeo",
-      "selected_regen": "Regeneração selecionada",
       "compose_episode": "Composição de vídeo",
       "freezone_image_reverse_prompt": "Prompt inverso de imagem",
       "build_scenes": "Criar cenas",
       "build_props": "Criar adereços",
-      "beat_video_prompt": "Gerar prompt",
       "scene_reference_asset": "Imagem de referência da cena",
       "prop_reference_asset": "Imagem de referência do adereço",
-      "director_control_to_sketch": "Da etapa do realizador para o esboço",
-      "sketch_grid_generation": "Gerar grelha de esboços",
-      "mainline_sketch_from_context": "Gerar esboço",
-      "mainline_frame_from_context": "Renderizar fotograma do storyboard",
       "indextts2_audio_generation": "Gerar áudio",
       "freezone_video_gen": "Gerar vídeo Freezone",
       "stage_asset": "Recurso da cena",
@@ -3373,11 +3334,6 @@
         "fallback": "referência da cena",
         "named": "{{scene}} — {{kind}}"
       },
-      "beatRange": "Beat {{ranges}}",
-      "sketchGrid": "Grelha de esboços {{index}}/{{total}}",
-      "sketch": "Esboço",
-      "episodePrefixed": "Ep. {{episode}} · {{label}}",
-      "withBeats": "{{label}} ({{beats}})",
       "identityPortraitNamed": "{{character}} — retrato da identidade “{{identity}}”",
       "identityPortrait": "Retrato da identidade {{name}}",
       "characterPortraitNamed": "Retrato de {{character}}",
@@ -3401,9 +3357,7 @@
         "normalizingScenes": "A normalizar os blocos de cenas do guião com IA..."
       },
       "script": {
-        "start": "A gerar o guião...",
-        "beatVideoPromptStart": "A gerar o prompt de vídeo para o beat {{beatNum}}",
-        "beatVideoPromptSaved": "Prompt de vídeo do beat {{beatNum}} guardado"
+        "start": "A gerar o guião..."
       },
       "submitting": "A enviar a tarefa…",
       "queued": "Tarefa em fila",
@@ -3641,16 +3595,12 @@
       "backgroundCandidate": "Fundo candidato",
       "beatContext": "Contexto do beat",
       "currentBackground": "Fundo atual",
-      "currentSketch": "Esboço atual",
-      "currentSketchCandidate": "Esboço candidato atual",
       "currentStoryboard": "Storyboard atual",
       "directorComposite": "Composição do realizador",
       "inputReference": "Referência de entrada",
       "masterReverse": "Principal + inverso",
       "pano360": "Panorama de 360°",
       "sceneMasterReverse": "Principal + inverso da cena",
-      "sketchBackgroundIdentityProps": "Esboço + fundo + identidades/adereços",
-      "sketchCandidate": "Esboço candidato",
       "storyboardCandidate": "Storyboard candidato"
     }
   },
@@ -3818,7 +3768,6 @@
   "episode": {
     "stage": {
       "script": "Guião",
-      "sketch": "Esboços",
       "audio": "Áudio",
       "video": "Vídeo",
       "compose": "Compor"
@@ -3831,8 +3780,6 @@
       "shots": "Planos",
       "compose": "Compor",
       "text": "Texto",
-      "sketch": "Esboço",
-      "render": "Renderização",
       "audio": "Áudio",
       "video": "Vídeo"
     },
@@ -3971,23 +3918,15 @@
       "jumpTo": "Ir para {{stage}}",
       "select": "Selecionar",
       "deselect": "Desmarcar",
-      "noSketch": "Sem esboço",
-      "noRender": "Sem renderização",
       "noNarration": "(Sem narração)",
       "stale": "Obsoleta",
       "clickToView": "Clique numa batida para ver detalhes",
       "noMatching": "Sem batidas correspondentes",
       "sectionText": "Texto",
-      "sectionSketch": "Esboço",
-      "sectionRender": "Renderização",
       "sectionAudio": "Áudio",
       "sectionVideo": "Vídeo",
       "edited": "Editada",
       "notEdited": "Não editada",
-      "selected": "Selecionada",
-      "notSelected": "Não selecionada",
-      "rendered": "Renderizada",
-      "notRendered": "Não renderizada",
       "generated": "Gerada",
       "notGenerated": "Não gerada",
       "deleteManualShot": "Eliminar",
@@ -4008,7 +3947,6 @@
     },
     "drawer": {
       "script": "Guião",
-      "sketch": "Esboço",
       "audio": "Áudio",
       "video": "Vídeo",
       "close": "Fechar (Esc)"
@@ -4016,13 +3954,8 @@
     "workbench": {
       "aspectSwitch": {
         "title": "Alterar proporção?",
-        "desc": "Alterar a proporção não irá esticar nem modificar os esboços, as referências ou os vídeos já gerados — estes mantêm a proporção original. Para adaptar esses recursos à nova proporção, terá de os gerar novamente. Continuar?",
+        "desc": "Alterar a proporção não irá esticar nem modificar as referências ou os vídeos já gerados — estes mantêm a proporção original. Para adaptar esses recursos à nova proporção, terá de os gerar novamente. Continuar?",
         "confirm": "Alterar mesmo assim"
-      },
-      "pool": {
-        "rebuildIndex": "Reconstruir índice",
-        "rebuildSuccess": "Índice do pool de imagens reconstruído: {{count}} imagens",
-        "rebuildFailed": "Falha na reconstrução do índice do pool de imagens"
       },
       "endOfBeats": "—— Fim da lista ——",
       "endOfBeatsCount": "{{count}} batidas no total",
@@ -4041,9 +3974,6 @@
         "totalShots": "{{count}} planos",
         "activeBeat": "Batida {{n}}",
         "noMatchingBeats": "Sem batidas correspondentes",
-        "selectionHint": "Selecione batidas para regenerar esboços e renderizações em lote",
-        "batchRegenSketch": "Regenerar esboço",
-        "batchRegenRender": "Regenerar renderização",
         "dragToResize": "Arraste para ajustar a relação largura esquerda/direita"
       },
       "text": {
@@ -4228,14 +4158,10 @@
         "humanReview": "Revisão humana",
         "generateVideo": "Gerar vídeo",
         "preview": {
-          "render": "Render",
-          "sketch": "Esboço",
           "audio": "Áudio",
           "video": "Vídeo"
         },
         "previewMissing": {
-          "render": "Sem fotograma renderizado",
-          "sketch": "Sem esboço",
           "audio": "Sem áudio",
           "video": "Sem vídeo"
         },
@@ -4261,7 +4187,7 @@
         },
         "s9PlannedDurationHint": "Duração calculada s9: {{seconds}}s",
         "s9DurationExceedsModelMax": "A duração calculada s9 ({{planned}}s) excede o limite do modelo atual ({{max}}s). Mude para o Seedance 2.5 ou divida a 15s.",
-        "s9IncludeFirstFrame": "Incluir primeiro fotograma renderizado (@图片1)",
+        "s9IncludeFirstFrame": "Incluir primeiro fotograma (@图片1)",
         "s9TailAnchor": "Plano âncora final",
         "s9MissingAssetsNotice": "Ativos pendentes na reserva: {{assets}}",
         "s9PromptReboundHint": "Os ativos mudaram; prompt renumerado @图片N / @音频N disponível",
@@ -4272,10 +4198,6 @@
         "seedance2PromptGenerateFailed": "Falha na geração do prompt do Seedance2",
         "videoPrompt": "Prompt de vídeo",
         "keyframePrompt": "Prompt de vídeo de um único Beat",
-        "generateBeatVideoPrompt": "Gerar prompt deste Beat",
-        "beatVideoPromptGenerated": "Prompt de vídeo deste Beat gerado",
-        "beatVideoPromptGenerateStarted": "Geração do prompt de vídeo deste Beat iniciada",
-        "beatVideoPromptGenerateFailed": "Falha na geração do prompt de vídeo deste Beat",
         "beatVideoPromptRequired": "O Beat #{{n}} não tem um prompt de vídeo. Gere primeiro o prompt deste Beat.",
         "seedance2PromptRequired": "Falta o prompt principal do Seedance2.0 no Beat #{{n}}. Preencha-o ou execute primeiro a otimização com IA.",
         "seedance2OverlayEnabled": "Ativar",
@@ -4340,309 +4262,33 @@
         "seedance2GuidanceStyleTemplate": "Estilo: define a textura visual, a época, a orientação cromática e o realismo, para evitar desvios de estilo.",
         "seedance2GuidanceNoSubtitleTemplate": "Sem legendas: não gerar texto nem legendas; manter o enquadramento visualmente limpo."
       },
-      "sketch": {
-        "switched": "Esboço alterado",
-        "switchFailed": "Falha ao mudar",
-        "forcedUse": "Este esboço foi aplicado à força",
-        "forceFailed": "Falha ao forçar a aplicação",
-        "regenStarted": "Regeneração iniciada",
-        "regenFailed": "Falha na regeneração",
-        "verifyGate": "Critério de verificação:",
-        "verifyLabel": "Consistência do esboço",
-        "verifyDrawerTitle": "12.9 Verificação da consistência do esboço",
-        "currentSketch": "Esboço atual",
-        "generating": "A gerar",
-        "genFailed": "Falha na geração",
-        "notGenerated": "Ainda não há esboço — inicie a geração em lote acima",
-        "candidateHint": "Esboço candidato, ainda não confirmado no conjunto",
-        "candidateCount": "Candidatos ({{count}})",
-        "regenThisBeat": "Regenerar este Beat",
-        "staleBatch": "Esboço de lote desatualizado",
-        "currentBadge": "Atual",
-        "staleBadge": "Desatualizado",
-        "colorBindings": "Associações de cores",
-        "reassignColors": "Reatribuir cores",
-        "identityColors": "Identidades",
-        "propColors": "Adereços",
-        "aiDetectResults": "Resultados de IA",
-        "aiDetectResultCounts": "{{beats}} beats / {{identities}} identidades / {{props}} adereços",
-        "openGridGallery": "Grelha de esboços",
-        "noCandidates": "Não há candidatos no conjunto. Utilize a barra de geração em lote acima.",
-        "versionMismatch": "Incompatibilidade da versão do esboço",
-        "versionMismatchDesc": "Este esboço foi gerado a partir de um guião mais antigo. As atribuições de cores das personagens podem ter mudado. Forçar a utilização mesmo assim?",
-        "generateNow": "Gerar agora",
-        "generateTitle": "Gerar esboço agora?",
-        "generateDesc": "Gerar esboço para o Beat #{{n}}. O novo esboço entra no conjunto de candidatos.",
-        "regenTitle": "Regenerar esboço?",
-        "regenDesc": "Regenerar esboço para o Beat #{{n}}. O novo esboço entra no conjunto de candidatos.",
-        "poseEdit": "Editar pose",
-        "poseTitle": "Editor de esboço do Beat {{n}}",
-        "poseCharacters": "Personagens no fotograma",
-        "posePreset": "Pose predefinida",
-        "poseApplyPreset": "Aplicar predefinição",
-        "poseSelect": "Selecionar/arrastar",
-        "poseColorPen": "Caneta de cor",
-        "poseInk": "Caneta de tinta",
-        "poseEraser": "Borracha",
-        "poseWidth": "Largura",
-        "poseUndo": "Desfazer",
-        "poseReset": "Repor a pose",
-        "poseAddToFrame": "Adicionar",
-        "poseRemoveFromFrame": "Remover",
-        "poseClear": "Limpar desenho",
-        "poseSaved": "Edições de esboço guardadas",
-        "cropEdit": "Guardar recorte",
-        "cropTitle": "Recorte do esboço do Beat {{n}}",
-        "cropWidth": "Largura",
-        "cropHeight": "Altura",
-        "cropSaved": "Esboço recortado guardado",
-        "directorControl": "Recurso composto do Director",
-        "directorControlFile": "Combinado + env-only + metadados",
-        "convertDirectorControl": "Converter em esboço",
-        "convertDirectorStarted": "Tarefa de conversão de Direct Render em esboço iniciada",
-        "convertDirectorFailed": "Não foi possível iniciar a conversão de Direct Render em esboço",
-        "openDirectorWorld": "Director World",
-        "openDirectorWorldTip": "Abrir este Beat no Director World",
-        "openDirectorWorldFailed": "Não foi possível abrir este Beat no Director World",
-        "chooseBackground": "Fundo",
-        "chooseBackgroundTip": "Escolher fundo para um único Beat",
-        "chooseBackgroundFailed": "Não foi possível escolher o fundo do Beat",
-        "chooseBackgroundSaved": "Fundo do Beat guardado",
-        "backgroundDialogTitle": "Fundo do Beat {{n}}",
-        "backgroundDialogDesc": "Afeta apenas o esboço e o Render deste Beat. A geração em lote continua a usar a cena principal.",
-        "backgroundMissing": "Sem imagem de fundo",
-        "backgroundCurrent": "Atual",
-        "backgroundSnapshotUse": "Uso de snapshot",
-        "openFreezone": "Editar no Freezone",
-        "openFreezoneTip": "Editar o esboço deste Beat no Freezone",
-        "freezoneOpened": "Sketch Freezone aberto",
-        "freezoneOpenFailed": "Falha ao abrir o Sketch Freezone",
-        "cropTitleWithAspect": "Cortar {{aspect}}",
-        "cropDragHandle": "Mover área de corte"
-      },
-      "sketchGrid": {
-        "title": "Grelha de esboços",
-        "titleWithCount": "Grelha de esboços ({{count}} grelhas)",
-        "gridCount": "{{count}} grelhas",
-        "gridLabel": "Grelha #{{n}}",
-        "cellCount": "{{count}} células",
-        "noPreview": "Sem pré-visualização",
-        "generateGrid": "Gerar/Regenerar",
-        "regenStarted": "Grelha #{{n}} iniciada",
-        "regenFailed": "Falha na geração da grelha",
-        "uploadGrid": "Carregar grelha",
-        "uploadSuccess": "Grelha #{{n}} carregada",
-        "uploadFailed": "Falha ao carregar a grelha",
-        "exportPrompt": "Exportar prompt",
-        "promptTitle": "Prompt da grelha #{{n}}",
-        "promptContent": "Conteúdo do prompt",
-        "promptFailed": "Falha na exportação do prompt",
-        "copySuccess": "Prompt copiado",
-        "cut": "Recortar para o conjunto",
-        "cutSuccess": "Grelha #{{n}} recortada",
-        "cutFailed": "Falha no corte da grelha",
-        "unknownScene": "Cena desconhecida"
-      },
-      "render": {
-        "generateNew": "Gerar novo",
-        "sketchRequired": "Primeiro, gera ou carrega um esboço",
-        "switched": "Render alterado",
-        "switchFailed": "Falha ao mudar",
-        "forcedUse": "Este Render foi aplicado à força",
-        "forceFailed": "Falha ao forçar a aplicação",
-        "regenStarted": "Regeneração iniciada",
-        "regenFailed": "Falha na regeneração",
-        "versionMismatch": "Versão do Render incompatível",
-        "versionMismatchDesc": "Este Render foi gerado a partir de um guião mais antigo. O conteúdo pode ser inconsistente. Forçar a utilização mesmo assim?",
-        "regenTitle": "Regenerar Render?",
-        "regenDesc": "Regenerar Render para o Beat #{{n}}. O novo Render entra no conjunto de candidatos.",
-        "openFreezone": "Editar no Freezone",
-        "openFreezoneTip": "Editar o Render deste Beat no Freezone",
-        "freezoneOpened": "Editor do Freezone aberto",
-        "freezoneOpenFailed": "Falha ao abrir o editor Freezone",
-        "backgroundTitle": "Referência de fundo do Render",
-        "backgroundCurrent": "Atual: {{label}}",
-        "backgroundHint": "Aplica cor/material ao esboço sem alterar a composição.",
-        "backgroundRenderInput": "Entrada do Render: {{label}}",
-        "backgroundMissing": "Nenhuma imagem de referência encontrada",
-        "backgroundOpen360": "Abrir Director World",
-        "backgroundDirectorWorldDescription": "Enquadre o plano no Director World e grave-o no fotograma combinado do Director para o plano atual.",
-        "backgroundAnchorLabels": {
-          "directorEnvOnly": "Captura de ecrã da cena do Director World",
-          "master": "Frente da cena",
-          "reverse": "Traseira da cena"
-        },
-        "backgroundCropAction": "Recortar {{label}}",
-        "backgroundCropTitle": "{{label}} — recortar captura de ecrã",
-        "backgroundCropFallbackTitle": "Recortar captura de ecrã",
-        "backgroundUpload": "Carregar referência externa",
-        "backgroundUploaded": "Referência de fundo do Render carregada",
-        "backgroundUploadFailed": "Não foi possível carregar a referência de fundo do Render",
-        "backgroundSaved": "Referência de fundo do Render alterada",
-        "backgroundSaveFailed": "Não foi possível guardar a referência de fundo do Render",
-        "backgroundCropSave": "Guardar recorte",
-        "backgroundCropTitleWithAspect": "Cortar {{aspect}}",
-        "backgroundCropDragHandle": "Mover área de corte",
-        "relightLabel": "Relight para {{timeOfDay}}",
-        "relightLabelDefaultTime": "hora especificada",
-        "relightTooltip": "Relight: ajusta a iluminação do plano à hora do dia do Beat sem alterar a estrutura da cena.",
-        "lockedLightTooltip": "Iluminação bloqueada: utiliza a iluminação da própria imagem da cena; sem Relight.",
-        "lockedLightLabel": "Iluminação bloqueada"
-      },
-      "spatialLock": {
-        "label": "Bloqueio espacial de câmara fixa",
-        "idleHint": "Desbloqueado: enquadramento e movimento livres",
-        "activeHint": "Ancorado no plano de fundo de #B{{n}}; o vídeo mantém tripé estável",
-        "modeOff": "Desbloqueado",
-        "modeFullBody": "Câmara fixa · Corpo inteiro",
-        "modeUpperBody": "Câmara fixa · Apenas tronco",
-        "anchorLabel": "Beat âncora",
-        "anchorItem": "Âncora #B{{n}}",
-        "lockedToast": "Câmara e espaço bloqueados em #B{{n}}",
-        "unlockedToast": "Bloqueio de câmara fixa removido",
-        "saveFailed": "Falha ao guardar bloqueio de câmara fixa",
-        "videoBannerLockedTo": "Sequência de câmara fixa (ancorada em #B{{n}}): enquadramento em tripé estável para cortes contínuos.",
-        "videoBannerFeedNext": "Este plano serve de âncora para o beat seguinte (#B{{n}}): mantenha o final estável (o modo primeiro/último fotograma liga sem saltos)."
-      },
-      "renderGrid": {
-        "title": "Grelha de Render",
-        "titleWithCount": "Grelha de Render ({{count}} grelhas)",
-        "gridCount": "{{count}} grelhas",
-        "rebuildIndex": "Reconstruir o índice",
-        "rebuildSuccess": "Índice reconstruído: {{count}} imagens",
-        "rebuildFailed": "A reconstrução do índice falhou",
-        "noIndexedGrids": "Ainda não há um índice de grelhas de Render. Gere primeiro o Render ou reconstrua o índice do conjunto de imagens.",
-        "gridLabel": "Grelha #{{n}}",
-        "cellCount": "{{count}} células",
-        "noPreview": "Sem pré-visualização",
-        "cut": "Recortar para o conjunto",
-        "regenStarted": "Grelha #{{n}} iniciada",
-        "regenFailed": "Falha na regeneração da grelha",
-        "uploadGrid": "Carregar grelha",
-        "uploadSuccess": "Grelha #{{n}} carregada",
-        "uploadFailed": "Falha ao carregar a grelha",
-        "exportPrompt": "Exportar prompt",
-        "promptTitle": "Prompt da grelha #{{n}}",
-        "promptContent": "Conteúdo do prompt",
-        "promptFailed": "Falha na exportação do prompt",
-        "copySuccess": "Prompt copiado",
-        "cutSuccess": "Grelha #{{n}} recortada",
-        "cutFailed": "Falha no corte da grelha"
-      },
       "batch": {
         "narrationIncompatible": "Este modelo só suporta planos com diálogo ({{count}} beats de narração incompatíveis)",
         "toolbar": "Barra de ferramentas de geração",
-        "globalOptimizeStarted": "Otimização global iniciada",
         "rewriteScriptTitle": "Reescrever todos os guiões?",
-        "rewriteScriptDesc": "Regenerar todas as narrações dos beats a partir do texto de origem ou adaptado. As marcas de desatualização do texto e dos esboços existentes serão afetadas.",
+        "rewriteScriptDesc": "Regenerar todas as narrações dos beats a partir do texto de origem ou adaptado. O texto existente será afetado.",
         "rewriteScript": "Reescrever todos os guiões",
-        "genSketchTitle": "Gerar todos os esboços?",
-        "genSketchDesc": "Gerar esboços para todos os beats. Os esboços existentes não serão substituídos; os novos entram no conjunto de candidatos.",
-        "genSketch": "Gerar todos os esboços",
-        "genSketchShort": "Todos os esboços",
-        "autoSelectTitle": "Selecionar tudo automaticamente?",
-        "autoSelectDesc": "Selecionar automaticamente o melhor esboço do conjunto de candidatos para cada Beat.",
-        "autoSelect": "Selecionar tudo automaticamente",
         "insertManualBeforeFirst": "Antes do primeiro plano",
         "insertManualBeforeFirstShort": "Antes do primeiro plano",
         "insertManualBeforeFirstTooltip": "Inserir um plano manual antes do primeiro Beat",
-        "genMissingManualTitle": "Preencher esboços em falta?",
-        "genMissingManualDesc": "Gerar em lote os esboços em falta dos planos manuais inseridos recentemente neste episódio, agrupados por cena.",
-        "genMissingManual": "Preencher esboços",
         "genMissingManualShort": "Novos planos",
-        "genMissingManualTooltip": "Gerar os esboços em falta dos planos manuais inseridos recentemente neste episódio, agrupados por cena",
-        "genMissingManualEmpty": "Não falta um esboço a nenhum plano manual",
-        "genMissingManualDispatched": "Enviadas {{count}} tarefa(s) de esboço de plano manual",
-        "autoCombine": "Redesenho em lote",
-        "genRender": "Gerar Render do episódio completo",
-        "genRenderShort": "Todos os Renders",
-        "genRenderTitle": "Gerar Render do episódio completo?",
-        "genRenderDesc": "Gerar grelhas de Render para o episódio completo através do fluxo padrão do Render Plan. Primeiro são necessários os esboços e as deteções de identidade por IA.",
-        "genRenderTooltip": "Abrir o Render Plan do episódio completo (modo padrão generate_grid)",
-        "batchRenderStarted": "Renderização iniciada",
-        "aiDetect": "Deteção por IA",
-        "aiDetectTooltip": "Utilizar a visão de IA para detetar que personagens assinaladas por cores aparecem em cada esboço",
-        "aiDetectRunning": "IA a detetar personagens...",
-        "aiDetectSuccess": "Deteção por IA concluída: {{beats}} beats, {{ids}} identidades, {{props}} adereços",
-        "aiDetectEmpty": "A IA não devolveu deteções",
-        "aiDetectReview": "Reveja cada Beat; adicione as identidades ou os adereços em falta em Mais, caso a IA não tenha detetado algo.",
-        "reassignColors": "Reatribuir cores",
-        "reassignColorsTitle": "Reatribuir cores do esboço?",
-        "reassignColorsDesc": "Esta ação reatribui as cores dos esboços deste episódio com base nas identidades atuais do guião. Os esboços existentes podem apresentar marcadores de cor inconsistentes.",
-        "reassignColorsTooltip": "Reatribuir cores com base nas identidades do guião (idempotente)",
-        "reassignColorsSuccess": "Cores reatribuídas para {{count}} identidades e {{propCount}} adereços",
-        "aiCameraLock": "Bloqueio de câmara IA",
-        "aiCameraLockTooltip": "Analisar automaticamente o episódio para bloquear o enquadramento espacial de planos consecutivos",
-        "aiCameraLockRunning": "A analisar bloqueios de câmara fixa…",
-        "aiCameraLockEmpty": "Não foram encontrados planos consecutivos adequados para bloqueio de câmara fixa neste episódio",
-        "aiCameraLockSuccess": "Bloqueio de câmara planeado para {{count}} plano(s) ({{beats}})",
         "genAudioTitle": "Gerar todo o áudio?",
         "genAudioDesc": "Gerar locução TTS para todos os beats sem áudio.",
         "genAudio": "Gerar todo o áudio",
         "genAudioShort": "Todo o áudio",
         "genAudioUnavailableForVideoModel": "O modelo de vídeo atual não precisa de geração de áudio de episódio completo separada",
         "videoModel": "Modelo de vídeo",
-        "sketchSettingsLabel": "Definições do esboço",
-        "renderSettingsLabel": "Definições de renderização",
         "videoSettingsLabel": "Definições de vídeo",
-        "genVideoTitle": "Gerar todos os vídeos?",
-        "genVideoDesc": "Gerar clips de vídeo para todos os beats sem vídeo. Requer primeiro esboços, Renders e áudio.",
+        "genVideoDesc": "Gerar clips de vídeo para todos os beats sem vídeo. Requer primeiro o áudio.",
         "genVideo": "Gerar todos os vídeos",
         "genVideoShort": "Todos os vídeos",
-        "aiOptimizeTitle": "Gerar prompts de vídeo para todos os beats?",
-        "aiOptimizeDesc": "Utilizar o SuperPower para analisar os esboços deste episódio e gerar prompts de vídeo para todos os beats.",
-        "aiOptimize": "Gerar prompts de vídeo para todos os beats",
-        "aiOptimizeShort": "Prompts de todos os beats",
-        "selectedCount": "{{count}} beats selecionados",
-        "clearSelection": "Limpar a seleção",
-        "batchRegen": "Regeneração em lote",
-        "sketch": "Esboço",
-        "render": "Render",
-        "audio": "Áudio",
         "video": "Vídeo",
-        "singleRegen": "Redesenho individual",
-        "regenSketchSingleTitle": "Redesenhar individualmente os esboços de {{count}} beats?",
-        "regenSketchSingleDesc": "Dividir #{{beats}} em tarefas de esboço 1×1 com a proporção atual.",
-        "regenSketchTitle": "Regenerar esboços de {{count}} beats ({{mode}})?",
-        "regenSketchDesc": "Regenerar esboços para #{{beats}}. Os novos esboços entram no conjunto de candidatos.",
-        "regenSketchDescBatch": "Será executado em {{batches}} lotes.",
-        "regenRenderTitle": "Regenerar Renders de {{count}} beats ({{mode}})?",
-        "regenRenderDesc": "Voltar a renderizar #{{beats}}. Os novos Renders entram no conjunto de candidatos.",
-        "regenRenderDescBatch": "Será executado em {{batches}} lotes.",
-        "genBatchAudioTitle": "Gerar áudio para {{count}} beats?",
-        "genBatchAudioDesc": "Enviar uma tarefa de áudio do IndexTTS2 para #{{beats}}.",
-        "genBatchAudio": "Gerar áudio para {{count}} beats",
         "genBatchVideoTitle": "Gerar vídeo para {{count}} beats?",
-        "genBatchVideoDesc": "Gerar clips de vídeo para #{{beats}}, um a um. Requer esboços, Renders e áudio.",
+        "genBatchVideoDesc": "Gerar clips de vídeo para #{{beats}}, um a um. Requer áudio.",
         "genBatchVideo": "Gerar vídeo para {{count}} beats",
-        "batchHint": "Modo recomendado realçado. O áudio envia uma tarefa assíncrona para os beats selecionados; o vídeo continua a ser gerado Beat a Beat.",
-        "dispatched": "Enviados {{count}} beats → {{mode}}",
-        "dispatchedBatch": " × {{batches}} lotes",
-        "dispatchFailed": "Falha no envio",
-        "sketchGroupRunning": "O grupo de esboços correspondente já está em execução",
-        "sketchGroupSkippedRunning": "Ignorados {{count}} grupos de esboços em execução",
-        "sketchSameSceneRequired": "A regeneração de esboços só pode utilizar beats da mesma cena; cenas atuais: {{scenes}}",
-        "sketchSceneMissingRequired": "Os beats selecionados não estão associados a cenas, pelo que não é possível verificar a regeneração dentro da mesma cena: #{{beats}}. Planeie ou associe primeiro as cenas.",
-        "sketchDispatchQueue": "Envio da regeneração de esboços",
-        "sketchDispatchQueued": "Colocados {{count}} beats na fila para {{mode}}",
-        "sketchDispatchDuplicate": "Estes beats já estão no cartão de envio da regeneração de esboços acima: #{{beats}}. Utilize Gerar grupo nesse cartão ou remova-o primeiro.",
-        "sketchDispatchOverlap": "Estes beats já são utilizados pelo cartão de envio da regeneração de esboços acima: #{{beats}}. Utilize Gerar grupo nesse cartão ou remova-o primeiro.",
-        "sketchDispatchRun": "Gerar grupo",
-        "sketchTaskStatus": "Estado da tarefa: {{status}}",
-        "sketchUsageTitle": "Utilização dos pedidos de geração de esboços",
-        "sketchUsageToday": "Hoje {{count}}",
-        "sketchUsageTotal": "Total {{count}}",
-        "imageGuardConfirmTitle": "Continuar a geração?",
-        "imageGuardLockedTitle": "Proteção da geração",
-        "operatorPasswordPlaceholder": "Palavra-passe do operador",
-        "operatorPasswordError": "Palavra-passe incorreta",
-        "audioDispatched": "Tarefa de áudio do IndexTTS2 enviada para {{count}} batidas",
         "audioSuccess": "Áudio gerado para {{ok}} batidas",
         "audioPartial": "Áudio: {{ok}} com êxito, {{fail}} com falha",
         "videoSuccess": "Vídeo gerado para {{ok}} batidas",
-        "videoPartial": "Vídeo: {{ok}} com êxito, {{fail}} com falha",
-        "batchRegenSketchSuccess": "Regeneração de esboço iniciada para {{count}} batidas",
-        "batchRegenRenderSuccess": "Regeneração da renderização iniciada para {{count}} batidas",
         "episodeFreezone": "Freezone do episódio",
         "episodeFreezoneTooltip": "Abrir este episódio na Freezone",
         "episodeFreezoneOpened": "Freezone do episódio aberta",
@@ -4700,7 +4346,7 @@
       "downloadVideo": "Descarregar vídeo",
       "composingProgress": "A compor...",
       "notComposed": "Ainda não composto",
-      "composeHint": "Certifique-se de que todas as batidas têm esboços, áudio e vídeo. Clique em \"Compor Episódio\" para gerar. Quando terminar, pré-visualize e transfira aqui ou exporte SRT/ZIP no canto superior direito.",
+      "composeHint": "Certifique-se de que todas as batidas têm áudio e vídeo. Clique em \"Compor Episódio\" para gerar. Quando terminar, pré-visualize e transfira aqui ou exporte SRT/ZIP no canto superior direito.",
       "beats": "Batidas",
       "duration": "Duração prevista",
       "options": "Opções",
@@ -4785,59 +4431,7 @@
       "noBeats": "Ainda não há batidas — gere primeiro um guião",
       "generateBeats": "Gerar batidas",
       "generateBeatsTitle": "Gerar batidas?",
-      "generateBeatsDesc": "Divida o texto adaptado (ou original), linha a linha, em batidas que servirão de base para os esboços, o áudio e o vídeo."
-    },
-    "sketchPlan": {
-      "title": "Plano de esboços ({{beats}} batidas → {{grids}} grelhas)",
-      "subtitle": "O sistema agrupou automaticamente as batidas por cena. Confirme para enviar as tarefas de esboço.",
-      "confirm": "Confirmar {{grids}} grelhas de esboço"
-    },
-    "renderPlan": {
-      "title": "Plano de renderização ({{beats}} batidas → {{grids}} grelhas)",
-      "subtitle": "O sistema agrupou automaticamente as batidas por cena e número de personagens. Confirme para iniciar.",
-      "strategy": "Estratégia de planeamento",
-      "strategyLocation": "Agrupar por cena",
-      "strategyNaive": "Agrupamento sequencial",
-      "forceOneByOne": "Renderizar individualmente · fidelidade máxima (1×1 por batida)",
-      "confirm": "Confirmar {{grids}} grelhas",
-      "planning": "A planear a renderização…",
-      "unavailable": "Nenhum plano de renderização disponível",
-      "openDialog": "Voltar a renderizar a seleção ({{count}})",
-      "dispatched": "Renderização iniciada",
-      "featureDisabled": "A renderização V2 está desativada. Em alternativa, regenere cada batida individualmente.",
-      "unknownLocation": "cena desconhecida",
-      "split": "Dividir",
-      "mergeNext": "Unir ao seguinte",
-      "stale": {
-        "input": "As entradas foram alteradas (personagens ou texto da batida). Confirme novamente.",
-        "plan": "A lógica do planeador foi atualizada. Confirme novamente."
-      },
-      "errors": {
-        "invalidBeats": "As batidas selecionadas não pertencem a este episódio",
-        "noBeats": "Este episódio ainda não tem batidas"
-      },
-      "paddingCount": "+{{count}} espaços vazios",
-      "partial": {
-        "reason": {
-          "unknown": "Algumas tarefas ainda não foram enviadas."
-        },
-        "summary": "Enviadas {{ok}} / rejeitadas {{fail}}",
-        "continue": "Continuar"
-      }
-    },
-    "renderSettings": {
-      "model": "Modelo de renderização",
-      "modelPlaceholder": "Selecionar modelo"
-    },
-    "sketchSettings": {
-      "model": "Modelo de esboço",
-      "modelPlaceholder": "Selecionar modelo de esboço",
-      "aspectRatio": "Aspeto",
-      "wide16x9": "16:9",
-      "aspectChangeHint": "Alterar a proporção afeta apenas o conteúdo gerado posteriormente; os recursos existentes têm de ser regenerados para adotarem a nova proporção."
-    },
-    "sketches": {
-      "selectFailed": "A seleção falhou"
+      "generateBeatsDesc": "Divida o texto adaptado (ou original), linha a linha, em batidas que servirão de base para o áudio e o vídeo."
     },
     "video": {
       "switchFailed": "Não foi possível mudar de vídeo"
@@ -5334,84 +4928,6 @@
           }
         }
       },
-      "real_scene_sketch_repair": {
-        "name": "Reparação de esboço de cena real",
-        "shortName": "Esboço da cena",
-        "description": "Repara o esboço de cena real da batida atual utilizando o enquadramento de controlo do mundo do realizador, juntamente com referências de cena e identidade.",
-        "inputs": {
-          "3gs_combined": {
-            "label": "Composição 3GS do realizador",
-            "description": "A primeira imagem ligada é a base e controla a câmara, o espaço e a composição."
-          },
-          "scene_refs": {
-            "label": "Referências de cena / identidade / adereços",
-            "description": "As imagens ligadas posteriormente servem como referências de reparação e semânticas."
-          }
-        },
-        "preserve": {
-          "camera": "Câmara / composição originais",
-          "layout": "Mobiliário, paredes, portas e janelas",
-          "identity": "Cores de identidade da personagem",
-          "props": "Cores e posicionamento dos adereços",
-          "street_mood": "Ambiente de vida urbana"
-        },
-        "modify": {
-          "deblur": "Corrigir a desfocagem / o fundo esborratado",
-          "distortion": "Corrigir a distorção / o alongamento 3GS",
-          "furniture_detail": "Aperfeiçoar a estrutura do mobiliário",
-          "actor_blocks": "Atores em blocos → desenho linear limpo das personagens",
-          "staging_blocks": "Blocos de encenação → objetos reais"
-        },
-        "params": {
-          "shot_type": {
-            "label": "Tamanho do plano",
-            "options": {
-              "closeup": "Grande plano",
-              "medium_closeup": "Plano médio aproximado",
-              "medium": "Plano médio",
-              "wide": "Plano geral"
-            }
-          },
-          "angle": {
-            "label": "Ângulo",
-            "options": {
-              "eye_level": "Ao nível dos olhos",
-              "high": "Ângulo alto",
-              "low": "Ângulo baixo",
-              "over_shoulder": "Sobre o ombro",
-              "reverse": "Contraplano"
-            }
-          },
-          "lens": {
-            "label": "Objetiva",
-            "options": {
-              "24mm": "Grande angular de 24 mm",
-              "35mm": "Natural de 35 mm",
-              "50mm": "Normal de 50 mm",
-              "85mm": "Comprimida de 85 mm"
-            }
-          },
-          "lighting": {
-            "label": "Iluminação",
-            "options": {
-              "dim_street_warm": "Luz de rua quente e ténue",
-              "mixed_neon": "Néon misto quente/frio",
-              "window_daylight": "Luz natural de janela",
-              "hard_toplight": "Luz superior intensa"
-            }
-          },
-          "preserve": {
-            "label": "É obrigatório preservar"
-          },
-          "modify": {
-            "label": "Foco da reparação"
-          },
-          "notes": {
-            "label": "Requisitos adicionais",
-            "description": "por exemplo, colorir também as figuras cinzentas do fundo; manter a estrutura de madeira da mesa."
-          }
-        }
-      },
       "portrait_from_ref": {
         "name": "Identidade da personagem a partir de uma referência",
         "shortName": "Identidade",
@@ -5699,14 +5215,6 @@
       "useAria": "Utilizar {{label}}",
       "loading": "A carregar…",
       "empty": "Ainda não há modelos de estilo"
-    },
-    "commitHint": {
-      "title": "Como este resultado é escrito numa posição da linha principal ao confirmar",
-      "sketch": "esboço",
-      "frame": "fotograma",
-      "typed": "EP{{episode}} / beat {{beat}} · candidato {{candidate}} · chega a este nó e é promovido a {{promoted}} ao confirmar",
-      "untyped": "Candidato da linha principal · associado a EP{{episode}} / beat {{beat}} · chega a este nó e a posição é determinada pelo contexto ao confirmar",
-      "free": "Candidato livre · chega a este nó; escolha o recurso de destino ao confirmar"
     },
     "cameraPicker": {
       "title": "Câmara",
@@ -6963,7 +6471,6 @@
       "stale": "Removido",
       "assets": {
         "background": "Fundo",
-        "sketch": "Esboço",
         "frame": "Plano",
         "selected": "Selecionado",
         "unselected": "Não selecionado",
@@ -7778,8 +7285,6 @@
       "directorCombinedOutputLabel": "Fotograma combined do Director · EP{{episode}}/B{{beat}}",
       "directorCombinedCommitSuccess": "Recurso de composição do Director definido para EP{{episode}}/B{{beat}}",
       "directorCombinedMissingContext": "Falta o contexto do projeto ou do plano",
-      "directorControlBundleMissing": "Faltam a imagem env-only e os metadados do recurso de composição do Director. Submeta novamente a partir do Director World.",
-      "directorControlCommitted": "Recurso de composição do Director confirmado: {{path}} (inclui env-only e metadados).",
       "canvasSaveConflictBeforeCommit": "O canvas não foi guardado. Resolva o conflito antes de confirmar.",
       "panoSetAsSelectedBackground": "Definir como fundo atual",
       "panoOutputToCanvasNode": "Enviar para o nó do canvas",
@@ -7909,18 +7414,6 @@
         "copySelectedSuccess": "Plano {{sourceBeat}} copiado para o plano atual {{targetBeat}}"
       },
       "skillDefinitions": {
-        "freezone_sketch_from_context": {
-          "name": "Esboço a partir do fundo atual",
-          "description": "Gerar uma proposta de esboço da linha principal a partir do contexto do plano e do fundo atual."
-        },
-        "freezone_sketch_from_director_combined": {
-          "name": "Esboço a partir da composição do Director",
-          "description": "Gerar uma proposta de esboço da linha principal a partir do contexto do plano e da imagem composta do Director."
-        },
-        "freezone_frame_from_context": {
-          "name": "Fotograma a partir do contexto do plano",
-          "description": "Renderizar uma proposta de fotograma da linha principal a partir do contexto do plano, do esboço e das referências."
-        },
         "freezone_set_selected_background": {
           "name": "Definir fundo atual",
           "description": "Definir o fundo do plano atual a partir de uma origem de imagem explícita sem chamar um modelo de imagem."
@@ -7936,7 +7429,6 @@
       },
       "skillInputLabels": {
         "beat_context": "Contexto do plano",
-        "sketch": "Esboço",
         "background": "Fundo",
         "identity": "Identidade do ator",
         "prop": "Adereço",
@@ -7948,7 +7440,6 @@
         "frame": "Fotograma"
       },
       "skillOutputLabels": {
-        "current_sketch_candidate": "Proposta de esboço",
         "current_frame_candidate": "Proposta de fotograma",
         "scene_360_candidate": "Proposta de panorama 360",
         "selected_background": "Fundo atual",
@@ -7956,34 +7447,6 @@
         "review_report": "Relatório de revisão"
       },
       "skillParametersTitle": "Parâmetros",
-      "skillParameterLabels": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": "Proporção"
-        },
-        "freezone_frame_from_context": {
-          "quality": "Qualidade",
-          "background_reference_mode": "Modo de referência do fundo"
-        }
-      },
-      "skillParameterOptions": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": {
-            "2_3": "Vertical 2:3",
-            "16_9": "Horizontal 16:9"
-          }
-        },
-        "freezone_frame_from_context": {
-          "quality": {
-            "low": "Baixa",
-            "medium": "Média",
-            "high": "Alta"
-          },
-          "background_reference_mode": {
-            "material_only": "Apenas o aspeto visual",
-            "scene_anchor": "Âncora da cena"
-          }
-        }
-      },
       "skillRequirement": {
         "required": "Obrigatório",
         "optional": "Opcional"
@@ -8674,9 +8137,7 @@
         },
         "features": {
           "HERMES": "Modelo de conversação do AI Director",
-          "GLOBAL_VIDEO_OPTIMIZER": "Otimizar prompts de vídeo a partir de elementos visuais",
           "SEEDANCE2_PROMPT_COMPOSER": "Compor prompts de geração de vídeo",
-          "GLOBAL_VIDEO_IDENTITY_DETECTOR": "Detetar marcadores de personagens e adereços nos esboços",
           "IDENTITY_PLANNER_CAST": "Planear o elenco do episódio",
           "IDENTITY_PLANNER_ANALYSIS": "Analisar as identidades das personagens",
           "IDENTITY_PLANNER_APPEARANCE": "Gerar visuais de personagens específicos de cada identidade",
@@ -9298,7 +8759,6 @@
         "identity": "🎭 Identidade (imagem de identidade da personagem)",
         "portrait": "🖼 Retrato (retrato da personagem)",
         "frame": "🎬 Fotograma (primeiro fotograma do momento narrativo)",
-        "sketch": "✏️ Esboço",
         "directorRender": "📐 Recurso de composição do realizador"
       },
       "noCharacters": "Este projeto não tem personagens",

@@ -9,10 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from novelvideo.task_identity import task_config_scope
 from novelvideo.task_state import get_task_manager
-from novelvideo.verification.sketch_edit_execute import resolve_labels_jsonl
-from novelvideo.verification.sketch_edit_label_validation import validate_labels_jsonl
 
 
 def load_project_skill_env(project_dir: Path) -> dict[str, str]:
@@ -78,27 +75,6 @@ def task_state_to_dict(task_state: Any | None) -> dict[str, Any] | None:
     if task_state is None:
         return None
     return asdict(task_state)
-
-
-def start_sketch_edit_execute_job(
-    project_dir: Path,
-    episode_num: int,
-    config: dict[str, Any],
-) -> dict[str, Any]:
-    username, project = resolve_user_project_id_from_context(project_dir)
-    labels_name = str(config.get("labels_name") or "labels.jsonl")
-    labels_path = resolve_labels_jsonl(project_dir, episode_num, labels_name=labels_name)
-    validate_labels_jsonl(labels_path)
-    scope = task_config_scope("edit_execute", config)
-    return {
-        "ok": False,
-        "error": "sketch edit execute 需要 project task backend（当前 runner: Celery）",
-        "task_type": "sketch_edit_execute",
-        "username": username,
-        "project": project,
-        "episode": episode_num,
-        "scope": scope,
-    }
 
 
 def get_task_snapshot(

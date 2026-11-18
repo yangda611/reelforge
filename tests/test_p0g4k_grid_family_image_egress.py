@@ -1,15 +1,9 @@
-"""OI-52：grid 家族 6 个 newapi 图像调用点必须经过出网闸门。
-
-`nanobanana_grid.py` 里 `_call_newapi_image_api` 的调用点中有 6 个既不传 `trace=`
-也不传 `egress_context=`，也不经过任何闸门——组织流量在这些路径上无 claim、无组织
-凭证解析、无重放保护，平台 Key 替组织垫真实算力。
+"""OI-52：grid 家族的 newapi 图像调用必须经过出网闸门。
 
 唯一正确的调用点在 `_generate_image` 内，它的形状（`_prepare_organization_image_egress`
 → 换凭证 → 调叶子 → `_complete_organization_image_egress`）已由
-`tests/test_p0g4b_image_egress.py` 钉住。本文件把同一形状钉到 grid 家族的 6 个入口上。
-
-这 6 个入口里只有 `generate_grid` / `reformat_sketch` 当前有活调用者，另 4 个零调用者
-——它们照样要有断言，否则复活时会静默重新漏。
+`tests/test_p0g4b_image_egress.py` 钉住。本文件钉住构造期的直连拒绝，以及 ambient 组织身份
+必须转发给叶子。
 """
 
 from __future__ import annotations
@@ -287,184 +281,12 @@ def test_platform_grid_generator_keeps_direct_providers() -> None:
 # --- 块 ②③④：6 个入口都要 claim / 换凭证 / complete ---------------------------------
 
 
-async def _drive_generate_grid(generator, tmp_path):
-    return await generator.generate_grid(
-        beats=[
-            {
-                "beat_number": 1,
-                "visual_description": "空镜",
-                "detected_identities": ["__NO_CHARACTER__"],
-            }
-        ],
-        character_map={},
-        style="chinese_period_drama",
-        output_path=str(tmp_path / "grid.png"),
-        rows=1,
-        cols=1,
-        sketch=True,
-        sketch_dir=str(tmp_path / "sketches"),
-    )
-
-
-async def _drive_reformat_sketch(generator, tmp_path):
-    source = tmp_path / "source.png"
-    source.write_bytes(_png_bytes())
-    return await generator.reformat_sketch(
-        source_path=str(source),
-        output_path=str(tmp_path / "reformatted.png"),
-        target_aspect="9:16",
-    )
-
-
-async def _drive_generate_action_grid(generator, tmp_path):
-    return await generator.generate_action_grid(
-        action_description="一段连续动作",
-        character_map={},
-        style="chinese_period_drama",
-        output_path=str(tmp_path / "action.png"),
-    )
-
-
-async def _drive_render_single_panel(generator, tmp_path):
-    sketch = tmp_path / "panel-sketch.png"
-    sketch.write_bytes(_png_bytes())
-    return await generator._render_single_panel_gemini(
-        sketch_path=str(sketch),
-        prompt="渲染这一格",
-        output_path=str(tmp_path / "panel.png"),
-    )
-
-
-async def _drive_upscale(generator, tmp_path):
-    source = tmp_path / "small.png"
-    source.write_bytes(_png_bytes())
-    return await generator.upscale_with_nanobanana(
-        input_path=str(source),
-        output_path=str(tmp_path / "upscaled.png"),
-        original_prompt="原始提示词",
-    )
-
-
-async def _drive_single_preview(generator, tmp_path):
-    return await generator.generate_single_preview(
-        prompt="风格实验",
-        style_config={
-            "style_instructions": "水墨",
-            "avoid_instructions": "避免文字",
-        },
-        output_path=str(tmp_path / "preview.png"),
-    )
-
-
-_GRID_ENTRIES = [
-    ("generate_grid", _drive_generate_grid, "image.generate.grid"),
-    ("reformat_sketch", _drive_reformat_sketch, "image.edit.sketch_reformat"),
-    ("generate_action_grid", _drive_generate_action_grid, "image.generate.action_grid"),
-    (
-        "_render_single_panel_gemini",
-        _drive_render_single_panel,
-        "image.generate.render_panel",
-    ),
-    ("upscale_with_nanobanana", _drive_upscale, "image.edit.upscale"),
-    ("generate_single_preview", _drive_single_preview, "image.generate.preview"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "entry,driver,capability",
-    _GRID_ENTRIES,
-    ids=[name for name, _driver, _capability in _GRID_ENTRIES],
-)
-async def test_grid_family_organization_call_claims_resolves_and_completes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-    entry: str,
-    driver,
-    capability: str,
-) -> None:
-    context = _egress_context(kind="organization")
-    harness = _Harness(monkeypatch, context)
-
-    with model_gateway_request_scope(context):
-        generator = harness.generator()
-        await driver(generator, tmp_path)
-
-    assert len(harness.posts) == 1, f"{entry} must reach the gateway exactly once"
-    assert harness.posts[0]["url"].startswith("https://gateway.invalid/v1/images/")
-    assert (
-        harness.posts[0]["headers"]["Authorization"]
-        == "Bearer request-scoped-grid-key"
-    )
-    assert len(harness.operation_port.claims) == 1
-    claim = harness.operation_port.claims[0]
-    assert claim.capability == capability
-    assert claim.credential_version == 7
-    assert claim.organization_id == "org-grid"
-    assert harness.events[:2] == ["claim", "resolve"]
-    assert len(harness.operation_port.completed_refs) == 1
-    assert harness.operation_port.completed_refs[0].startswith("image:sha256:")
 
 
 # --- 块 ②：平台分支必须逐字节透传 ---------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_platform_grid_call_passes_through_the_leaf_unchanged(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    """无组织身份时，叶子收到的实参必须与改动前一致——不传 trace、不传 egress_context。
-
-    `tests/test_newapi_image_gateway.py` 有 13 处直调叶子且没注册 egress 端口，
-    这条断言保证包装函数不会把它们拖下水。
-    """
-
-    from novelvideo.generators import nanobanana_grid
-
-    captured: list[dict[str, object]] = []
-
-    async def fake_leaf(**kwargs):
-        captured.append(kwargs)
-        return _png_bytes(), "", ""
-
-    monkeypatch.setattr(nanobanana_grid, "_call_newapi_image_api", fake_leaf)
-
-    generator = nanobanana_grid.NanoBananaGridGenerator(
-        api_key="platform-newapi-key", config=_grid_config()
-    )
-    await _drive_generate_grid(generator, tmp_path)
-
-    assert len(captured) == 1
-    assert "trace" not in captured[0]
-    assert "egress_context" not in captured[0]
-    assert captured[0]["api_key"] == "platform-newapi-key"
-    assert captured[0]["base_url"] == "https://poison.invalid/v1"
-
-
 # --- 块 ③：同 envelope 内两次同 capability 不得撞键 -----------------------------------
-
-
-@pytest.mark.asyncio
-async def test_two_calls_in_one_envelope_do_not_collide(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    """`business_task_id` 硬编码成 `envelope_id` 时，同 envelope 的第二次调用会撞键。
-
-    `_render_single_panel_gemini` 用 `asyncio.gather` 扇出 N 路，正踩这个。
-    """
-
-    context = _egress_context(kind="organization")
-    harness = _Harness(monkeypatch, context)
-
-    with model_gateway_request_scope(context):
-        generator = harness.generator()
-        await _drive_generate_grid(generator, tmp_path / "first")
-        await _drive_generate_grid(generator, tmp_path / "second")
-
-    assert len(harness.operation_port.claims) == 2
-    business_task_ids = {claim.business_task_id for claim in harness.operation_port.claims}
-    assert len(business_task_ids) == 2
-    assert len(harness.operation_port.completed_refs) == 2
 
 
 # --- 块 ⑤：`_generate_image` 的 ambient 漏洞 -----------------------------------------

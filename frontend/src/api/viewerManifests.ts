@@ -91,19 +91,6 @@ export async function saveBeatDirectorControlFrame(
   );
 }
 
-export async function startDirectorControlToSketch(
-  project: string,
-  episode: number,
-  beat: number,
-): Promise<{ task_type?: string; scope?: string; message?: string; error?: string }> {
-  return await apiCall<{ task_type?: string; scope?: string; message?: string; error?: string }>(
-    `projects/${encodeURIComponent(project)}/episodes/${episode}/beats/${beat}/director-control-to-sketch`,
-    {
-      method: "POST",
-    },
-  );
-}
-
 export async function generateAiStagingProp(
   project: string,
   payload: Record<string, unknown>,

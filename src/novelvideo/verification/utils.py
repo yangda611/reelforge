@@ -75,12 +75,6 @@ def find_sketch_for_beat(project_dir: Path, episode_num: int, beat_num: int) -> 
     return None
 
 
-def find_active_sketch_for_beat(project_dir: Path, episode_num: int, beat_num: int) -> Path | None:
-    """查找当前选中的草图文件。"""
-    sketch = project_dir / "sketches" / f"ep{episode_num:03d}" / f"beat_{beat_num:02d}.png"
-    return sketch if sketch.exists() else None
-
-
 def find_frame_for_beat(project_dir: Path, episode_num: int, beat_num: int) -> Path | None:
     """查找 beat 对应的首帧文件。"""
     frame = project_dir / "frames" / f"ep{episode_num:03d}" / f"beat_{beat_num:02d}.png"

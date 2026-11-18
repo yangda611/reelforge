@@ -12,7 +12,7 @@ import { http, HttpResponse } from "msw";
 // implementation that requires an absolute URL, so the production `api` (which
 // uses `prefix: "/"` + relative inputs) throws `Failed to parse URL`. Inject a
 // test-only ky instance with an absolute `baseUrl` so requests reach MSW —
-// same pattern as provider.test.tsx and render-plan.test.tsx.
+// same pattern as provider.test.tsx and other task-center tests.
 vi.mock("@/lib/api", () => ({
   api: ky.create({ baseUrl: "http://localhost:3000/" }),
   uploadApi: ky.create({ baseUrl: "http://localhost:3000/" }),
@@ -68,7 +68,7 @@ beforeAll(async () => {
                 failed: "{{label}} failed: {{error}}",
               },
             },
-            tasks: { types: { sketch_regen: "Sketch regen", script_writer: "Script writer" } },
+            tasks: { types: { single_video: "Single video", script_writer: "Script writer" } },
           },
         },
       },
@@ -197,7 +197,7 @@ describe("task-center integration (AC-1 + AC-2)", () => {
 
     function Listener() {
       useTaskSubscribe({
-        match: (t) => t.task_type === "sketch_regen",
+        match: (t) => t.task_type === "single_video",
         onComplete,
       });
       return null;
@@ -223,7 +223,7 @@ describe("task-center integration (AC-1 + AC-2)", () => {
         sampleTask({
           task_id: "test-s1",
           task_key: "s1",
-          task_type: "sketch_regen",
+          task_type: "single_video",
           status: "running",
         }),
       );
@@ -237,7 +237,7 @@ describe("task-center integration (AC-1 + AC-2)", () => {
         sampleTask({
           task_id: "test-s1",
           task_key: "s1",
-          task_type: "sketch_regen",
+          task_type: "single_video",
           status: "completed",
         }),
       );

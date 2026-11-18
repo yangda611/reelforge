@@ -15,14 +15,12 @@ const ACTIVE_STATUSES = new Set(["submitting", "queued", "pending", "starting", 
 // Module-level constants — computed once, never per-call.
 const STAGES: Array<Exclude<StageId, "compose">> = [
   "script",
-  "sketch",
   "audio",
   "video",
 ];
 
 const STAGE_DEFS: Record<Exclude<StageId, "compose">, StageDef> = {
   script: EPISODE_STAGE_REGISTRY.find((s) => s.id === "script")!,
-  sketch: EPISODE_STAGE_REGISTRY.find((s) => s.id === "sketch")!,
   audio: EPISODE_STAGE_REGISTRY.find((s) => s.id === "audio")!,
   video: EPISODE_STAGE_REGISTRY.find((s) => s.id === "video")!,
 };
@@ -48,7 +46,6 @@ export function deriveBeatStates(beats: Beat[], tasks: Task[]): BeatStates {
   for (const beat of beats) {
     const stateForBeat: Record<Exclude<StageId, "compose">, BeatStageState> = {
       script: "missing",
-      sketch: "missing",
       audio: "missing",
       video: "missing",
     };
@@ -78,8 +75,6 @@ function deriveSingle(
     if (beat.visual_description && beat.visual_description.trim().length > 0) {
       return "ready";
     }
-  } else if (stage === "sketch" && beat.sketch_url) {
-    return "ready";
   } else if (stage === "audio" && beat.audio_url) {
     return "ready";
   } else if (stage === "video" && beat.video_url) {

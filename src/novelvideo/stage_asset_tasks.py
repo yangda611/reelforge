@@ -4,7 +4,7 @@ Each function is a synchronous subprocess invocation that produces a determinist
 output file under
 `<project_dir>/director_worlds/<scene_safe>/v1/`. They update
 `stage_manifest.json` after each step so other parts of the system (paths.py,
-DirectorWorldService.make_3gs_editor_url, sketch_studio dual-entry) can find the
+DirectorWorldService.make_3gs_editor_url) can find the
 3GS assets via the manifest.
 
 These run in the task backend runner; the caller wraps them and reports progress.

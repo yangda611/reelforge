@@ -9,13 +9,7 @@ export interface EpisodeWorkbenchScope {
   episode: number;
 }
 
-export type BeatActionPanelSectionId =
-  | "text"
-  | "sketch"
-  | "render"
-  | "audio"
-  | "video";
-export type BeatViewToggleId = "text" | "sketch" | "render";
+export type BeatActionPanelSectionId = "text" | "audio" | "video";
 
 export type PersistedBeatSelection =
   | { mode: "none"; activeBeat: number | null }
@@ -31,30 +25,17 @@ export const DEFAULT_BEAT_SELECTION: PersistedBeatSelection = {
 export const DEFAULT_ACTION_PANEL_SECTIONS: readonly BeatActionPanelSectionId[] = [
   "text",
 ];
-export const DEFAULT_VIEW_TOGGLES: readonly BeatViewToggleId[] = [
-  "text",
-  "sketch",
-  "render",
-];
 
 const ACTION_PANEL_SECTION_IDS = new Set<BeatActionPanelSectionId>([
   "text",
-  "sketch",
-  "render",
   "audio",
   "video",
-]);
-const VIEW_TOGGLE_IDS = new Set<BeatViewToggleId>([
-  "text",
-  "sketch",
-  "render",
 ]);
 
 interface EpisodeWorkbenchState {
   lastEpisodeLocationByProject: Record<string, string>;
   beatSelectionByScope: Record<string, PersistedBeatSelection>;
   actionPanelSectionsByScope: Record<string, BeatActionPanelSectionId[]>;
-  viewTogglesByScope: Record<string, BeatViewToggleId[]>;
   setLastEpisodeLocation: (project: string, location: string) => void;
   clearLastEpisodeLocation: (project: string) => void;
   setBeatSelection: (
@@ -64,10 +45,6 @@ interface EpisodeWorkbenchState {
   setActionPanelSections: (
     scope: EpisodeWorkbenchScope,
     sections: Iterable<BeatActionPanelSectionId>,
-  ) => void;
-  setViewToggles: (
-    scope: EpisodeWorkbenchScope,
-    toggles: Iterable<BeatViewToggleId>,
   ) => void;
   reset: () => void;
 }
@@ -143,23 +120,12 @@ function normalizeActionPanelSections(
   );
 }
 
-function normalizeViewToggles(
-  toggles: Iterable<unknown> | undefined,
-): BeatViewToggleId[] {
-  if (!toggles) return [...DEFAULT_VIEW_TOGGLES];
-  const next = [...new Set(toggles)].filter((id): id is BeatViewToggleId =>
-    VIEW_TOGGLE_IDS.has(id as BeatViewToggleId),
-  );
-  return next.length > 0 ? next : [...DEFAULT_VIEW_TOGGLES];
-}
-
 export const useEpisodeWorkbenchStore = create<EpisodeWorkbenchState>()(
   persist(
     (set) => ({
       lastEpisodeLocationByProject: {},
       beatSelectionByScope: {},
       actionPanelSectionsByScope: {},
-      viewTogglesByScope: {},
       setLastEpisodeLocation: (project, location) =>
         set((state) => ({
           lastEpisodeLocationByProject: {
@@ -190,24 +156,16 @@ export const useEpisodeWorkbenchStore = create<EpisodeWorkbenchState>()(
             [episodeWorkbenchScopeKey(scope)]: normalizeActionPanelSections(sections),
           },
         })),
-      setViewToggles: (scope, toggles) =>
-        set((state) => ({
-          viewTogglesByScope: {
-            ...state.viewTogglesByScope,
-            [episodeWorkbenchScopeKey(scope)]: normalizeViewToggles(toggles),
-          },
-        })),
       reset: () =>
         set({
           lastEpisodeLocationByProject: {},
           beatSelectionByScope: {},
           actionPanelSectionsByScope: {},
-          viewTogglesByScope: {},
         }),
     }),
     {
       name: "supertale-episode-workbench",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => quotaSafeStateStorage),
       migrate: (persisted: unknown) => {
         const base = (persisted ?? {}) as Partial<EpisodeWorkbenchState>;
@@ -230,15 +188,10 @@ export const useEpisodeWorkbenchStore = create<EpisodeWorkbenchState>()(
         )) {
           nextSections[key] = normalizeActionPanelSections(value);
         }
-        const nextToggles: Record<string, BeatViewToggleId[]> = {};
-        for (const [key, value] of Object.entries(base.viewTogglesByScope ?? {})) {
-          nextToggles[key] = normalizeViewToggles(value);
-        }
         return {
           lastEpisodeLocationByProject: nextLocations,
           beatSelectionByScope: nextSelection,
           actionPanelSectionsByScope: nextSections,
-          viewTogglesByScope: nextToggles,
         };
       },
     },

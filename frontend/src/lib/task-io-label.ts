@@ -24,12 +24,8 @@ const TASK_IO_LABEL_KEYS: Record<string, string> = {
   当前背景: "taskCenter.io.currentBackground",
   背景候选: "taskCenter.io.backgroundCandidate",
   输入参考: "taskCenter.io.inputReference",
-  "草图 + 背景 + 身份/道具": "taskCenter.io.sketchBackgroundIdentityProps",
   // target_label
   "360 全景": "taskCenter.io.pano360",
-  当前草图: "taskCenter.io.currentSketch",
-  草图候选: "taskCenter.io.sketchCandidate",
-  当前草图候选: "taskCenter.io.currentSketchCandidate",
   当前分镜: "taskCenter.io.currentStoryboard",
   分镜候选: "taskCenter.io.storyboardCandidate",
 };

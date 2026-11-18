@@ -13,9 +13,7 @@ from pydantic import BaseModel, Field
 
 from novelvideo.brainclaw_contract import BrainClawProfile
 from novelvideo.models import (
-    beat_lock_camera_beat,
     beat_scene_ref,
-    beats_locked_fixed_camera,
     beats_share_scene,
     real_detected_identities,
     real_detected_props,
@@ -227,8 +225,7 @@ Cinematic Continuity & Smooth Transition Rules:
 - When adjacent_beats context is present, design smooth transitions without relying on last-frame chaining:
   1. Entry: preserve compatible screen direction, eyeline polarity, and camera momentum from prev_beat when consistent with the starting image.
   2. Exit toward next_beat (in the final phase of the shot): when same_scene_with_next is true, bridge smoothly using Action Match (end mid-follow-through toward the next opening motion), Eyeline / Visual Lead (settle gaze or camera push onto the element next_beat reveals), Foreground Occlusion (only with elements already visible in the scene/frame), or Same-Direction Camera Sweep.
-  3. Locked Fixed Camera pairs (when adjacent_beats marks locked_with_prev, locked_with_next, or beat.scene_ref.lock_camera_beat is set): keep the camera strictly stationary on a locked tripod (zero push-in, pan, tilt, whip-pan, or zoom) so the background anchor and character standing alignment splice seamlessly across cuts; carry continuity exclusively via uninterrupted subject motion, gesture, gaze, and subtle ambient dynamics.
-  4. Scene cuts (same_scene_with_next is false): do not force whip pans or invent ungrounded particles/objects; finish cleanly on a stable framing anchor or complementary composition for a crisp cut.""" + SEEDANCE2_CINEMATIC_SKILL_DIRECTIVES
+  3. Scene cuts (same_scene_with_next is false): do not force whip pans or invent ungrounded particles/objects; finish cleanly on a stable framing anchor or complementary composition for a crisp cut.""" + SEEDANCE2_CINEMATIC_SKILL_DIRECTIVES
 
 
 def detect_seedance2_prompt_language(beat: dict[str, Any]) -> AssetLanguage:
@@ -804,7 +801,6 @@ def build_seedance2_prompt_draft(
     prompt_guidance_template_keys: list[str] | tuple[str, ...] | None = None,
     manual_prompt_reference: str = "",
     language: AssetLanguage = "zh",
-    locked_camera: bool = False,
 ) -> str:
     """Build a model-facing draft prompt without API-only video params."""
 
@@ -851,13 +847,6 @@ def build_seedance2_prompt_draft(
             lines.append(overlay)
         if guidance:
             lines.append(_clean_sentence(guidance, language))
-        if locked_camera or beat_lock_camera_beat(beat) is not None:
-            lines.append(
-                _clean_sentence(
-                    "Keep the camera locked steady on a tripod with no push, pan, or zoom while subject action and ambient motion continue smoothly",
-                    language,
-                )
-            )
         if manual:
             lines.append(
                 _clean_sentence(
@@ -881,13 +870,6 @@ def build_seedance2_prompt_draft(
         lines.append(overlay)
     if guidance:
         lines.append(_clean_sentence(guidance, language))
-    if locked_camera or beat_lock_camera_beat(beat) is not None:
-        lines.append(
-            _clean_sentence(
-                "固定三脚架机位保持构图静止，不做推拉摇移变焦，仅通过人物动作与环境细节自然流畅衔接",
-                language,
-            )
-        )
     if manual:
         lines.append(
             _clean_sentence(
@@ -966,13 +948,8 @@ def _build_adjacent_beats_context(
     next_beat: dict[str, Any] | None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
-    lock_target = beat_lock_camera_beat(beat)
-    if lock_target is not None:
-        context["locked_camera_beat"] = lock_target
     if prev_beat:
         context["same_scene_with_prev"] = beats_share_scene(prev_beat, beat)
-        if beats_locked_fixed_camera(beat, prev_beat=prev_beat):
-            context["locked_with_prev"] = True
         prev_entry: dict[str, Any] = {
             "beat_number": prev_beat.get("beat_number"),
             "visual_description": _text(prev_beat.get("visual_description"))[:220],
@@ -988,8 +965,6 @@ def _build_adjacent_beats_context(
         context["prev_beat"] = prev_entry
     if next_beat:
         context["same_scene_with_next"] = beats_share_scene(beat, next_beat)
-        if beats_locked_fixed_camera(beat, next_beat=next_beat):
-            context["locked_with_next"] = True
         context["next_beat"] = {
             "beat_number": next_beat.get("beat_number"),
             "visual_description": _text(next_beat.get("visual_description"))[:220],
@@ -1056,18 +1031,10 @@ def build_seedance2_prompt_composer_task(
     adjacent_beats = _build_adjacent_beats_context(beat, prev_beat, next_beat)
     if adjacent_beats:
         payload["adjacent_beats"] = adjacent_beats
-    is_locked_camera = beats_locked_fixed_camera(
-        beat, prev_beat=prev_beat, next_beat=next_beat
-    )
     language_rule = asset_language_instruction(language)
     duration_range = f"{resolved_min}-{resolved_max}s"
     duration_range_zh = f"{resolved_min}-{resolved_max} 秒"
     if language == "en":
-        locked_line = (
-            "- FIXED-CAMERA LOCK: keep the camera completely steady on a locked tripod (no push-in, pan, tilt, whip-pan, or zoom) so background alignment stays identical across cuts; bridge solely through subject motion and ambient dynamics.\n"
-            if is_locked_camera
-            else ""
-        )
         return (
             f"Write the final {profile.label} image-to-video prompt from the JSON below.\n\n"
             "Hard requirements:\n"
@@ -1081,16 +1048,10 @@ def build_seedance2_prompt_composer_task(
             "- Avoid repeating static character traits covered by reference images and avoid empty buzzwords ('8K', 'masterpiece', 'cinematic feel'). For character/prop interactions, use dual spatial anchoring (frame position + in-scene relative orientation), explicit eyeline, hand task, and prop state transitions. Keep lips still for off-screen voiceover/OS.\n"
             f"- Choose `recommended_duration` dynamically in integer seconds ({duration_range}) to fit pacing: 4-5s for crisp reactions/inserts, 6-9s for dialogue/action-reaction beats, 10-{resolved_max}s for continuous long takes or full voiceover beats (never write duration numbers inside `final_prompt`).\n"
             "- Start strictly forward from the starting image state; when adjacent_beats is present, bridge smoothly from prev_beat (compatible flow/direction) and shape the ending motion/eyeline/framing as a natural lead into next_beat (clean cut if same_scene_with_next is false; never invent ungrounded elements).\n"
-            f"{locked_line}"
             f"- {language_rule}\n"
             "- Output only the final prompt.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
         )
-    locked_line_zh = (
-        "- 固定机位锁定：保持三脚架固定机位与背景透视完全稳定，禁止推拉、摇移、甩镜或变焦，仅通过人物动作延续、视线与环境微动衔接相邻镜头。\n"
-        if is_locked_camera
-        else ""
-    )
     return (
         f"请根据下面 JSON 写出最终 {profile.label} 图生视频 prompt。\n\n"
         "硬性要求：\n"
@@ -1109,7 +1070,6 @@ def build_seedance2_prompt_composer_task(
         "- 当画面有角色互动或方向运动时，使用“画面位置+场景内相对朝向”双重空间锚定，写清视线落点、手部动作与道具交接变化；若 `audio_type` 为 `narration`/内心独白 OS，人物必须保持闭口专注，禁止张嘴对口型。\n"
         f"- 在 `recommended_duration` 字段中按镜头节奏动态给出 {duration_range_zh}整数推荐时长（短切反应/空镜特写 4-5 秒，常规对话/动作交互 6-9 秒，持续长镜头/多阶段调度/完整独白旁白 10-{resolved_max} 秒），多阶段镜头应写明前后流畅演进，严禁把秒数写进 `final_prompt`。\n"
         "- 必须严格从首帧参考图的起始状态向后演进；若存在 adjacent_beats，在不违背当前首帧的前提下承接 prev_beat 的运动/视线方向，并在结尾设计自然过渡落点（同场景优先动作延续、视线引导、已有前景遮挡或同向扫镜；跨场次保持构图呼应或干净收束，严禁凭空编造画面外物体）。\n"
-        f"{locked_line_zh}"
         "- 只输出最终 prompt，不要解释。\n\n"
         f"输出语言：{language_rule}\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
@@ -1395,9 +1355,6 @@ async def generate_seedance2_prompt(
         prompt_guidance=localized_guidance,
         manual_prompt_reference=manual_prompt_reference,
         language=language,
-        locked_camera=beats_locked_fixed_camera(
-            beat, prev_beat=prev_beat, next_beat=next_beat
-        ),
     )
     try:
         compose_kwargs: dict[str, Any] = {

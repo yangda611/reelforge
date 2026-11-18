@@ -256,8 +256,6 @@ def _mainline_context_for_ref(ref: dict[str, Any]) -> list[dict[str, Any]]:
         return [base("scene", plyKind=meta.get("ply_kind"))]
     if kind == "prop" or role.startswith("prop_"):
         return [base("prop")]
-    if role == "current_sketch":
-        return [base("sketch")]
     if role == "current_frame":
         return [base("frame")]
     if role == "current_video":
@@ -392,34 +390,19 @@ def _normalize_supported_image_aspect_ratio(value: Any, fallback: str = "2:3") -
     return _nearest_supported_image_aspect_ratio(ratio, fallback=fallback)
 
 
-def _project_sketch_aspect_ratio(
+def _project_frame_aspect_ratio(
     project_config: dict[str, Any] | None,
-    episode: Any,
     fallback: str = "2:3",
 ) -> str:
-    config = project_config or {}
-    ep_key = str(episode or "").strip()
-    by_episode = config.get("sketch_aspect_ratio_by_episode") or {}
-    if isinstance(by_episode, dict) and ep_key:
-        value = by_episode.get(ep_key)
-        if value is None:
-            try:
-                value = by_episode.get(int(ep_key))
-            except ValueError:
-                value = None
-        ratio = _normalize_supported_image_aspect_ratio(value, fallback="")
-        if ratio:
-            return ratio
-    for key in ("sketch_aspect_ratio", "aspect_ratio"):
-        ratio = _normalize_supported_image_aspect_ratio(config.get(key), fallback="")
-        if ratio:
-            return ratio
-    return fallback
+    ratio = _normalize_supported_image_aspect_ratio(
+        (project_config or {}).get("aspect_ratio"), fallback=""
+    )
+    return ratio or fallback
 
 
-def _context_sketch_aspect_ratio(context: dict[str, Any], fallback: str = "2:3") -> str:
+def _context_frame_aspect_ratio(context: dict[str, Any], fallback: str = "2:3") -> str:
     return _normalize_supported_image_aspect_ratio(
-        context.get("sketch_aspect_ratio"),
+        context.get("frame_aspect_ratio"),
         fallback=fallback,
     )
 
@@ -1043,9 +1026,7 @@ async def build_beat_preset_context(
     def _project_rel(path: Path) -> str:
         return path.relative_to(project_dir).as_posix()
 
-    canonical_sketch_path = paths.sketch(beat)
     for rel_path, kind, role, label in [
-        (_project_rel(canonical_sketch_path), "sketch", "current_sketch", "当前草图"),
         (_project_rel(paths.frame(beat)), "frame", "current_frame", "当前分镜"),
         (
             _project_rel(paths.video(beat)),
@@ -1162,74 +1143,13 @@ async def build_beat_preset_context(
     # reverse / 360 / 3GS remain available through the set-selected-background
     # SkillNode's embedded source picker.
 
-    sketch_colors: dict[str, str] = {}
-    get_sketch_colors = getattr(store, "get_sketch_colors", None)
-    if callable(get_sketch_colors):
-        try:
-            sketch_colors = get_sketch_colors(episode) or {}
-        except Exception:
-            sketch_colors = {}
-    if not sketch_colors:
-        try:
-            from novelvideo.generators.episode_optimizer import EpisodeOptimizer
-
-            sketch_colors = EpisodeOptimizer.assign_sketch_colors(
-                [
-                    {
-                        "name": getattr(character_obj, "name", ""),
-                        "identities": [
-                            (
-                                identity.model_dump()
-                                if hasattr(identity, "model_dump")
-                                else _jsonable(identity)
-                            )
-                            for identity in (getattr(character_obj, "identities", []) or [])
-                        ],
-                    }
-                    for character_obj in getattr(store, "get_all_characters", lambda: [])()
-                ],
-                episode_beats=beats,
-            )
-        except Exception:
-            sketch_colors = {}
-
     try:
         from novelvideo.project_config import load_project_config_file
 
         project_config = load_project_config_file(username, project) if project else {}
     except Exception:
         project_config = {}
-    sketch_aspect_ratio = _project_sketch_aspect_ratio(project_config, episode)
-
-    prop_marker_colors: dict[str, str] = {}
-    try:
-        from novelvideo.generators.nanobanana_grid import _global_prop_marker_colors
-
-        prop_marker_colors = _global_prop_marker_colors(
-            [target],
-            prop_menu=prop_menu,
-            sketch_colors=sketch_colors,
-        )
-    except Exception:
-        prop_marker_colors = {}
-
-    character_profiles: dict[str, Any] = {}
-    for character_obj in getattr(store, "get_all_characters", lambda: [])():
-        character_name = str(getattr(character_obj, "name", "") or "").strip()
-        if not character_name:
-            continue
-        character_profiles[character_name] = {
-            "name": character_name,
-            "gender": str(getattr(character_obj, "gender", "") or "").strip(),
-            "body_type": str(getattr(character_obj, "body_type", "") or "").strip(),
-            "appearance_details": str(
-                getattr(character_obj, "appearance_details", "") or ""
-            ).strip(),
-            "identities": [
-                identity.model_dump() if hasattr(identity, "model_dump") else _jsonable(identity)
-                for identity in (getattr(character_obj, "identities", []) or [])
-            ],
-        }
+    frame_aspect_ratio = _project_frame_aspect_ratio(project_config)
 
     return {
         "scope": "beat",
@@ -1240,7 +1160,7 @@ async def build_beat_preset_context(
         "episode": episode,
         "beat": beat,
         "primary_slot": primary_slot,
-        "sketch_aspect_ratio": sketch_aspect_ratio,
+        "frame_aspect_ratio": frame_aspect_ratio,
         "beat_data": {
             "beat_number": target.get("beat_number"),
             "narration_segment": target.get("narration_segment"),
@@ -1253,11 +1173,6 @@ async def build_beat_preset_context(
         },
         "prop_menu": prop_menu,
         "scene_menu": scene_menu,
-        "sketch_context": {
-            "sketch_colors": sketch_colors,
-            "prop_marker_colors": prop_marker_colors,
-            "characters": character_profiles,
-        },
         "refs": [r.model_dump() for r in refs],
     }
 
@@ -1421,18 +1336,6 @@ def _beat_target_placeholder_ref(
     ep_dir = f"ep{ep_num:03d}"
     base_meta = {"episode": ep_num, "beat": beat_num, "primary_slot": primary_slot}
     output_aspect_ratio = _normalize_supported_image_aspect_ratio(aspect_ratio)
-    if role == "current_sketch":
-        return {
-            "kind": "sketch",
-            "role": role,
-            "label": "当前草图",
-            "rel_path": f"sketches/{ep_dir}/beat_{beat_num:02d}.png",
-            "url": None,
-            "exists": False,
-            "media_type": "image",
-            "aspect_ratio": output_aspect_ratio,
-            "meta": base_meta,
-        }
     if role == "current_frame":
         return {
             "kind": "frame",
@@ -1448,7 +1351,7 @@ def _beat_target_placeholder_ref(
     if role == "selected_background":
         # selected_background 总是有站位 — 没文件时也画个 placeholder 节点,
         # 用户才知道往哪 commit 背景(否则 canvas 上完全找不到目标 slot)。
-        # 16:9 跟导演阶段产出对齐,不走 beat sketch 的 2:3。
+        # 16:9 跟导演阶段产出对齐,不走 frame 的 2:3。
         beat_dir = f"beat_{beat_num:02d}"
         return {
             "kind": "director",
@@ -1534,10 +1437,7 @@ def _beat_context_node(
         "timeOfDay": (edit_fields or {}).get("time_of_day") or "",
         "detectedIdentities": beat_ctx.get("detectedIdentities") or [],
         "detectedProps": beat_ctx.get("detectedProps") or [],
-        "sketchColors": beat_ctx.get("sketchColors") or {},
-        "propMarkerColors": beat_ctx.get("propMarkerColors") or {},
         "selectedBackgroundExists": bool(beat_ctx.get("selectedBackgroundExists")),
-        "currentSketchExists": bool(beat_ctx.get("currentSketchExists")),
         "currentFrameExists": bool(beat_ctx.get("currentFrameExists")),
     }
     data: dict[str, Any] = {
@@ -1993,7 +1893,6 @@ DIRECTOR_CAPTURE_IMAGE_ROLES = (
 )
 
 BEAT_CONTEXT_BINDING_ROLES = {
-    "current_sketch",
     "current_frame",
     "current_video",
     "current_audio",
@@ -2012,19 +1911,6 @@ DIRECTOR_CAPTURE_LAYOUT_POSITIONS = {
     "prop_staging_mask": (-620, 1940),
     "director_repaired_or_alt": (-1500, 2320),
 }
-
-SKETCH_DIRECTOR_CAPTURE_LAYOUT_POSITIONS = {
-    "selected_background": (-1080, -1040),
-    "director_combined": (-1080, -360),
-    "director_env": (-1500, 1560),
-    "actor_overlay": (-1060, 1560),
-    "director_env_actor": (-620, 1560),
-    "prop_staging_overlay": (-1500, 1940),
-    "actor_mask": (-1060, 1940),
-    "prop_staging_mask": (-620, 1940),
-    "director_repaired_or_alt": (-1500, 2320),
-}
-
 
 def _scene_prompt_content(scene_id: str, meta: dict[str, Any]) -> str:
     env_prompt = str(meta.get("environment_prompt") or "").strip()
@@ -2253,11 +2139,7 @@ def _append_scene_asset_workflow(
 
         master_node = role_to_node.get("scene_master")
         reverse_node = role_to_node.get("scene_reverse_master")
-        if layout_style == "sketch":
-            master_prompt_pos = (-630, 590)
-            reverse_prompt_pos = (1040, 730)
-            generic_prompt_pos = (-680, 1160)
-        elif layout_style == "beat":
+        if layout_style == "beat":
             scene_row_y = 640 + scene_index * 900
             master_prompt_pos = (-540, scene_row_y)
             reverse_prompt_pos = (300, scene_row_y + 380)
@@ -2450,7 +2332,7 @@ def _append_scene_asset_workflow(
                 # scene_360 viewer 旁会有独立的 workflow_scene_director_pano_360
                 # trigger;prompt 应该连到 trigger 而非 viewer。这条 edge 在 asset
                 # preset Phase 1d 阶段单独 emit。
-                # Beat 画布 (layout_style=="beat" / "sketch") 下,pano viewer 是
+                # Beat 画布 (layout_style=="beat") 下,pano viewer 是
                 # 信息性参考节点 (没独立 trigger),prompt → pano viewer 仍有意义。
                 if layout_style == "default" and role in {"scene_director_pano_360", "scene_360"}:
                     continue
@@ -2478,9 +2360,6 @@ def _append_scene_asset_workflow(
             source_y = int(source_position.get("y") or 0)
             viewer_x = source_x
             viewer_y = source_y + 360
-            if layout_style == "sketch":
-                viewer_x = 880
-                viewer_y = 1135 + scene_index * 520
             if layout_style == "default":
                 viewer_x = 1420
                 viewer_y = 945 + scene_index * 1180
@@ -2736,380 +2615,6 @@ def _prop_profile_content(profile: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _gender_label(value: str) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"男", "男性", "male", "m"}:
-        return "MALE"
-    if normalized in {"女", "女性", "female", "f"}:
-        return "FEMALE"
-    return str(value or "").strip()
-
-
-def _split_marker_color(color: str) -> tuple[str, str]:
-    parts = str(color or "").strip().split(" ", 1)
-    if not parts or not parts[0]:
-        return "", ""
-    return parts[0], parts[1] if len(parts) > 1 else parts[0]
-
-
-def _identity_marker_context(
-    *,
-    identity_id: str,
-    sketch_context: dict[str, Any],
-) -> dict[str, str]:
-    character = _identity_character(identity_id, (sketch_context.get("characters") or {}).keys())
-    profile = (sketch_context.get("characters") or {}).get(character) or {}
-    suffix = _identity_name(identity_id, character)
-    identity_data = next(
-        (
-            item
-            for item in (profile.get("identities") or [])
-            if str(item.get("identity_id") or "") == identity_id
-        ),
-        {},
-    )
-    color = str((sketch_context.get("sketch_colors") or {}).get(identity_id) or "").strip()
-    hex_code, color_name = _split_marker_color(color)
-    gender = _gender_label(str(profile.get("gender") or ""))
-    body_type = str(identity_data.get("body_type") or profile.get("body_type") or "").strip()
-    body_desc = ", ".join(part for part in [gender, body_type] if part) or "character figure"
-    try:
-        from novelvideo.generators.prompt_builder import PromptComponents
-
-        tag = PromptComponents.compute_char_tag(character, identity_id=identity_id)
-    except Exception:
-        tag = f"[{_safe_id(identity_id, fallback='CHAR').upper()}]"
-    return {
-        "identity_id": identity_id,
-        "character": character,
-        "suffix": suffix,
-        "tag": tag,
-        "color": color,
-        "hex": hex_code,
-        "color_name": color_name,
-        "body_desc": body_desc,
-        "appearance_details": str(
-            identity_data.get("appearance_details") or profile.get("appearance_details") or ""
-        ).strip(),
-    }
-
-
-def _prop_marker_context(
-    prop_id: str,
-    prop_menu: list[dict[str, Any]],
-    prop_marker_colors: dict[str, str] | None = None,
-) -> dict[str, str]:
-    prop_info = next((item for item in prop_menu if str(item.get("prop_id") or "") == prop_id), {})
-    try:
-        from novelvideo.generators.prompt_builder import PromptComponents
-
-        tag = PromptComponents.compute_prop_tag(prop_id)
-    except Exception:
-        tag = f"[{_safe_id(prop_id, fallback='PROP').upper()}]"
-    return {
-        "prop_id": prop_id,
-        "tag": tag,
-        "prop_type": str(prop_info.get("prop_type") or "object").strip(),
-        "visual_prompt": str(prop_info.get("visual_prompt") or "").strip(),
-        "description": str(prop_info.get("description") or "").strip(),
-        "marker_color": str((prop_marker_colors or {}).get(prop_id) or "").strip(),
-    }
-
-
-def _replace_beat_markers(
-    text: str,
-    identity_markers: dict[str, dict[str, str]],
-    prop_markers: dict[str, dict[str, str]],
-) -> str:
-    def replace_match(match: re.Match) -> str:
-        identity_id = str(match.group(1) or "").strip()
-        prop_id = str(match.group(2) or "").strip()
-        if identity_id:
-            marker = identity_markers.get(identity_id)
-            if marker:
-                color_name = marker.get("color_name") or marker.get("color") or "assigned color"
-                return f"{marker.get('tag')} ({color_name})"
-            return identity_id
-        if prop_id:
-            marker = prop_markers.get(prop_id)
-            if marker:
-                marker_color = str(marker.get("marker_color") or "").strip()
-                if marker_color:
-                    return f"{marker.get('tag')} ({marker_color})"
-                return marker.get("tag", prop_id)
-            return prop_id
-        return match.group(0)
-
-    return _MARKER_RE.sub(replace_match, text or "")
-
-
-def _beat_sketch_marker_context(context: dict[str, Any]) -> dict[str, Any]:
-    beat_data = context.get("beat_data") or {}
-    visual_description = str(beat_data.get("visual_description") or "")
-    marker_identities, marker_props = _visual_markers(visual_description)
-    detected_identities = [
-        _identity_id_from_item(item) for item in _as_list(beat_data.get("detected_identities"))
-    ]
-    detected_props = [
-        _prop_id_from_item(item) for item in _as_list(beat_data.get("detected_props"))
-    ]
-    identity_ids = list(
-        dict.fromkeys(_real_identity_ids([*marker_identities, *detected_identities]))
-    )
-    prop_ids = list(dict.fromkeys(_real_prop_ids([*marker_props, *detected_props])))
-    sketch_context = context.get("sketch_context") or {}
-    prop_marker_colors = dict(sketch_context.get("prop_marker_colors") or {})
-    identities = {
-        identity_id: _identity_marker_context(
-            identity_id=identity_id,
-            sketch_context=sketch_context,
-        )
-        for identity_id in identity_ids
-        if identity_id
-    }
-    props = {
-        prop_id: _prop_marker_context(
-            prop_id,
-            context.get("prop_menu") or [],
-            prop_marker_colors=prop_marker_colors,
-        )
-        for prop_id in prop_ids
-        if prop_id
-    }
-    return {
-        "identities": identities,
-        "props": props,
-        "visual_with_tags": _replace_beat_markers(visual_description, identities, props),
-    }
-
-
-def _beat_sketch_marker_content(marker_context: dict[str, Any]) -> str:
-    identity_lines = []
-    for marker in marker_context.get("identities", {}).values():
-        color = marker.get("color")
-        if color:
-            hex_code, color_name = _split_marker_color(color)
-            identity_lines.append(
-                f"- {marker.get('identity_id')} -> {marker.get('tag')} — "
-                f"{color_name} ({hex_code}) figure. {marker.get('body_desc')}."
-            )
-        else:
-            identity_lines.append(
-                f"- {marker.get('identity_id')} -> {marker.get('tag')} — "
-                f"{marker.get('body_desc')}."
-            )
-
-    prop_lines = []
-    for marker in marker_context.get("props", {}).values():
-        description = marker.get("visual_prompt") or marker.get("description") or "core prop/object"
-        marker_color = str(marker.get("marker_color") or "").strip()
-        if marker_color:
-            prop_lines.append(
-                f"- {marker.get('prop_id')} -> {marker.get('tag')} — "
-                f"marker color {marker_color}; {description}"
-            )
-        else:
-            prop_lines.append(f"- {marker.get('prop_id')} -> {marker.get('tag')} — {description}")
-
-    lines = [
-        "Sketch generation uses TEXT MARKERS, not image references.",
-        "reference_images: []",
-        "",
-        "COLOR-CODED CHARACTERS:",
-        *(identity_lines or ["- none"]),
-        "",
-        "NAMED CORE PROPS:",
-        *(prop_lines or ["- none"]),
-    ]
-    return "\n".join(lines)
-
-
-def _beat_sketch_prompt(context: dict[str, Any], marker_context: dict[str, Any]) -> str:
-    beat_data = context.get("beat_data") or {}
-    visual_with_tags = (
-        marker_context.get("visual_with_tags")
-        or str(beat_data.get("visual_description") or "").strip()
-    )
-    keyframe_prompt = str(beat_data.get("keyframe_prompt") or "").strip()
-    identity_markers = list((marker_context.get("identities") or {}).values())
-    prop_markers = list((marker_context.get("props") or {}).values())
-    colored_character_targets = [
-        marker.get("tag", "")
-        for marker in identity_markers
-        if marker.get("tag") and marker.get("color")
-    ]
-    colored_prop_markers = [
-        marker
-        for marker in prop_markers
-        if marker.get("tag") and str(marker.get("marker_color") or "").strip()
-    ]
-    colored_targets = [
-        *colored_character_targets,
-        *[str(marker.get("tag") or "") for marker in colored_prop_markers],
-    ]
-    color_lines = []
-    for marker in identity_markers:
-        color = marker.get("color")
-        if color:
-            hex_code, color_name = _split_marker_color(color)
-            color_lines.append(
-                f"- {marker.get('tag')} — **{color_name} ({hex_code})** figure. "
-                f"{marker.get('body_desc')}."
-            )
-        else:
-            color_lines.append(f"- {marker.get('tag')} — {marker.get('body_desc')}.")
-    prop_lines = []
-    key_prop_color_lines = []
-    for marker in prop_markers:
-        marker_color = str(marker.get("marker_color") or "").strip()
-        if marker_color:
-            prop_lines.append(
-                f"- {marker.get('tag')} — a solid {marker_color}-filled simple geometric "
-                "shape replacing the prop. ZERO internal detail; the color is only an "
-                "identity marker for the sketch stage."
-            )
-            key_prop_color_lines.append(f"- {marker.get('tag')} — flat solid {marker_color} block.")
-        else:
-            prop_lines.append(f"- {marker.get('prop_id')} {marker.get('tag')} — core prop/object.")
-    color_law = ""
-    if colored_targets:
-        key_prop_colors = (
-            ["", "KEY PROP COLORS:", *key_prop_color_lines] if key_prop_color_lines else []
-        )
-        color_law = "\n".join(
-            [
-                "COLOR LAW (NON-NEGOTIABLE):",
-                "These named characters / named props MUST receive their assigned "
-                f"color fill: {', '.join(colored_targets)}",
-                "Unnamed people and extras must be gray stick figures only, NO color fill.",
-                "Do not add arbitrary color fills to background, furniture, or unmarked props.",
-                "",
-                "COLOR-CODED CHARACTERS:",
-                *(color_lines or ["- none"]),
-                *key_prop_colors,
-            ]
-        )
-
-    sections = [
-        "Generate ONE storyboard sketch panel for this NovelVideo beat.",
-        "",
-        "STYLE: rushed film director's storyboard scribble, rough hand-drawn sketch on cheap white paper, raw thumbnail-grade draft.",
-        "This is a blocking sketch: use stick figures, simple poses, sparse background lines, and no polished illustration.",
-        "",
-        color_law,
-        "NAMED CORE PROPS (flat solid color blocks in sketch; rendered as real objects later):",
-        *(prop_lines or ["- none"]),
-        "",
-        "SCENE DESCRIPTION (do NOT render this text on the image):",
-        visual_with_tags,
-    ]
-    if keyframe_prompt:
-        sections.extend(["", "KEYFRAME NOTE:", keyframe_prompt])
-    sections.extend(
-        [
-            "",
-            "ABSOLUTELY NO TEXT ON IMAGE: no labels, captions, panel numbers, signs, readable paper text, or dialogue bubbles.",
-            "Human figures are minimal stick figures. Named props are simple readable shapes in the correct position; their final material is for render stage.",
-            "REFERENCE IMAGES: none. This sketch stage follows NovelVideo production logic and uses text/color markers only.",
-        ]
-    )
-    return "\n".join(part for part in sections if part is not None)
-
-
-def _beat_render_prompt(context: dict[str, Any]) -> str:
-    from novelvideo.generators.nanobanana_grid import (
-        _resolve_scene_prop_asset_refs,
-        filter_character_map_by_precomputed,
-        load_precomputed_panel_detected,
-    )
-    from novelvideo.generators.prompt_builder import (
-        PromptMode,
-        UnifiedPromptBuilder,
-        create_prompt_context,
-    )
-    from novelvideo.project_config import load_project_config_file
-    from novelvideo.services.character_ref_service import build_character_map_for_grid
-    from novelvideo.services.style_service import StyleService
-
-    beat_data = context.get("beat_data") or {}
-    beat_num = int(context.get("beat") or beat_data.get("beat_number") or 1)
-    username = str(context.get("username") or "admin")
-    project = str(context.get("project") or "")
-    project_dir = Path(str(context.get("project_dir") or ""))
-    project_config = load_project_config_file(username, project) if project else {}
-    style = str(project_config.get("visual_style") or "chinese_period_drama")
-    ethnicity = str(project_config.get("ethnicity") or "Chinese")
-    sketch_aspect_ratio = _project_sketch_aspect_ratio(
-        project_config,
-        context.get("episode") or 1,
-    )
-    sketch_colors = dict((context.get("sketch_context") or {}).get("sketch_colors") or {})
-    characters = list(((context.get("sketch_context") or {}).get("characters") or {}).values())
-    user_output_dir = project_dir.parent if project_dir else Path("output") / username
-
-    character_map = build_character_map_for_grid(
-        grid_beats=[beat_data],
-        characters=characters,
-        user_output_dir=user_output_dir,
-        project=project,
-        sketch_colors=sketch_colors,
-        use_detected_identities=True,
-    )
-    panel_detected = load_precomputed_panel_detected([beat_num], [beat_data])
-    character_map = filter_character_map_by_precomputed(character_map, panel_detected)
-    scene_refs, prop_asset_refs = _resolve_scene_prop_asset_refs(
-        project_dir,
-        [beat_data],
-        episode_number=int(context.get("episode") or 1),
-        sketch=False,
-        use_director_refs=False,
-        include_pano_view_refs=False,
-        scene_menu=context.get("scene_menu") or [],
-        prop_menu=context.get("prop_menu") or [],
-    )
-    style_family, animation_subtype = StyleService.get_style_branch(
-        style,
-        project_dir=project_dir,
-    )
-    ctx = create_prompt_context(
-        mode=PromptMode.RENDER,
-        beats=[beat_data],
-        rows=1,
-        cols=1,
-        character_map=character_map,
-        style=style,
-        ethnicity=ethnicity,
-        aspect_ratio=sketch_aspect_ratio,
-        panel_detected_keys=panel_detected,
-        scene_refs=scene_refs,
-        prop_asset_refs=prop_asset_refs,
-        sketch_colors=sketch_colors,
-        style_family=style_family,
-        animation_subtype=animation_subtype,
-        project_dir=str(project_dir),
-    )
-    prompt = UnifiedPromptBuilder(ctx).build()
-    ordered_chars = list(getattr(ctx, "resolved_render_chars", []) or [])
-    plan_paths: list[str] = []
-    try:
-        from novelvideo.generators.prompt_builder import PromptComponents
-
-        for entry in PromptComponents.build_reference_image_plan(ctx, ordered_chars):
-            kind = str(entry.get("kind") or "")
-            path = ""
-            if kind in {"combined_composite", "composite", "portrait_only", "identity_portrait"}:
-                path = str(entry.get("path") or "")
-            elif kind in {"scene", "prop"}:
-                ref = entry.get("ref")
-                path = str(((getattr(ref, "image_paths", []) or [""])[0]) or "")
-            if path:
-                plan_paths.append(str(Path(path).resolve()))
-    except Exception:
-        plan_paths = []
-    context["_freezone_render_reference_paths"] = plan_paths
-    return prompt
-
-
 def _content_for_context(context: dict[str, Any]) -> str:
     if context.get("scope") == "asset":
         lines = [
@@ -3173,7 +2678,6 @@ def _episode_beat_context(episode: Any, beat: dict[str, Any]) -> list[dict[str, 
 
 def _beat_context_mainline_context(context: dict[str, Any]) -> list[dict[str, Any]]:
     beat = context.get("beat_data") or {}
-    sketch_context = context.get("sketch_context") or {}
     scene_id = _normalize_scene_name(beat.get("scene_ref"))
     data = {
         "kind": "beat",
@@ -3186,8 +2690,6 @@ def _beat_context_mainline_context(context: dict[str, Any]) -> list[dict[str, An
         "sceneId": scene_id,
         "detectedIdentities": beat.get("detected_identities"),
         "detectedProps": beat.get("detected_props"),
-        "sketchColors": sketch_context.get("sketch_colors"),
-        "propMarkerColors": sketch_context.get("prop_marker_colors"),
     }
     return [{key: value for key, value in data.items() if value not in (None, "", [])}]
 
@@ -3587,12 +3089,6 @@ async def build_asset_preset_context(
                 before_example = len(refs)
                 for rel_path, kind, role, label in [
                     (
-                        f"sketches/{ep_dir}/beat_{beat_num:02d}.png",
-                        "sketch",
-                        "related_sketch",
-                        f"EP{ep_num} Beat {beat_num} sketch",
-                    ),
-                    (
                         f"freezone/director_control_frames/{ep_dir}/beat_{beat_num:02d}/combined.png",
                         "director",
                         "related_director_combined",
@@ -3837,14 +3333,13 @@ def build_canvas_payload_from_context(
         image_refs = [
             r
             for r in image_refs
-            if str(r.get("role") or "") not in {"related_sketch", "related_director_combined"}
+            if str(r.get("role") or "") != "related_director_combined"
         ]
     is_beat_scope = context.get("scope") == "beat"
-    is_sketch_primary = is_beat_scope and str(context.get("primary_slot") or "").strip() == "sketch"
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     if context.get("scope") == "beat":
-        beat_context_pos = (-1840, -820) if is_sketch_primary else (-1840, -720)
+        beat_context_pos = (-1840, -720)
         nodes.append(
             _beat_context_node(
                 "context_beat",
@@ -4121,62 +3616,10 @@ def build_canvas_payload_from_context(
     ref_node_ids: list[tuple[dict[str, Any], str]] = []
 
     if context.get("scope") == "beat":
-        beat_data = context.get("beat_data") or {}
-        marker_context = _beat_sketch_marker_context(context)
-        if is_sketch_primary:
-            render_prompt = _beat_sketch_prompt(context, marker_context)
-        else:
-            render_prompt = _beat_render_prompt(context)
-        if is_sketch_primary:
-            nodes.append(
-                _text_node(
-                    "sketch_marker_context",
-                    -1840,
-                    -420,
-                    "Sketch marker context",
-                    _beat_sketch_marker_content(marker_context),
-                    {
-                        "__freezone_source": {
-                            "kind": "beat_marker_context",
-                            "role": "sketch_marker_context",
-                            "label": f"EP{context.get('episode')} Beat {context.get('beat')} marker context",
-                            "meta": {
-                                "episode": context.get("episode"),
-                                "beat": context.get("beat"),
-                            },
-                        }
-                    },
-                )
-            )
-        nodes.append(
-            _prompt_text_node(
-                "prompt_beat_visual",
-                -1840,
-                0 if is_sketch_primary else -260,
-                "Beat sketch prompt" if is_sketch_primary else "Beat render prompt",
-                _display_prompt_text(
-                    render_prompt,
-                    fallback_note="（当前 Beat 没有视觉描述或关键帧提示词）",
-                ),
-                source_meta={
-                    "kind": "beat_prompt",
-                    "role": "beat_visual_prompt",
-                    "label": f"EP{context.get('episode')} Beat {context.get('beat')} visual prompt",
-                    "meta": {"episode": context.get("episode"), "beat": context.get("beat")},
-                },
-            )
-        )
         by_role = {str(ref.get("role") or ""): ref for ref in image_refs}
         primary_slot = str(context.get("primary_slot") or "").strip()
-        beat_layout: list[tuple[str, int, int]] = (
-            [("current_sketch", 520, -700)]
-            if is_sketch_primary
-            else [
-                ("current_sketch", 520, -700),
-                ("current_frame", 1680, 260),
-            ]
-        )
-        preset_aspect_ratio = _context_sketch_aspect_ratio(context)
+        beat_layout: list[tuple[str, int, int]] = [("current_frame", 1680, 260)]
+        preset_aspect_ratio = _context_frame_aspect_ratio(context)
         for role_name, x, y in beat_layout:
             ref = by_role.get(role_name)
             if not ref:
@@ -4222,21 +3665,6 @@ def build_canvas_payload_from_context(
                         },
                     }
                 )
-            elif (
-                role_name == "current_sketch"
-                and isinstance(ep_num, int)
-                and isinstance(beat_num, int)
-            ):
-                slot_node.setdefault("data", {}).update(
-                    {
-                        "committed_slot_url": ref.get("url"),
-                        "slot_target": {
-                            "kind": "sketch",
-                            "episode": ep_num,
-                            "beat": beat_num,
-                        },
-                    }
-                )
             nodes.append(slot_node)
             ref_node_ids.append((ref, node_id))
 
@@ -4247,31 +3675,6 @@ def build_canvas_payload_from_context(
             index: int,
         ) -> tuple[int, int]:
             role = str(ref.get("role") or "")
-            if is_sketch_primary:
-                if role == "character_portrait":
-                    return -1500, 520 + (index // 2) * 360
-                if role == "character_identity":
-                    return -1060, 520 + (index // 2) * 360
-                if role in DIRECTOR_CAPTURE_IMAGE_ROLES:
-                    fallback_x = -1500 + (index % 2) * 440
-                    fallback_y = 1420 + (index // 2) * 360
-                    return SKETCH_DIRECTOR_CAPTURE_LAYOUT_POSITIONS.get(
-                        role,
-                        (fallback_x, fallback_y),
-                    )
-                base_positions = {
-                    "identity": (-1060, 520),
-                    "prop": (-1060, 1040),
-                    "scene": (50, 510),
-                    "director": (2520, -640),
-                    "sketch": (520, 1040),
-                    "frame": (1680, 1040),
-                    "render": (2120, 1040),
-                }
-                base_x, base_y = base_positions.get(kind, (80, 820))
-                if kind == "director":
-                    return base_x + (index % 2) * 620, base_y + (index // 2) * 330
-                return base_x + (index % 2) * 420, base_y + (index // 2) * 360
             if role in DIRECTOR_CAPTURE_IMAGE_ROLES:
                 if role == "selected_background":
                     return -1080, -1040
@@ -4289,14 +3692,13 @@ def build_canvas_payload_from_context(
                 "prop": (-1080, 1040),
                 "scene": (80, 300),
                 "director": (-1500, 1420),
-                "sketch": (520, 1040),
                 "frame": (1680, 1040),
                 "render": (2120, 1040),
             }
             base_x, base_y = base_positions.get(kind, (80, 1120))
             return base_x + (index % 2) * 360, base_y + (index // 2) * 360
 
-        beat_bucket_order = ["identity", "prop", "scene", "director", "sketch", "frame", "render"]
+        beat_bucket_order = ["identity", "prop", "scene", "director", "frame", "render"]
         role_counts: dict[str, int] = {
             str(ref.get("role") or ""): 1 for ref, _node_id in ref_node_ids
         }
@@ -4312,10 +3714,7 @@ def build_canvas_payload_from_context(
                     kind_name == "scene" or role_name.startswith("scene_")
                 ) and role_name not in DIRECTOR_CAPTURE_IMAGE_ROLES:
                     continue
-                if role_name in {
-                    "current_sketch",
-                    "current_frame",
-                }:
+                if role_name == "current_frame":
                     continue
                 role = _safe_id(str(ref.get("role") or kind), fallback=kind)
                 role_counts[role] = role_counts.get(role, 0) + 1
@@ -4337,14 +3736,6 @@ def build_canvas_payload_from_context(
                 ref_node_ids.append((ref, node_id))
                 idx_for_kind += 1
 
-        current_sketch_id = next(
-            (node_id for ref, node_id in ref_node_ids if ref.get("role") == "current_sketch"),
-            None,
-        )
-        current_frame_id = next(
-            (node_id for ref, node_id in ref_node_ids if ref.get("role") == "current_frame"),
-            None,
-        )
         selected_background_id = next(
             (node_id for ref, node_id in ref_node_ids if ref.get("role") == "selected_background"),
             None,
@@ -4353,93 +3744,10 @@ def build_canvas_payload_from_context(
             (node_id for ref, node_id in ref_node_ids if ref.get("role") == "director_combined"),
             None,
         )
-        scene_master_id = next(
-            (node_id for ref, node_id in ref_node_ids if ref.get("role") == "scene_master"),
-            None,
-        )
-        scene_reverse_master_id = next(
-            (node_id for ref, node_id in ref_node_ids if ref.get("role") == "scene_reverse_master"),
-            None,
-        )
         beat_data = context.get("beat_data") if isinstance(context.get("beat_data"), dict) else {}
-        detected_identity_id_list = _real_identity_ids(
-            _identity_id_from_item(item) for item in _as_list(beat_data.get("detected_identities"))
-        )
-        detected_identity_ids = set(detected_identity_id_list)
-        detected_prop_id_list = _real_prop_ids(
-            _prop_id_from_item(item) for item in _as_list(beat_data.get("detected_props"))
-        )
-        detected_prop_ids = set(detected_prop_id_list)
 
-        def _matched_identity_target_id(ref: dict[str, Any]) -> str:
-            if not detected_identity_ids:
-                return ""
-            meta = ref.get("meta") if isinstance(ref.get("meta"), dict) else {}
-            identity_id = str(meta.get("identity_id") or "").strip()
-            if identity_id and identity_id in detected_identity_ids:
-                return identity_id
-            character = str(meta.get("character") or "").strip()
-            label = str(ref.get("label") or "").strip()
-            for candidate in (character, label):
-                if candidate and candidate in detected_identity_ids:
-                    return candidate
-            if character:
-                character_identity_ids = [
-                    item for item in detected_identity_id_list if item.startswith(f"{character}_")
-                ]
-                if len(character_identity_ids) == 1:
-                    return character_identity_ids[0]
-            return identity_id if identity_id and not detected_identity_ids else ""
-
-        def _matched_prop_target_id(ref: dict[str, Any]) -> str:
-            if not detected_prop_ids:
-                return ""
-            meta = ref.get("meta") if isinstance(ref.get("meta"), dict) else {}
-            prop_id = str(meta.get("prop_id") or "").strip()
-            if prop_id and prop_id in detected_prop_ids:
-                return prop_id
-            label = str(ref.get("label") or "").strip()
-            if label and label in detected_prop_ids:
-                return label
-            return prop_id if prop_id and not detected_prop_ids else ""
-
-        def _ref_matches_detected_identity(ref: dict[str, Any]) -> bool:
-            return bool(_matched_identity_target_id(ref))
-
-        def _ref_matches_detected_prop(ref: dict[str, Any]) -> bool:
-            return bool(_matched_prop_target_id(ref))
-
-        identity_node_refs_by_target: dict[str, tuple[int, str, str]] = {}
-        for ref, node_id in ref_node_ids:
-            role = str(ref.get("role") or "").strip()
-            if role not in {"character_identity", "character_portrait"}:
-                continue
-            target_identity_id = _matched_identity_target_id(ref)
-            if not target_identity_id:
-                continue
-            priority = 0 if role == "character_identity" else 1
-            existing = identity_node_refs_by_target.get(target_identity_id)
-            if existing is None or priority < existing[0]:
-                identity_node_refs_by_target[target_identity_id] = (
-                    priority,
-                    node_id,
-                    target_identity_id,
-                )
-        identity_node_refs = [
-            (node_id, target_identity_id)
-            for _priority, node_id, target_identity_id in identity_node_refs_by_target.values()
-        ]
-        prop_node_refs = [
-            (node_id, _matched_prop_target_id(ref))
-            for ref, node_id in ref_node_ids
-            if ref.get("role") == "prop_reference" and _ref_matches_detected_prop(ref)
-        ]
-
-        skill_background_sketch_id = "skill_sketch_from_background"
-        skill_director_sketch_id = "skill_sketch_from_director_combined"
         skill_set_background_id = "skill_set_selected_background"
         skill_set_director_combined_id = "skill_set_director_combined"
-        skill_frame_id = "skill_frame_from_context"
         nodes.extend(
             [
                 _skill_node(
@@ -4458,75 +3766,18 @@ def build_canvas_payload_from_context(
                     display_name="设为导演合成图",
                     extra_data={"scene_source_urls": _beat_scene_source_urls(context)},
                 ),
-                _skill_node(
-                    skill_background_sketch_id,
-                    -360,
-                    -1040,
-                    skill_id="freezone.sketch_from_context",
-                    display_name="Sketch from selected background",
-                    extra_data={"parameters": {"aspect_ratio": "2:3"}},
-                ),
-                _skill_node(
-                    skill_director_sketch_id,
-                    -360,
-                    -360,
-                    skill_id="freezone.sketch_from_director_combined",
-                    display_name="从导演合成图生成草图",
-                    extra_data={"parameters": {"aspect_ratio": "2:3"}},
-                ),
             ]
         )
-        if not is_sketch_primary:
-            nodes.append(
-                _skill_node(
-                    skill_frame_id,
-                    1020,
-                    260,
-                    skill_id="freezone.frame_from_context",
-                    display_name="Frame from context",
-                    extra_data={"parameters": {"quality": "medium"}},
-                )
-            )
 
-        def _append_skill_input_edge(
-            edge_id: str,
-            source_id: str | None,
-            target_id: str,
-            *,
-            role: str,
-            label: str,
-            target_handle: str | None = None,
-            extra_data: dict[str, Any] | None = None,
-        ) -> None:
-            if not source_id:
-                return
+        for skill_id in (skill_set_background_id, skill_set_director_combined_id):
             edges.append(
                 _skill_role_edge(
-                    edge_id,
-                    source_id,
-                    target_id,
-                    role=role,
-                    label=label,
-                    target_handle=target_handle,
-                    extra_data=extra_data,
+                    f"edge_context_beat_to_{skill_id}_beat_context",
+                    "context_beat",
+                    skill_id,
+                    role="beat_context",
+                    label="Beat context",
                 )
-            )
-
-        context_skill_ids = [
-            skill_set_background_id,
-            skill_set_director_combined_id,
-            skill_background_sketch_id,
-            skill_director_sketch_id,
-        ]
-        if not is_sketch_primary:
-            context_skill_ids.append(skill_frame_id)
-        for skill_id in context_skill_ids:
-            _append_skill_input_edge(
-                f"edge_context_beat_to_{skill_id}_beat_context",
-                "context_beat",
-                skill_id,
-                role="beat_context",
-                label="Beat context",
             )
         if selected_background_id:
             edges.append(
@@ -4558,123 +3809,6 @@ def build_canvas_payload_from_context(
                     source_handle="director_combined",
                 )
             )
-        _append_skill_input_edge(
-            "edge_selected_background_to_skill_sketch_background",
-            selected_background_id,
-            skill_background_sketch_id,
-            role="background",
-            label="Background",
-        )
-        if not is_sketch_primary:
-            _append_skill_input_edge(
-                "edge_selected_background_to_skill_frame_background",
-                selected_background_id,
-                skill_frame_id,
-                role="background",
-                label="Background",
-            )
-        _append_skill_input_edge(
-            "edge_director_combined_to_skill_sketch_director_combined",
-            director_combined_id,
-            skill_director_sketch_id,
-            role="director_combined",
-            label="导演合成图",
-        )
-        if not is_sketch_primary:
-            _append_skill_input_edge(
-                "edge_current_sketch_to_skill_frame_sketch",
-                current_sketch_id,
-                skill_frame_id,
-                role="sketch",
-                label="Sketch",
-            )
-            for index, (identity_node_id, identity_id) in enumerate(identity_node_refs, start=1):
-                _append_skill_input_edge(
-                    f"edge_{_safe_id(identity_node_id)}_to_skill_frame_identity_{index}",
-                    identity_node_id,
-                    skill_frame_id,
-                    role="identity",
-                    label="Identity",
-                    target_handle=f"identity:{identity_id}",
-                    extra_data={
-                        "reference_target": {
-                            "kind": "identity",
-                            "identity_id": identity_id,
-                        }
-                    },
-                )
-            for index, (prop_node_id, prop_id) in enumerate(prop_node_refs, start=1):
-                _append_skill_input_edge(
-                    f"edge_{_safe_id(prop_node_id)}_to_skill_frame_prop_{index}",
-                    prop_node_id,
-                    skill_frame_id,
-                    role="prop",
-                    label="Prop",
-                    target_handle=f"prop:{prop_id}",
-                    extra_data={
-                        "reference_target": {
-                            "kind": "prop",
-                            "prop_id": prop_id,
-                        }
-                    },
-                )
-
-        if current_sketch_id:
-            for sketch_skill_id in (skill_background_sketch_id, skill_director_sketch_id):
-                edges.append(
-                    _edge(
-                        f"edge_{sketch_skill_id}_to_{_safe_id(current_sketch_id)}",
-                        sketch_skill_id,
-                        current_sketch_id,
-                        {
-                            "edgeKind": "mainline_data",
-                            "propagates": True,
-                            "role": "current_sketch_candidate",
-                            "label": "Current sketch candidate",
-                        },
-                        source_handle="current_sketch_candidate",
-                    )
-                )
-        if not is_sketch_primary and current_frame_id:
-            edges.append(
-                _edge(
-                    f"edge_{skill_frame_id}_to_{_safe_id(current_frame_id)}",
-                    skill_frame_id,
-                    current_frame_id,
-                    {
-                        "edgeKind": "mainline_data",
-                        "propagates": True,
-                        "role": "current_frame_candidate",
-                        "label": "Current frame candidate",
-                    },
-                    source_handle="current_frame_candidate",
-                )
-            )
-
-        # Visualization edges for prompt / marker context. annotation kind so
-        # they show the prompt provenance without participating in mainline
-        # data propagation (backend builds the prompt itself from DB).
-        if is_sketch_primary:
-            edges.append(
-                _edge(
-                    "edge_sketch_marker_context_to_prompt",
-                    "sketch_marker_context",
-                    "prompt_beat_visual",
-                    {"edgeKind": "annotation"},
-                )
-            )
-        edges.append(
-            _edge(
-                "edge_beat_context_to_prompt",
-                "context_beat",
-                "prompt_beat_visual",
-                {"edgeKind": "mainline_data", "propagates": True},
-            )
-        )
-
-        # current_sketch / current_frame canonical slots are outputs of
-        # SkillNodes. Runtime inputs stay on SkillNode role_binding edges so the
-        # visible graph matches left-input → skill → right-output flow.
         _append_director_capture_workflow(
             edges=edges,
             ref_node_ids=ref_node_ids,
@@ -4707,7 +3841,6 @@ def build_canvas_payload_from_context(
         }
 
     buckets = [
-        ("sketch", 260, -340),
         ("frame", 620, -340),
         ("render", 980, -340),
         ("identity", 260, 140),
@@ -4908,7 +4041,6 @@ def build_canvas_payload_from_context(
         if asset_kind == "portrait":
             identity_contexts = []
         usage_context_ids = [
-            *_find_ref_node_ids(role="related_sketch", kind="sketch"),
             *_find_ref_node_ids(role="related_director_combined", kind="director"),
         ]
         workflow_asset_ids: list[str] = []

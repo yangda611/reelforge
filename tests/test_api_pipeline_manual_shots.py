@@ -78,8 +78,6 @@ async def test_pipeline_status_uses_sparse_beat_numbers_for_media(monkeypatch, t
         target_dir.mkdir(parents=True)
         for beat_num in (1, 2, 5):
             (target_dir / f"beat_{beat_num:02d}.{suffix}").write_bytes(b"x")
-    (tmp_path / "grids" / ep_tag).mkdir(parents=True)
-    (tmp_path / "grids" / ep_tag / "grid.png").write_bytes(b"x")
 
     monkeypatch.setattr(pipeline, "_user_has_configured", lambda username, project: True)
     monkeypatch.setattr(
@@ -100,7 +98,7 @@ async def test_pipeline_status_uses_sparse_beat_numbers_for_media(monkeypatch, t
         store=_FakePipelineStore(),
     )
 
-    assert response["data"]["episode_status"]["first_frames"] is True
+    assert "first_frames" not in response["data"]["episode_status"]
     assert response["data"]["episode_status"]["tts"] is True
     assert response["data"]["episode_status"]["video"] is True
 

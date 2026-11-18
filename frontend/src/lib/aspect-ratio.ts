@@ -23,9 +23,7 @@ export interface AspectSpec {
   aspectClass: string;
   /** width / height — used for crop-box math. */
   ratioValue: number;
-  /** Sketch generation aspect param (backend-accepted union). */
-  sketchAspect: "2:3" | "16:9";
-  /** Render aspect_mode literal sent to the render pipeline. */
+  /** Project aspect ratio literal (backend-accepted union). */
   renderAspect: "2:3" | "16:9";
 }
 
@@ -35,7 +33,6 @@ const PORTRAIT: AspectSpec = {
   cssRatio: "2/3",
   aspectClass: "aspect-[2/3]",
   ratioValue: 2 / 3,
-  sketchAspect: "2:3",
   renderAspect: "2:3",
 };
 
@@ -45,7 +42,6 @@ const LANDSCAPE: AspectSpec = {
   cssRatio: "16/9",
   aspectClass: "aspect-video",
   ratioValue: 16 / 9,
-  sketchAspect: "16:9",
   renderAspect: "16:9",
 };
 
@@ -81,30 +77,11 @@ export function orientationForSpineTemplate(
 /**
  * Convert a "W:H" ratio label (e.g. "2:3", "16:9") into a CSS
  * `aspect-ratio` value ("W / H"). Use for single-image boxes whose true aspect
- * is variable — pass `spec.sketchAspect` for sketch cells, `spec.renderAspect`
- * for render/video frames.
+ * is variable — pass `spec.renderAspect` for first-frame/video frames.
  */
 export function ratioToCss(ratio: string): string {
   const [w, h] = ratio.split(":");
   return `${w} / ${h}`;
-}
-
-/**
- * CSS `aspect-ratio` for a composite grid thumbnail. A grid is `cols × rows`
- * cells, each cell having `cellAspect` ("W:H"), so the whole image is
- * `(cols·W) / (rows·H)`. Keeps grid previews from squishing portrait cells
- * into a 16:9 box.
- */
-export function gridAspectCss(
-  cols: number,
-  rows: number,
-  cellAspect: string,
-): string {
-  const [w, h] = cellAspect.split(":").map(Number);
-  const safeCols = Math.max(1, cols);
-  const safeRows = Math.max(1, rows);
-  if (!w || !h) return "1 / 1";
-  return `${safeCols * w} / ${safeRows * h}`;
 }
 
 export interface CropBox {

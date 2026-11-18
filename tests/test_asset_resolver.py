@@ -21,75 +21,6 @@ def test_background_crop_ratio_choices_puts_preferred_first() -> None:
     assert background_crop_ratio_choices("2:3")[:2] == ["2:3", "16:9"]
 
 
-def test_render_scene_refs_ignore_director_control_frames(tmp_path: Path) -> None:
-    scene_dir = tmp_path / "assets" / "scenes" / "兰州拉面馆"
-    master_path = scene_dir / "master.png"
-    director_path = (
-        tmp_path / "director_control_frames" / "ep001" / "beat_03" / "combined.png"
-    )
-    legacy_director_color_ref = (
-        tmp_path / "assets" / "director_refs" / "ep001" / "beat_03" / "director_color_ref.png"
-    )
-    _touch(master_path)
-    _touch(director_path)
-    _touch(legacy_director_color_ref)
-
-    beat = {"beat_number": 3, "scene_ref": {"scene_id": "兰州拉面馆"}}
-    resolver = AssetResolver(
-        tmp_path,
-        episode_number=1,
-        scene_reference_kind="render",
-        use_director_refs=True,
-        director_ref_beat_numbers=[3],
-    )
-
-    refs = resolver.resolve_scenes_for_beat(beat)
-
-    assert len(refs) == 1
-    assert refs[0].source_level == "base_image"
-    assert refs[0].image_paths == [str(master_path)]
-
-
-def test_sketch_scene_refs_use_director_control_frame(tmp_path: Path) -> None:
-    scene_dir = tmp_path / "assets" / "scenes" / "兰州拉面馆"
-    master_path = scene_dir / "master.png"
-    director_path = (
-        tmp_path / "director_control_frames" / "ep001" / "beat_03" / "combined.png"
-    )
-    _touch(master_path)
-    _touch(director_path)
-
-    beat = {"beat_number": 3, "scene_ref": {"scene_id": "兰州拉面馆"}}
-    resolver = AssetResolver(
-        tmp_path,
-        episode_number=1,
-        scene_reference_kind="sketch",
-        use_director_refs=True,
-        director_ref_beat_numbers=[3],
-    )
-
-    refs = resolver.resolve_scenes_for_beat(beat)
-
-    assert len(refs) == 1
-    assert refs[0].source_level == "director_image"
-    assert refs[0].image_paths == [str(director_path)]
-
-
-def test_sketch_scene_refs_use_master_by_default(tmp_path: Path) -> None:
-    scene_dir = tmp_path / "assets" / "scenes" / "兰州拉面馆"
-    master_path = scene_dir / "master.png"
-    _touch(master_path)
-
-    beat = {"beat_number": 3, "scene_ref": {"scene_id": "兰州拉面馆"}}
-    resolver = AssetResolver(tmp_path, episode_number=1, scene_reference_kind="sketch")
-
-    refs = resolver.resolve_scenes_for_beat(beat)
-
-    assert len(refs) == 1
-    assert refs[0].source_level == "base_image"
-    assert refs[0].image_paths == [str(master_path)]
-
-
 def test_scene_variant_master_falls_back_to_base_when_derived_image_missing(
     tmp_path: Path,
 ) -> None:
@@ -99,7 +30,6 @@ def test_scene_variant_master_falls_back_to_base_when_derived_image_missing(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[SimpleNamespace(name="卫生间"), SimpleNamespace(name="卫生间_漏水")],
     )
 
@@ -119,7 +49,6 @@ def test_scene_variant_text_fallback_combines_base_prompt_and_variant_delta(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[
             SimpleNamespace(
                 name="卫生间",
@@ -153,7 +82,6 @@ def test_scene_time_plate_marks_anchor_as_time_baked(tmp_path: Path) -> None:
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[SimpleNamespace(name="卫生间"), SimpleNamespace(name="卫生间_夜")],
     )
 
@@ -176,7 +104,6 @@ def test_scene_time_plate_can_resolve_from_asset_directory_without_scene_record(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[SimpleNamespace(name="卫生间")],
     )
 
@@ -202,7 +129,6 @@ def test_scene_time_plate_missing_master_falls_back_to_base_and_relit(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[SimpleNamespace(name="卫生间"), SimpleNamespace(name="卫生间_夜")],
     )
 
@@ -227,7 +153,6 @@ def test_scene_variant_time_plate_keeps_variant_and_marks_time_baked(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[
             SimpleNamespace(name="卫生间"),
             SimpleNamespace(name="卫生间_夜"),
@@ -261,7 +186,6 @@ def test_scene_variant_time_plate_missing_master_falls_back_and_relit(
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[
             SimpleNamespace(name="卫生间"),
             SimpleNamespace(name="卫生间_漏水_夜"),
@@ -293,7 +217,6 @@ def test_scene_selected_background_anchor_clears_time_baked(tmp_path: Path) -> N
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
         scenes=[SimpleNamespace(name="卫生间"), SimpleNamespace(name="卫生间_夜")],
     )
 
@@ -330,7 +253,7 @@ def test_render_scene_refs_use_beat_selected_anchor_id(tmp_path: Path) -> None:
             "render_anchor_id": "selected_background",
         },
     }
-    resolver = AssetResolver(tmp_path, episode_number=1, scene_reference_kind="render")
+    resolver = AssetResolver(tmp_path, episode_number=1)
 
     refs = resolver.resolve_scenes_for_beat(beat)
 
@@ -405,7 +328,7 @@ def test_batch_scene_refs_ignore_per_beat_selected_anchor_paths(tmp_path: Path) 
             },
         },
     ]
-    resolver = AssetResolver(tmp_path, episode_number=1, scene_reference_kind="render")
+    resolver = AssetResolver(tmp_path, episode_number=1)
 
     scene_refs, _ = resolver.resolve_all_for_beats(beats)
 
@@ -432,7 +355,6 @@ def test_batch_scene_refs_use_derived_scene_master_only(tmp_path: Path) -> None:
     resolver = AssetResolver(
         tmp_path,
         episode_number=1,
-        scene_reference_kind="render",
     )
 
     scene_refs, _ = resolver.resolve_all_for_beats(beats)
@@ -452,7 +374,7 @@ def test_scene_refs_resolve_variant_id_to_derived_scene_master(tmp_path: Path) -
         "beat_number": 1,
         "scene_ref": {"scene_id": "兰州拉面馆", "variant_id": "雨夜"},
     }
-    resolver = AssetResolver(tmp_path, episode_number=1, scene_reference_kind="render")
+    resolver = AssetResolver(tmp_path, episode_number=1)
 
     refs = resolver.resolve_scenes_for_beat(beat)
 

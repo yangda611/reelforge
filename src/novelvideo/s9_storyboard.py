@@ -1728,7 +1728,7 @@ def aggregate_segment_narration(shots: list[S9SubShot]) -> tuple[str, str, str]:
 
 
 def aggregate_segment_visual_summary(segment: S9SegmentPlan) -> str:
-    """Build opening-shot visual description used for Sketch/Render首帧 and BeatCard."""
+    """Build opening-shot visual description used for the first frame and BeatCard."""
 
     if not segment.shots:
         return segment.story_beat or segment.title

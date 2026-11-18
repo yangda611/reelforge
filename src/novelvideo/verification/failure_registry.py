@@ -28,8 +28,7 @@ Project hits:
 Facade:
 - `load_negative_clause_for_project(project_dir, layer)` — resolves the
   shared verification.db, seeds if needed, returns the clause. Safe to
-  call from sync-heavy pipeline code (`nanobanana_grid`,
-  `sketch_edit_execute`).
+  call from sync-heavy pipeline code (`nanobanana_grid`).
 """
 
 from __future__ import annotations

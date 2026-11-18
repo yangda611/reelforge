@@ -29,7 +29,7 @@
  * weight earlier references higher).
  */
 
-export type ReferenceRole = "character" | "style" | "pose" | "generic";
+type ReferenceRole = "character" | "style" | "pose" | "generic";
 
 const VALID_ROLES = new Set<ReferenceRole>([
   "character",

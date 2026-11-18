@@ -21,16 +21,10 @@ beforeAll(async () => {
           episode: {
             beat: {
               sectionText: "文案",
-              sectionSketch: "草图",
-              sectionRender: "渲染图",
               sectionAudio: "音频",
               sectionVideo: "视频",
               edited: "已编辑",
               notEdited: "未编辑",
-              selected: "已选择",
-              notSelected: "未选择",
-              rendered: "已渲染",
-              notRendered: "未渲染",
               generated: "已生成",
               notGenerated: "未生成",
               deleteManualShotTitle: "删除手工镜头？",
@@ -42,10 +36,6 @@ beforeAll(async () => {
     },
   });
 });
-
-vi.mock("@/lib/queries/sketches", () => ({
-  useGridsByBeat: () => ({ byBeat: new Map(), assignments: {} }),
-}));
 
 vi.mock("@/lib/queries/episodes", () => ({
   useDeleteManualShot: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -73,24 +63,12 @@ vi.mock("@/stores/save-status-store", () => ({
   useSaveState: () => ({ status: "idle" }),
 }));
 
-vi.mock("@/hooks/use-escape-to-close", () => ({
-  useEscapeToClose: vi.fn(),
-}));
-
 vi.mock("@/components/save-status", () => ({
   SaveStatus: () => null,
 }));
 
 vi.mock("@/components/episode/beat-workbench/text-pane", () => ({
   TextPane: () => <div>TextPane</div>,
-}));
-
-vi.mock("@/components/episode/beat-workbench/sketch-section", () => ({
-  SketchSection: () => <div>SketchSection</div>,
-}));
-
-vi.mock("@/components/episode/beat-workbench/render-section", () => ({
-  RenderSection: () => <div>RenderSection</div>,
 }));
 
 vi.mock("@/components/episode/beat-workbench/audio-pane", () => ({
@@ -121,14 +99,14 @@ function makeBeat(overrides: Partial<Beat> = {}): Beat {
 function renderPanel(
   options: { isSeedance2Backend?: boolean; spineTemplate?: "drama" | "narrated" } = {},
 ) {
-  const openSections = new Set<SectionId>(["text", "sketch", "render", "audio", "video"]);
+  const openSections = new Set<SectionId>(["text", "audio", "video"]);
   return render(
     <I18nextProvider i18n={i18n}>
       <SingleBeatPanel
         beat={makeBeat()}
         project="demo"
         episode={1}
-        stages={{ audio: "missing", video: "missing", sketch: "ready", render: "ready" }}
+        stages={{ script: "ready", audio: "missing", video: "missing" }}
         defaultBackend="huimeng_seedance-2.0-fast"
         onDefaultBackendChange={vi.fn()}
         spineTemplate={options.spineTemplate}

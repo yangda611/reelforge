@@ -13,10 +13,7 @@ vi.mock("@/lib/api", () => ({
   uploadApi: ky.create({ baseUrl: "http://localhost:3000/" }),
 }));
 
-import {
-  useGenerationCreditCost,
-  useGenerationCreditCostPlan,
-} from "@/lib/queries/generation-credit-cost";
+import { useGenerationCreditCost } from "@/lib/queries/generation-credit-cost";
 import { BillingRuleNotConfiguredError } from "@/lib/api-errors";
 
 const server = setupServer();
@@ -121,52 +118,6 @@ describe("generation credit cost query hook", () => {
     expect(requestedKind).toBe("feature");
     expect(requestedValue).toBe("mainline.ingest_fast");
     expect(result.current.data?.data.display).toBe("6");
-  });
-
-  it("groups feature plan quotes by mode and totals their costs", async () => {
-    const requests: Array<{ modeKey: string; quantity: string }> = [];
-    server.use(
-      http.get("http://localhost:3000/api/v1/generation-credit-cost", ({ request }) => {
-        const url = new URL(request.url);
-        const modeKey = url.searchParams.get("mode_key") ?? "";
-        const quantity = url.searchParams.get("quantity") ?? "";
-        requests.push({ modeKey, quantity });
-        return HttpResponse.json({
-          ok: true,
-          data: {
-            cost: Number(quantity) * (modeKey === "2x2_2-3_sketch" ? 6 : 8),
-            display: "",
-          },
-        });
-      }),
-    );
-
-    const { result } = renderHook(
-      () =>
-        useGenerationCreditCostPlan(
-          "feature",
-          "mainline.sketch_regen",
-          [
-            { modeKey: "2x2_2-3_sketch" },
-            { modeKey: "2x2_2-3_sketch" },
-            { modeKey: "3x3_2-3_sketch" },
-          ],
-          {
-            surface: "supertale",
-            imageRole: "sketch",
-            params: { image_selection: "newapi_gpt_image2" },
-          },
-        ),
-      { wrapper },
-    );
-
-    await waitFor(() => expect(result.current.cost).toBe(20));
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        { modeKey: "2x2_2-3_sketch", quantity: "2" },
-        { modeKey: "3x3_2-3_sketch", quantity: "1" },
-      ]),
-    );
   });
 
   it("surfaces missing feature billing rules as a typed error", async () => {
@@ -314,7 +265,7 @@ describe("generation credit cost query hook", () => {
           params: { size: "2K" },
           quantity: 3,
           modeKey: "2x2_1-1",
-          imageRole: "render",
+          imageRole: "character",
         }),
       { wrapper },
     );
@@ -324,7 +275,7 @@ describe("generation credit cost query hook", () => {
     expect(JSON.parse(requestedParams)).toEqual({ size: "2K" });
     expect(requestedQuantity).toBe("3");
     expect(requestedModeKey).toBe("2x2_1-1");
-    expect(requestedImageRole).toBe("render");
+    expect(requestedImageRole).toBe("character");
     expect(result.current.data?.data.display).toBe("18");
   });
 });

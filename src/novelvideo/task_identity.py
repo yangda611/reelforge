@@ -24,19 +24,7 @@ TASK_IDENTITY_SPECS: dict[str, TaskIdentitySpec] = {
     "director_notes": TaskIdentitySpec("director_notes", include_episode=True),
     "compose_episode": TaskIdentitySpec("compose_episode", include_episode=True),
     "audio_generation": TaskIdentitySpec("audio_gen", include_episode=True),
-    "grid_regenerate": TaskIdentitySpec("grid_regen", include_episode=True, scope_mode="raw"),
     "single_video": TaskIdentitySpec("single_video", include_episode=True, include_beat=True),
-    "global_optimize_video": TaskIdentitySpec("global_optimize_video", include_episode=True),
-    "sketch_generation": TaskIdentitySpec("sketch_gen", include_episode=True, scope_mode="raw"),
-    "director_control_to_sketch": TaskIdentitySpec(
-        "director_control_to_sketch", include_episode=True, include_beat=True, scope_mode="raw"
-    ),
-    "sketch_grid_generation": TaskIdentitySpec("sketch_grid_gen", include_episode=True, scope_mode="raw"),
-    "selected_regen": TaskIdentitySpec("selected_regen", include_episode=True, scope_mode="raw"),
-    "sketch_regen": TaskIdentitySpec("sketch_regen", include_episode=True, scope_mode="raw"),
-    "sketch_edit_execute": TaskIdentitySpec(
-        "sketch_edit_execute", include_episode=True, scope_mode="raw"
-    ),
     "identity_image": TaskIdentitySpec("identity_image", scope_mode="raw"),
     "scene_reference_asset": TaskIdentitySpec("scene_ref_asset", scope_mode="raw"),
 }

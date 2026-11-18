@@ -7,8 +7,8 @@ function read(path: string) {
   return readFileSync(path, "utf8");
 }
 
-describe("beats workbench v2-storage sketch-studio contract", () => {
-  it("keeps the main branch split shell and exposes grid galleries as dialogs", () => {
+describe("beats workbench contract", () => {
+  it("keeps the main branch split shell without grid galleries or plan dialogs", () => {
     const route = read(
       "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
     );
@@ -25,23 +25,10 @@ describe("beats workbench v2-storage sketch-studio contract", () => {
     expect(route.indexOf("<BeatCardGrid")).toBeGreaterThan(route.indexOf("<ViewToggles"));
     expect(route.indexOf("<ActionPanel")).toBeGreaterThan(route.indexOf("<BeatCardGrid"));
 
-    const mainLayout = route.slice(route.indexOf("// Main layout"));
-    const beforeSplit = mainLayout.slice(
-      0,
-      mainLayout.indexOf('<div className="min-h-0 flex-1 overflow-hidden">'),
-    );
-    expect(beforeSplit).not.toContain("<SketchGridGallery");
-    expect(beforeSplit).not.toContain("<RenderGridGallery");
-
-    expect(route).not.toContain("sceneGalleryOpen");
-    expect(route).toContain("gridGalleryOpen");
-    expect(route).toContain("renderGridGalleryOpen");
-    expect(route).not.toContain("<SketchSceneGallery");
-    expect(route).toContain("<SketchGridGallery");
-    expect(route).toContain("<RenderGridGallery");
-    expect(route).toContain("max-w-none");
+    expect(route).not.toContain("GridGallery");
+    expect(route).not.toContain("PlanDialog");
+    expect(route).not.toContain("rebuildPoolIndex");
   });
-
   it("does not collapse the right action panel when users switch beats", () => {
     const route = read(
       "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
@@ -52,30 +39,21 @@ describe("beats workbench v2-storage sketch-studio contract", () => {
     expect(route).not.toContain("collapseKey={");
   });
 
-  it("keeps multi-select redraw commands in the ViewToggles row", () => {
-    const route = read(
-      "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
-    );
+  it("keeps ViewToggles as a plain selection bar and BatchBar free of removed actions", () => {
     const viewToggles = read("src/components/episode/beat-workbench/view-toggles.tsx");
     const batchBar = read("src/components/episode/beat-workbench/batch-bar.tsx");
 
-    expect(viewToggles).toContain("onBatchRegenSketch");
-    expect(viewToggles).toContain("onBatchRegenRender");
-    expect(viewToggles).toContain("episode.workbench.view.batchRegenSketch");
-    expect(viewToggles).toContain("episode.workbench.view.batchRegenRender");
-    expect(route).toContain("onBatchRegenSketch={openSketchPlan}");
-    expect(route).toContain("onBatchRegenRender={openRenderPlan}");
-    expect(route).toContain("<RenderPlanDialog");
-    expect(route).toContain("createSketchRegenPlanItems");
-    expect(route).not.toContain("useRegenerateRenderBeats");
-    expect(route).not.toContain("bestFitMode(SKETCH_REGEN_MODES");
+    expect(viewToggles).toContain("onSelectAll");
+    expect(viewToggles).toContain("onClearSelection");
+    expect(viewToggles).not.toContain("onBatchRegen");
+    expect(viewToggles).not.toContain("onToggle");
 
-    expect(batchBar).not.toContain("checkedBeats");
-    expect(batchBar).not.toContain("dispatchSelectedSketchItems");
-    expect(batchBar).not.toContain("episode.workbench.batch.singleRegen");
-    expect(batchBar).not.toContain("episode.workbench.batch.autoCombine");
+    expect(batchBar).toContain("AspectRatioSelect");
+    expect(batchBar).not.toContain("GlobalOptimize");
+    expect(batchBar).not.toContain("useDetectIdentities");
+    expect(batchBar).not.toContain("useAssignColors");
+    expect(batchBar).not.toContain("usePlanFixedCameraLocks");
   });
-
   it("does not let stale URL beat deep-links overwrite restored workbench state", () => {
     const route = read(
       "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
@@ -88,35 +66,6 @@ describe("beats workbench v2-storage sketch-studio contract", () => {
     expect(deepLinkEffect).toContain('selection.mode !== "none"');
     expect(deepLinkEffect).not.toContain("activeBeat !== null");
     expect(deepLinkEffect).toContain("appliedDeepLinkRef");
-  });
-
-  it("shows the sketch grid gallery for all projects while render grids stay narrated-only", () => {
-    const route = read(
-      "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
-    );
-    const actions = read("src/components/episode/beat-workbench/sketch-studio-actions.tsx");
-
-    expect(route).toContain('spine_template === "narrated"');
-    expect(route).not.toContain("showGridGalleryActions={isNarratedProject}");
-    expect(route).toContain("onOpenGridGallery={() => setGridGalleryOpen(true)}");
-    expect(route).toContain("onOpenRenderGridGallery={");
-    expect(route).toContain("isNarratedProject");
-    expect(route).toContain(": undefined");
-    expect(actions).toContain("showGridGalleryActions");
-    expect(actions).toContain("showGridGalleryActions &&");
-  });
-
-  it("keeps image pool rebuild available outside narrated-only gallery actions", () => {
-    const route = read(
-      "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
-    );
-
-    expect(route).toContain("useRebuildPoolIndex");
-    expect(route).toContain("handleRebuildPoolIndex");
-    expect(route).toContain("episode.workbench.pool.rebuildIndex");
-    expect(route).not.toContain(
-      "showGridGalleryActions={isNarratedProject}\n                    onRebuildPoolIndex",
-    );
   });
 
   it("keeps the episode-level Freezone entry hidden in the beats workbench", () => {
@@ -182,7 +131,6 @@ describe("beats workbench v2-storage sketch-studio contract", () => {
     const batchBar = read("src/components/episode/beat-workbench/batch-bar.tsx");
     const actionPanel = read("src/components/episode/beat-workbench/action-panel.tsx");
     const singleBeatPanel = read("src/components/episode/beat-workbench/single-beat-panel.tsx");
-    const batchPanel = read("src/components/episode/beat-workbench/batch-panel.tsx");
     const videoPane = read("src/components/episode/beat-workbench/video-pane.tsx");
     const videoQuery = read("src/lib/queries/video.ts");
     const projectTypes = read("src/types/project.ts");
@@ -197,7 +145,6 @@ describe("beats workbench v2-storage sketch-studio contract", () => {
     expect(batchBar).not.toContain("episode.workbench.batch.useDirectorRender");
     expect(actionPanel).not.toContain("useDirectorRender");
     expect(singleBeatPanel).not.toContain("useDirectorRender");
-    expect(batchPanel).not.toContain("useDirectorRender");
     expect(videoPane).not.toContain("useDirectorRender");
   });
 });

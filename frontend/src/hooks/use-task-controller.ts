@@ -167,7 +167,7 @@ export function useTaskController(
   });
 
   // `coversBeat` 把「跟哪一条 run」从任务行的 beat_num 列换成它的 beat 名单：
-  // selection-scoped 的 sketch_regen / selected_regen 行 beat_num 恒为 null,
+  // selection-scoped 的任务行 beat_num 恒为 null,
   // 名单落在 metadata.beat_numbers 里(见 ports/tasks.display_metadata_for_task)。
   // 没名单的行是「覆盖范围未知」,按 covers() 一样的口径当作命中,宁可多显示进度
   // 也不要把真在跑的 beat 藏掉。
@@ -209,7 +209,7 @@ export function useTaskController(
     // (nullish-normalized).
     const prev = entry.getSnapshot();
     // When `start()` handed us the exact task id, prefer that row. Otherwise a
-    // concurrent run of the same type (e.g. a batch `sketch_regen` alongside
+    // concurrent run of the same type (e.g. a batch run alongside
     // this beat's) can win `find` and repoint this entry's scope and beat
     // coverage onto someone else's run. Purely a preference — it never removes
     // a match, so plain discovery (page reload, activeTaskId still null) is

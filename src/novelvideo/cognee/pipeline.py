@@ -420,6 +420,16 @@ async def extract_characters_from_graph(
 - 不要把过于泛化、依赖上下文才成立的称谓塞进 aliases，例如“男人 / 女人 / 老板 / 爸爸 / 女儿 / 店员”这类高歧义称呼默认不要收，除非图谱上下文已经明确它稳定指向同一角色
 - 如果信息不足，只允许对 role / body_type / description 做保守推测；不要为 aliases 编造原文未出现的称呼"""
 
+    from novelvideo.skills.realistic_asset_skills import (
+        get_live_action_character_extraction_directives,
+        is_live_action_project,
+    )
+
+    if is_live_action_project(project_dir=project_dir, state_dir=state_dir):
+        system_prompt = (
+            f"{system_prompt}\n\n{get_live_action_character_extraction_directives()}"
+        )
+
     try:
         result = await LLMGateway.acreate_structured_output(
             context_text,
@@ -828,6 +838,27 @@ def _ensure_directional_environment_prompt(
 
 
 
+def _scene_enrichment_system_prompt(
+    *,
+    project_dir: Optional[str] = None,
+    state_dir: Optional[str] = None,
+    live_action: bool = False,
+) -> str:
+    from novelvideo.skills.realistic_asset_skills import (
+        get_realist_scene_enrichment_directives,
+        is_live_action_project,
+    )
+
+    if live_action or is_live_action_project(
+        project_dir=project_dir, state_dir=state_dir
+    ):
+        return (
+            f"{SCENE_ENRICHMENT_SYSTEM_PROMPT}\n\n"
+            f"{get_realist_scene_enrichment_directives()}"
+        )
+    return SCENE_ENRICHMENT_SYSTEM_PROMPT
+
+
 def _create_scene_build_agent(system_prompt: str, output_type: Any, name: str):
     """Create the scene-build business LLM agent.
 
@@ -867,6 +898,7 @@ async def enrich_scene_environment_from_context(
     synopsis: str = "",
     enrichment_agent: Any | None = None,
     output_language: AssetLanguage | None = None,
+    live_action: bool = False,
 ) -> NovelScene:
     """Generate the canonical 360 environment prompt for one scene.
 
@@ -888,7 +920,7 @@ async def enrich_scene_environment_from_context(
     )
 
     agent = enrichment_agent or _create_scene_build_agent(
-        SCENE_ENRICHMENT_SYSTEM_PROMPT,
+        _scene_enrichment_system_prompt(live_action=live_action),
         SceneEnrichmentList,
         "Scene Build Enricher",
     )
@@ -1098,6 +1130,7 @@ async def enrich_scene_environments_batched(
     on_scene: Optional[Any] = None,
     cache: Optional[SceneBuildCache] = None,
     output_language: AssetLanguage | None = None,
+    live_action: bool = False,
 ) -> list[NovelScene]:
     """Generate environment prompts for several scenes per request.
 
@@ -1154,7 +1187,7 @@ async def enrich_scene_environments_batched(
                 on_scene(candidate, scene)
 
     agent = enrichment_agent or _create_scene_build_agent(
-        SCENE_ENRICHMENT_SYSTEM_PROMPT,
+        _scene_enrichment_system_prompt(live_action=live_action),
         SceneEnrichmentList,
         "Scene Build Enricher",
     )
@@ -1479,7 +1512,7 @@ async def extract_scenes_from_graph(
 
     report(0.5, "生成场景环境描述...")
     enrichment_agent = _create_scene_build_agent(
-        SCENE_ENRICHMENT_SYSTEM_PROMPT,
+        _scene_enrichment_system_prompt(state_dir=state_dir),
         SceneEnrichmentList,
         "Scene Build Enricher",
     )
@@ -1641,6 +1674,8 @@ async def extract_scenes_from_script(
     on_progress: Optional[Any] = None,
     on_log: Optional[Any] = None,
     cache: Optional[SceneBuildCache] = None,
+    state_dir: Optional[str] = None,
+    project_dir: Optional[str] = None,
 ) -> List[NovelScene]:
     """从格式化剧本提取场景（AI normalizer first + parser fallback + LLM enrichment）。
 
@@ -1786,7 +1821,9 @@ async def extract_scenes_from_script(
     enrichment_agent = None
     if enrichment_is_default:
         enrichment_agent = _create_scene_build_agent(
-            SCENE_ENRICHMENT_SYSTEM_PROMPT,
+            _scene_enrichment_system_prompt(
+                project_dir=project_dir, state_dir=state_dir
+            ),
             SceneEnrichmentList,
             "Scene Build Enricher",
         )

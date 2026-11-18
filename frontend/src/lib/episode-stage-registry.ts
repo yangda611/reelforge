@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { ScrollText, Pencil, Mic2, Video, Film, type LucideIcon } from "lucide-react";
+import { ScrollText, Mic2, Video, Film, type LucideIcon } from "lucide-react";
 import { TASK_TYPES, type TaskType } from "@/lib/task-types";
 
-export type StageId = "script" | "sketch" | "audio" | "video" | "compose";
+export type StageId = "script" | "audio" | "video" | "compose";
 
 export interface StageDef {
   id: StageId;
   labelKey: string;
   /** Path segment appended to `/projects/$project/episodes/$episode`. */
-  routeSegment: "/script" | "/sketches" | "/audio" | "/video" | "/compose";
+  routeSegment: "/script" | "/audio" | "/video" | "/compose";
   icon: LucideIcon;
   /** Backend task types that belong to this stage (any of these running → stage is busy). */
   taskTypes: readonly TaskType[];
@@ -35,21 +35,6 @@ export const EPISODE_STAGE_REGISTRY: readonly StageDef[] = [
     supportsBeatJump: true,
   },
   {
-    id: "sketch",
-    labelKey: "episode.stage.sketch",
-    routeSegment: "/sketches",
-    icon: Pencil,
-    taskTypes: [
-      TASK_TYPES.SKETCH_GENERATION,
-      TASK_TYPES.SKETCH_GRID_GENERATION,
-      TASK_TYPES.BATCH_SKETCH,
-      TASK_TYPES.SKETCH_REGEN,
-      TASK_TYPES.GRID_REGENERATE,
-    ],
-    dependsOn: ["script"],
-    supportsBeatJump: true,
-  },
-  {
     id: "audio",
     labelKey: "episode.stage.audio",
     routeSegment: "/audio",
@@ -66,12 +51,8 @@ export const EPISODE_STAGE_REGISTRY: readonly StageDef[] = [
     labelKey: "episode.stage.video",
     routeSegment: "/video",
     icon: Video,
-    taskTypes: [
-      TASK_TYPES.SINGLE_VIDEO,
-      TASK_TYPES.GLOBAL_OPTIMIZE_VIDEO,
-      TASK_TYPES.SELECTED_REGEN,
-    ],
-    dependsOn: ["sketch"],
+    taskTypes: [TASK_TYPES.SINGLE_VIDEO],
+    dependsOn: ["script"],
     supportsBeatJump: true,
   },
   {
@@ -80,7 +61,7 @@ export const EPISODE_STAGE_REGISTRY: readonly StageDef[] = [
     routeSegment: "/compose",
     icon: Film,
     taskTypes: [TASK_TYPES.COMPOSE_EPISODE],
-    dependsOn: ["sketch", "video", "audio"],
+    dependsOn: ["video", "audio"],
     supportsBeatJump: false,
   },
 ];

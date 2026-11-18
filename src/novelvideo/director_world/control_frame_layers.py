@@ -7,7 +7,7 @@ The PlayCanvas stage exports:
     actor_mask.png
     frame_meta.json
 
-For scene-sketch generation we want the image model to edit only the
+For control-frame image generation we want the image model to edit only the
 environment + actor layer. Colored props/staging markers are production
 markers, so we extract their visible pixels into a transparent overlay and
 paste them back after image generation.

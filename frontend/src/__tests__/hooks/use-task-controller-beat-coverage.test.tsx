@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
 /**
- * 选中 Beats 再生（`sketch_regen` / `selected_regen`）的任务行 `beat_num` 是 None，
+ * 选中 Beats 再生（`single_video` 等）的任务行 `beat_num` 是 None，
  * scope 又是服务端算的 `mode_key__sha1(beats)`，前端无从反推。于是每个 beat 的
- * 草图 / 渲染图面板都用同一个 `taskType|project|episode` 键订阅同一个注册表条目，
+ * 视频面板都用同一个 `taskType|project|episode` 键订阅同一个注册表条目，
  * 一个 beat 在跑，其他 beat 的面板也跟着显示「生成中」。
  *
  * 修法：任务行在 metadata 里带上这次覆盖的 beat 号，controller 把它挂到快照上，
@@ -42,7 +42,7 @@ vi.mock("@/lib/queries/tasks", () => ({
 
 import { useTaskController } from "@/hooks/use-task-controller";
 
-const KEY = { taskType: "sketch_regen", project: "demo", episode: 1 } as const;
+const KEY = { taskType: "single_video", project: "demo", episode: 1 } as const;
 
 function wrap(children: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -63,13 +63,13 @@ function renderController() {
 
 function runningRegen(overrides: Partial<Task> = {}): Task {
   return {
-    task_type: "sketch_regen",
+    task_type: "single_video",
     username: "u",
     project: "demo",
     episode: 1,
     status: "running",
     progress: 0.2,
-    scope: "sketch_1x1__ab12cd34ef56",
+    scope: "regen_1x1__ab12cd34ef56",
     ...overrides,
   };
 }
@@ -83,7 +83,7 @@ describe("useTaskController beat coverage", () => {
     const { result } = renderController();
 
     act(() => {
-      result.current.start({ scope: "sketch_1x1__ab12cd34ef56", beatNumbers: [9] });
+      result.current.start({ scope: "regen_1x1__ab12cd34ef56", beatNumbers: [9] });
     });
 
     expect(result.current.started).toBe(true);
@@ -137,7 +137,7 @@ describe("useTaskController beat coverage", () => {
     // 命中的是同一条任务，任务行沉默不等于「覆盖全部」，不该把已知的归属抹掉。
     act(() => {
       result.current.start({
-        scope: "sketch_1x1__ab12cd34ef56",
+        scope: "regen_1x1__ab12cd34ef56",
         taskId: "t1",
         beatNumbers: [9],
       });
@@ -148,17 +148,17 @@ describe("useTaskController beat coverage", () => {
   });
 
   it("同时有两条再生任务时，认 start() 给的那条，不被别人的任务抢走", async () => {
-    // 批量面板发的另一条 sketch_regen 排在前面。reconcile 的兜底 find 不看 scope，
+    // 批量面板发的另一条 single_video 排在前面。reconcile 的兜底 find 不看 scope，
     // 先命中的就是它，会把本 beat 的 scope / 覆盖范围整个改指过去。
     state.tasks = [
-      runningRegen({ task_id: "t2", scope: "sketch_1x1__ffffffffffff", metadata: { beat_numbers: [5, 6] } }),
+      runningRegen({ task_id: "t2", scope: "regen_1x1__ffffffffffff", metadata: { beat_numbers: [5, 6] } }),
       runningRegen({ task_id: "t1", metadata: { beat_numbers: [9] } }),
     ];
     const { result } = renderController();
 
     act(() => {
       result.current.start({
-        scope: "sketch_1x1__ab12cd34ef56",
+        scope: "regen_1x1__ab12cd34ef56",
         taskId: "t1",
         beatNumbers: [9],
       });
@@ -177,7 +177,7 @@ describe("useTaskController beat coverage", () => {
 
     act(() => {
       result.current.start({
-        scope: "sketch_1x1__ab12cd34ef56",
+        scope: "regen_1x1__ab12cd34ef56",
         taskId: "t1",
         beatNumbers: [9],
       });
@@ -187,7 +187,7 @@ describe("useTaskController beat coverage", () => {
     expect(result.current.covers(11)).toBe(true);
   });
 
-  // 用户报的 bug：beat 4 在跑草图，切到 beat 5 「立即生成」是灰的，而且 beat 5
+  // 用户报的 bug：beat 4 在跑视频，切到 beat 5 「立即生成」是灰的，而且 beat 5
   // 因为 covers() 不命中连进度条都没有——按钮成了没有任何解释的死键。后端本来就
   // 支持并发（每个 selection_scope 是独立的 scope/任务行），所以 key 加 coversBeat
   // 让每个 beat 拿自己的注册表条目，reconcile 也按覆盖范围过滤。
@@ -233,13 +233,13 @@ describe("useTaskController beat coverage", () => {
 
   it("任务行只带 beat_num 时按单 beat 归属", async () => {
     state.tasks = [
-      runningRegen({ task_type: "director_control_to_sketch", beat_num: 9, scope: undefined }),
+      runningRegen({ task_type: "audio_generation", beat_num: 9, scope: undefined }),
     ];
 
     const { result } = renderHook(
       () =>
         useTaskController({
-          key: { taskType: "director_control_to_sketch", project: "demo", episode: 1 },
+          key: { taskType: "audio_generation", project: "demo", episode: 1 },
         }),
       { wrapper: ({ children }) => wrap(children) },
     );

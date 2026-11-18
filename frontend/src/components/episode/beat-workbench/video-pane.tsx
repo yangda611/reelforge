@@ -22,7 +22,6 @@ import {
   Image as ImageIcon,
   Library,
   Loader2,
-  Lock,
   Mic,
   RefreshCw,
   Scissors,
@@ -37,7 +36,6 @@ import {
 import {
   useCropSeedance2Asset,
   useDeleteSeedance2Asset,
-  useGenerateBeatVideoPrompt,
   useGenerateSeedance2Prompt,
   useRegenerateBeatVideo,
   useUploadSeedance2Asset,
@@ -78,7 +76,7 @@ import {
 } from "@/components/episode/beat-workbench/seedance2-mentions";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useScript, useUpdateBeat } from "@/lib/queries/scripts";
+import { useUpdateBeat } from "@/lib/queries/scripts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -297,7 +295,6 @@ export function VideoPane({
   const frameAspectCss = ratioToCss(spec.renderAspect);
   const seedance2Id = useId();
   const regenerate = useRegenerateBeatVideo(project, episode);
-  const generateBeatVideoPrompt = useGenerateBeatVideoPrompt(project, episode);
   const generateSeedance2Prompt = useGenerateSeedance2Prompt(project, episode);
   const uploadSeedance2Asset = useUploadSeedance2Asset(project, episode);
   const deleteSeedance2Asset = useDeleteSeedance2Asset(project, episode);
@@ -316,23 +313,10 @@ export function VideoPane({
       queryKeys.videoPool(project, episode),
     ],
   });
-  // Beat 视频提示词生成在 EE 下是后台任务（同步分支仅 CE 单机命中），mutateAsync
-  // 只拿到入队 ack，isPending 一闪而过。用任务控制器让 loading 覆盖真实生成过程，
-  // 并在刷新后仍能恢复；完成后 invalidate beats 会把提示词回填到文本框。
-  const beatVideoPromptTask = useTaskController({
-    key: {
-      taskType: "beat_video_prompt",
-      project,
-      episode,
-      beatNum: beat.beat_number,
-    },
-    invalidateKeys: [queryKeys.beats(project, episode)],
-  });
   const poolSelect = useVideoPoolSelect(project, episode);
   const { data: poolRes } = useVideoPool(project, episode);
   const { data: videoBackendsRes } = useVideoBackends(project);
   const videoBackends = videoBackendsRes?.data ?? [];
-  const beatVideoPromptCost = useGenerationCreditCost("feature", "mainline.beat_video_prompt");
   const seedance2PromptCost = useGenerationCreditCost("feature", "mainline.seedance2_prompt");
   const now = useNow();
   const seedance2UploadInputRef = useRef<HTMLInputElement>(null);
@@ -359,7 +343,7 @@ export function VideoPane({
     final_prompt: null,
   });
   // #t=0.1 forces a seek so Safari/iOS paints the real first frame without
-  // relying on a poster image (which was the beat's sketch PNG, not the video).
+  // relying on a poster image.
   const videoSrc = beat.video_url
     ? `${resolveMediaUrl(beat.video_url)}#t=0.1`
     : null;
@@ -391,21 +375,6 @@ export function VideoPane({
     }
     return labels;
   }, [videoBackends]);
-  const scriptQuery = useScript(project, episode);
-  const lockedToAnchorBeat =
-    typeof beat.scene_ref?.lock_camera_beat === "number" &&
-    beat.scene_ref.lock_camera_beat > 0
-      ? beat.scene_ref.lock_camera_beat
-      : null;
-  const nextLockedBeatNumber = useMemo(() => {
-    const beats = scriptQuery.data?.data?.beats ?? [];
-    const match = beats.find(
-      (b) =>
-        b.beat_number !== beat.beat_number &&
-        b.scene_ref?.lock_camera_beat === beat.beat_number,
-    );
-    return match ? match.beat_number : null;
-  }, [scriptQuery.data, beat.beat_number]);
   const selectedBackend = videoBackends.find((b) => b.value === defaultBackend);
   const showSeedance2Config = selectedBackend?.is_seedance2 === true;
   const showHappyHorseConfig = selectedBackend?.is_happyhorse === true;
@@ -706,11 +675,6 @@ export function VideoPane({
       },
     },
   );
-  const beatVideoPromptCostDisplay =
-    beatVideoPromptCost.data?.data.display ??
-    (beatVideoPromptCost.error instanceof BillingRuleNotConfiguredError
-      ? t("common.billingRuleNotConfiguredShort")
-      : null);
   const seedance2PromptCostDisplay =
     seedance2PromptCost.data?.data.display ??
     (seedance2PromptCost.error instanceof BillingRuleNotConfiguredError
@@ -1614,28 +1578,6 @@ export function VideoPane({
       toast.error(t("episode.workbench.video.regenFailed"));
     }
   };
-  const handleGenerateBeatVideoPrompt = async () => {
-    try {
-      const res = await generateBeatVideoPrompt.mutateAsync({
-        beatNum: beat.beat_number,
-      });
-      if (!res.ok) {
-        toast.error(
-          res.error || t("episode.workbench.video.beatVideoPromptGenerateFailed"),
-        );
-        return;
-      }
-      if (!("data" in res)) {
-        beatVideoPromptTask.start();
-        toast.success(t("episode.workbench.video.beatVideoPromptGenerateStarted"));
-        return;
-      }
-      setLegacyVideoPrompt(res.data.prompt);
-      toast.success(t("episode.workbench.video.beatVideoPromptGenerated"));
-    } catch (error) {
-      toast.error(backendErrorToastMessage(error, t));
-    }
-  };
 
   return (
     <div className={VIDEO_GRID_CLASS}>
@@ -1761,31 +1703,6 @@ export function VideoPane({
         )}
       </div>
 
-      {(lockedToAnchorBeat !== null || nextLockedBeatNumber !== null) && (
-        <div className="col-span-2 flex flex-col gap-1 rounded-[8px] border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-foreground/90">
-          {lockedToAnchorBeat !== null && (
-            <div className="flex items-center gap-2">
-              <Lock className="size-3.5 shrink-0 text-primary" />
-              <span>
-                {t("episode.workbench.spatialLock.videoBannerLockedTo", {
-                  n: lockedToAnchorBeat,
-                })}
-              </span>
-            </div>
-          )}
-          {nextLockedBeatNumber !== null && (
-            <div className="flex items-center gap-2">
-              <Lock className="size-3.5 shrink-0 text-primary" />
-              <span>
-                {t("episode.workbench.spatialLock.videoBannerFeedNext", {
-                  n: nextLockedBeatNumber,
-                })}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
       {!showPromptConfig && (
         <div
           className={cn(
@@ -1804,29 +1721,6 @@ export function VideoPane({
               className={cn("min-h-[82px]", SEEDANCE2_TEXTAREA_CLASS)}
             />
           </Seedance2Field>
-          <div className="mt-2 flex justify-start">
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={
-                generateBeatVideoPrompt.isPending || beatVideoPromptTask.started
-              }
-              onClick={() => void handleGenerateBeatVideoPrompt()}
-              className={MEDIA_PRIMARY_ACTION_BUTTON_CLASS}
-            >
-              {generateBeatVideoPrompt.isPending ||
-              beatVideoPromptTask.started ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <WandSparkles className="size-3" />
-              )}
-              {t("episode.workbench.video.generateBeatVideoPrompt")}
-              <CreditCostInline
-                display={beatVideoPromptCostDisplay}
-                promotion={beatVideoPromptCost.data?.data.promotion}
-              />
-            </Button>
-          </div>
         </div>
       )}
 
@@ -2085,7 +1979,7 @@ export function VideoPane({
                         key={asset.key}
                         data-seedance2-reference-tile
                         className="group/reference-tile relative w-[6.75rem] overflow-hidden rounded-[7px] border border-white/[0.075] bg-white/[0.018] transition-[border-color,background-color,box-shadow] duration-200 hover:border-white/[0.14] hover:bg-white/[0.032]"
-                        style={{ aspectRatio: ratioToCss(spec.sketchAspect) }}
+                        style={{ aspectRatio: ratioToCss(spec.renderAspect) }}
                         title={asset.note || asset.label}
                       >
                         {assetImageSrc ? (

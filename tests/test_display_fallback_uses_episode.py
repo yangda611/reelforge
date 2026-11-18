@@ -19,29 +19,6 @@ episode number that a tool schema requires by that name.
 """
 from __future__ import annotations
 
-import pytest
-
-from novelvideo.chat.service import _infer_display_tool_call_from_text
-
-
-def _infer(text: str):
-    result = _infer_display_tool_call_from_text(text, "", [])
-    assert result is not None, f"no display tool inferred from {text!r}"
-    return result
-
-
-@pytest.mark.parametrize("text,expected_episode", [
-    ("展示第 3 集草图", 3),
-    ("看看第 5 集的草图", 5),
-])
-def test_inferring_a_sketch_tool_emits_episode(text, expected_episode):
-    """The tool requires `episode`; a `trajectory` key would simply be rejected."""
-    name, args = _infer(text)
-    assert "trajectory" not in args, (
-        f"{name} was given a trajectory argument; the tool schema requires "
-        f"episode, so this call cannot succeed")
-    assert args.get("episode") == expected_episode
-
 
 def test_the_fallback_reads_its_episode_from_the_episode_key():
     """The quiet failure: the wrong episode shown, with nothing to signal it.

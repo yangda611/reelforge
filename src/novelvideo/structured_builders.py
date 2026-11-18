@@ -357,6 +357,7 @@ async def _publish_characters(
     """Publish a settled cast, whether freshly built or replayed from cache."""
     from novelvideo.cognee.pipeline import NovelCharacter, StoreAnalysisItemCache
     from novelvideo.config import get_fish_voice_id
+    from novelvideo.skills.realistic_asset_skills import is_live_action_project
     from novelvideo.structured_extraction import enrich_character_appearances
 
     # Extraction settles *who* exists; this settles what they look like. It runs
@@ -370,6 +371,7 @@ async def _publish_characters(
         cache=StoreAnalysisItemCache(store),
         on_log=log,
         output_language=output_language,
+        live_action=is_live_action_project(state_dir=getattr(store, "state_dir", None)),
     )
 
     _settle_narrator(store, appearances)
@@ -493,6 +495,7 @@ async def build_scenes_structured(
         on_progress=lambda progress, task: report(0.1 + progress * 0.7, task),
         on_log=on_log,
         cache=cache,
+        state_dir=str(getattr(store, "state_dir", "") or "") or None,
     )
     if not scenes:
         log(

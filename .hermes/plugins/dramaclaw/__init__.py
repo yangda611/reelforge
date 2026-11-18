@@ -41,17 +41,12 @@ VOICE_PREREQ_CHAT_PREFIX = (
     "配音任务没有成功启动：当前缺少声线前置。请到「虾塘」上传或录制缺失的"
     "项目解说人声线/角色声线，或明确同意由虾导准备系统声线后，再继续生成配音。"
 )
-RENDER_PREREQ_CHAT_PREFIX = (
-    "Render 任务没有生成可用图片：当前缺少必要草图前置。请先在「虾塘」生成或确认对应 "
-    "Beat 的草图后，再重新生成 Render。"
-)
-FIRST_FRAME_BATCH_SIZE = 9
 AGENT_BATCH_POLL_SECONDS = 2.0
 _AGENT_BATCH_DISPATCHERS: dict[str, threading.Thread] = {}
 _AGENT_BATCH_DISPATCHERS_LOCK = threading.Lock()
 FREEZONE_MAINLINE_WRITE_DENIED_MESSAGE = (
     "当前虾导运行在虾画画布中，只能查询项目状态或操作画布节点；"
-    "不能从这里启动主线视频生成、分集/脚本规划、草图、首帧、配音、成片或单 Beat 视频任务。"
+    "不能从这里启动主线视频生成、分集/脚本规划、首帧、配音、成片或单 Beat 视频任务。"
 )
 FREEZONE_DENIED_MAINLINE_WRITE_TOOLS = {
     "dramaclaw_control_episode_auto",
@@ -67,12 +62,8 @@ FREEZONE_DENIED_MAINLINE_WRITE_TOOLS = {
     "dramaclaw_plan_props",
     "dramaclaw_generate_scene_master",
     "dramaclaw_generate_scene_reverse",
-    "dramaclaw_generate_sketches",
-    "dramaclaw_detect_sketch_identities",
-    "dramaclaw_optimize_video_global",
     "dramaclaw_generate_audio",
     "dramaclaw_prepare_system_voices",
-    "dramaclaw_render_first_frames",
     "dramaclaw_compose_episode",
     "dramaclaw_generate_portrait",
     "dramaclaw_generate_identity_image",
@@ -160,29 +151,6 @@ def _voice_setup_prerequisites(value: Any) -> dict[str, Any] | None:
     return prerequisites
 
 
-def _render_prereq_error_text(value: Any) -> str:
-    if isinstance(value, str):
-        text = value.strip()
-        if "Render 模式需要草图" in text or "未生成可用图片" in text:
-            return text[:1200]
-        return ""
-    if isinstance(value, dict):
-        error = str(value.get("error") or value.get("detail") or value.get("message") or "").strip()
-        if "Render 模式需要草图" in error or "未生成可用图片" in error:
-            return error[:1200]
-        for item in value.values():
-            found = _render_prereq_error_text(item)
-            if found:
-                return found
-        return ""
-    if isinstance(value, list):
-        for item in value:
-            found = _render_prereq_error_text(item)
-            if found:
-                return found
-    return ""
-
-
 def _with_chat_error_hints(value: Any) -> Any:
     if isinstance(value, list):
         return [_with_chat_error_hints(item) for item in value]
@@ -233,21 +201,6 @@ def _with_chat_error_hints(value: Any) -> Any:
                 " The final question MUST explicitly contain both Chinese choices: ‘到虾塘上传或录制声线’ "
                 "and ‘由虾导匹配系统声线’. Never describe system voices as unavailable, an external "
                 "alternative, or ‘换别的方向’."
-            ),
-        )
-    render_error = _render_prereq_error_text(value)
-    if render_error:
-        result.setdefault(
-            "chat_error",
-            f"{RENDER_PREREQ_CHAT_PREFIX}\n\n错误原因：{render_error}",
-        )
-        result.setdefault(
-            "agent_instruction",
-            (
-                "Reply to the user with chat_error in natural Chinese. Make clear the render "
-                "task did not produce usable images because sketches are missing. Tell the user "
-                "to generate or verify sketches in 虾塘 before retrying render. Do not start "
-                "another tool in this turn."
             ),
         )
     if _has_text_content_filter(value):
@@ -1376,7 +1329,7 @@ def _handle_plan_identities(args: dict[str, Any], **_: Any) -> str:
 
 
 def _handle_plan_scenes(args: dict[str, Any], **_: Any) -> str:
-    """Plan an episode scene menu before sketch generation."""
+    """Plan an episode scene menu before episode media generation."""
     try:
         return tool_result(_episode_post(args, "scenes/plan"))
     except Exception as exc:
@@ -1384,7 +1337,7 @@ def _handle_plan_scenes(args: dict[str, Any], **_: Any) -> str:
 
 
 def _handle_plan_props(args: dict[str, Any], **_: Any) -> str:
-    """Plan an episode prop menu before sketch generation."""
+    """Plan an episode prop menu before episode media generation."""
     try:
         return tool_result(_episode_post(args, "props/plan"))
     except Exception as exc:
@@ -1421,100 +1374,6 @@ def _handle_generate_scene_reverse(args: dict[str, Any], **_: Any) -> str:
                 f"/api/v1/projects/{project}/scenes/{quote(name, safe='')}/reverse/generate-async",
             )
         )
-    except Exception as exc:
-        return tool_error(str(exc))
-
-
-def _handle_generate_sketches(args: dict[str, Any], **_: Any) -> str:
-    """Generate beat sketches for one episode (草图生成, sketch_generation task).
-
-    POST /projects/{project}/episodes/{episode}/sketches/assign-colors, then
-    POST /projects/{project}/episodes/{episode}/sketches/generate with the
-    canonical request body. Runs after the script exists. Poll
-    task_type="sketch_generation", episode=N.
-    """
-    try:
-        project = _project_from_args(args)
-        episode = _require_episode(args)
-        body = {
-            "model": "nanobanana",
-            "grid_index": -1,
-            "sketch_scene_grouping": True,
-            "aspect_ratio": "2:3",
-        }
-        if "body" in args:
-            raise ValueError(
-                "body overrides are not supported; pass the canonical sketch fields"
-            )
-        for key in (
-            "style",
-            "model",
-            "grid_index",
-            "sketch_scene_grouping",
-            "aspect_ratio",
-            "image_generation_selection",
-        ):
-            if key in args and args[key] is not None:
-                body[key] = args[key]
-
-        if args.get("auto_assign_colors", True):
-            colors = _request(
-                "POST",
-                f"/api/v1/projects/{project}/episodes/{episode}/sketches/assign-colors",
-            )
-            if not colors.get("ok"):
-                return tool_result(
-                    {
-                        "ok": False,
-                        "stage": "assign-colors",
-                        "error": colors.get("error") or "assign-colors failed",
-                        "data": colors,
-                    }
-                )
-
-        result = _request(
-            "POST",
-            f"/api/v1/projects/{project}/episodes/{episode}/sketches/generate",
-            body=body,
-        )
-        if isinstance(result, dict):
-            result.setdefault("request_body", body)
-        return tool_result(result)
-    except Exception as exc:
-        return tool_error(str(exc))
-
-
-def _handle_detect_sketch_identities(args: dict[str, Any], **_: Any) -> str:
-    """Run episode-wide sketch AI detection for identities and props."""
-    try:
-        project = _project_from_args(args)
-        episode = _require_episode(args)
-        result = _request(
-            "POST",
-            f"/api/v1/projects/{project}/episodes/{episode}/sketches/detect-identities",
-        )
-        if isinstance(result, dict) and not result.get("ok"):
-            error_text = str(result.get("error") or "").casefold()
-            if "timed out" in error_text or "timeout" in error_text:
-                result.setdefault("retryable", False)
-                result.setdefault(
-                    "agent_instruction",
-                    "Stop retrying this tool in the same turn. Report that AI detection timed "
-                    "out and ask the user to retry later or run it from the frontend.",
-                )
-        return tool_result(result)
-    except Exception as exc:
-        return tool_error(str(exc))
-
-
-def _handle_optimize_video_global(args: dict[str, Any], **_: Any) -> str:
-    """Run global video optimization for one episode (全局视频优化, global_optimize_video).
-
-    POST /projects/{project}/episodes/{episode}/optimize/video-global.
-    Poll task_type="global_optimize_video", episode=N.
-    """
-    try:
-        return tool_result(_episode_post(args, "optimize/video-global"))
     except Exception as exc:
         return tool_error(str(exc))
 
@@ -1577,16 +1436,6 @@ def _resolve_episode_beats(project: str, episode: int) -> list[int]:
     ]
 
 
-def _resolve_missing_first_frame_beats(project: str, episode: int) -> list[int]:
-    """Return beat numbers whose promoted first-frame asset is still missing."""
-    return [
-        int(beat["beat_number"])
-        for beat in _resolve_episode_beat_items(project, episode)
-        if beat.get("beat_number") is not None
-        and not str(beat.get("frame_url") or "").strip()
-    ]
-
-
 def _resolve_ready_video_beats(project: str, episode: int) -> list[int]:
     """Return unfinished beats that have a promoted first frame ready for video."""
     return [
@@ -1598,83 +1447,11 @@ def _resolve_ready_video_beats(project: str, episode: int) -> list[int]:
     ]
 
 
-def _handle_get_sketches(args: dict[str, Any], **_: Any) -> str:
-    """Get display-ready sketch URLs for an episode (to SHOW the user).
-
-    Wraps GET /projects/{project}/episodes/{episode}/beats and returns, per beat,
-    the servable ``sketch_url``. Use ``dramaclaw_get_first_frames`` for first frames.
-    Do NOT read
-    the local ``sketch_path`` from a task result, and do NOT use vision_analyze —
-    that only lets the agent look at the image, it does NOT show it to the user.
-    """
-    try:
-        project = _project_from_args(args)
-        episode = _require_episode(args)
-        media_kind = "sketch"
-        resp = _request("GET", f"/api/v1/projects/{project}/episodes/{episode}/beats")
-        items: Any = None
-        if isinstance(resp, dict):
-            for key in ("data", "beats", "items"):
-                value = resp.get(key)
-                if isinstance(value, list):
-                    items = value
-                    break
-            if items is None and isinstance(resp.get("data"), dict):
-                items = resp["data"].get("beats")
-        sketches = []
-        media_items = []
-        requested_beats = _requested_beats(args)
-        for b in items or []:
-            if not isinstance(b, dict):
-                continue
-            beat_number = b.get("beat_number")
-            try:
-                beat_int = int(beat_number)
-            except (TypeError, ValueError):
-                beat_int = None
-            if requested_beats is not None and beat_int not in requested_beats:
-                continue
-            sketch_url = b.get("sketch_url") or ""
-            video_url = b.get("video_url") or ""
-            sketches.append(
-                {
-                    "beat_number": beat_number,
-                    "sketch_url": sketch_url,
-                    "sketch_source": "sketch" if sketch_url else "",
-                    "video_url": video_url,
-                    "characters": b.get("character_names") or b.get("characters"),
-                }
-            )
-            if sketch_url:
-                media_items.append(
-                    {
-                        "src": sketch_url,
-                        "title": f"Beat {beat_number} 草图",
-                        "description": "草图",
-                        "aspectRatio": "3/4",
-                    }
-                )
-        limited_media = _limit_items(media_items, args, 12)
-        return tool_result(
-            {
-                "ok": True,
-                "project_id": project,
-                "episode": episode,
-                "media_kind": media_kind,
-                "count": len(sketches),
-                "sketches": sketches,
-                "ui_spec": _image_ui_spec("sketch_gallery", limited_media) if limited_media else None,
-            }
-        )
-    except Exception as exc:
-        return tool_result({"ok": False, "error": str(exc)})
-
-
 def _handle_get_first_frames(args: dict[str, Any], **_: Any) -> str:
     """Get display-ready first-frame URLs for an episode (to SHOW the user).
 
     Wraps GET /projects/{project}/episodes/{episode}/beats and returns, per beat,
-    the servable ``frame_url``. Use ``dramaclaw_get_sketches`` for sketches.
+    the servable ``frame_url``.
     """
     try:
         project = _project_from_args(args)
@@ -1729,56 +1506,6 @@ def _handle_get_first_frames(args: dict[str, Any], **_: Any) -> str:
                 "media_kind": "frame",
                 "count": len(frames),
                 "frames": frames,
-                "ui_spec": _image_ui_spec("sketch_gallery", limited_media) if limited_media else None,
-            }
-        )
-    except Exception as exc:
-        return tool_error(str(exc))
-
-
-def _handle_get_sketch_candidates(args: dict[str, Any], **_: Any) -> str:
-    """Get display-ready sketch pool candidates for one beat."""
-    try:
-        project = _project_from_args(args)
-        episode = _require_episode(args)
-        beat = int(args.get("beat") or args.get("beat_num") or args.get("beat_number") or 0)
-        if beat <= 0:
-            raise ValueError("beat is required")
-        resp = _request(
-            "GET",
-            f"/api/v1/projects/{project}/episodes/{episode}/beats/{beat}/sketch-candidates",
-        )
-        data = resp.get("data") if isinstance(resp, dict) else None
-        if not isinstance(data, dict):
-            data = {}
-        candidates = data.get("candidates") if isinstance(data.get("candidates"), list) else []
-        media_items = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            src = str(candidate.get("url") or "").strip()
-            if not src:
-                continue
-            stale = bool(candidate.get("stale"))
-            media_items.append(
-                {
-                    "src": src,
-                    "title": f"Beat {beat} 草图候选",
-                    "description": "过期候选" if stale else "草图候选",
-                    "aspectRatio": "3/4",
-                }
-            )
-        limited_media = _limit_items(media_items, args, 12)
-        return tool_result(
-            {
-                "ok": bool(resp.get("ok", True)) if isinstance(resp, dict) else True,
-                "project_id": project,
-                "episode": episode,
-                "beat": beat,
-                "media_kind": "sketch_candidate",
-                "current_sketch_url": data.get("current_sketch_url", ""),
-                "candidate_count": int(data.get("candidate_count") or len(candidates)),
-                "candidates": candidates,
                 "ui_spec": _image_ui_spec("sketch_gallery", limited_media) if limited_media else None,
             }
         )
@@ -2086,7 +1813,7 @@ def _handle_get_episode_media(args: dict[str, Any], **_: Any) -> str:
                 continue
             video_url = str(beat.get("video_url") or "").strip()
             audio_url = str(beat.get("audio_url") or "").strip()
-            frame_url = str(beat.get("frame_url") or beat.get("sketch_url") or "").strip()
+            frame_url = str(beat.get("frame_url") or "").strip()
             beats.append({"beat_number": beat_number, "video_url": video_url, "audio_url": audio_url})
             if video_url:
                 video_items.append(
@@ -2115,104 +1842,6 @@ def _handle_get_episode_media(args: dict[str, Any], **_: Any) -> str:
                 "audio_count": len(audio_items),
                 "beats": beats,
                 "ui_spec": ui_spec,
-            }
-        )
-    except Exception as exc:
-        return tool_error(str(exc))
-
-
-def _handle_render_first_frames(args: dict[str, Any], **_: Any) -> str:
-    """Generate first frames for an episode (首帧生成, selected_regen task).
-
-    Wraps POST /projects/{project}/episodes/{episode}/beats/regenerate with
-    ``{"beat_indices": [beat]}``. One tool call registers up to nine independent
-    selected_regen tasks, submits only what fits the existing queue, and refills capacity
-    as tasks finish. If ``beat_indices`` is omitted, the next nine beats without promoted
-    first frames are resolved automatically. Requires sketches to exist first.
-    """
-    try:
-        project = _project_from_args(args)
-        episode = _require_episode(args)
-        requested = sorted(_requested_beats(args) or set())
-        remaining_after_batch: int | None = None
-        if not requested:
-            missing = _resolve_missing_first_frame_beats(project, episode)
-            if not missing:
-                return tool_result(
-                    {
-                        "ok": True,
-                        "code": "first_frames_complete",
-                        "episode": episode,
-                        "requested": [],
-                        "started": [],
-                        "remaining": 0,
-                        "message": f"第 {episode} 集首帧已全部生成完成",
-                    }
-                )
-            requested = missing[:FIRST_FRAME_BATCH_SIZE]
-            remaining_after_batch = max(len(missing) - len(requested), 0)
-        if len(requested) > FIRST_FRAME_BATCH_SIZE:
-            raise ValueError(
-                f"at most {FIRST_FRAME_BATCH_SIZE} first-frame beats can be started in one batch"
-            )
-
-        batch_id = f"first-frame-{uuid4().hex}"
-        common_body: dict[str, Any] = {
-            "batch_id": batch_id,
-            "batch_size": len(requested),
-        }
-        if args.get("style"):
-            common_body["style"] = str(args["style"])
-        if args.get("model"):
-            common_body["model"] = str(args["model"])
-
-        def submit_item(beat: int) -> dict[str, Any]:
-            return _request(
-                "POST",
-                f"/api/v1/projects/{project}/episodes/{episode}/beats/regenerate",
-                body={**common_body, "beat_indices": [beat]},
-            )
-
-        pending = list(requested)
-        slots = _batch_available_slots(project, "default")
-        items, failed = _submit_batch_items(
-            pending=pending,
-            slots=slots,
-            submit_item=submit_item,
-        )
-        started = [int(item["beat"]) for item in items]
-        waiting = list(pending)
-        _launch_capacity_aware_batch_dispatcher(
-            batch_id=batch_id,
-            project=project,
-            queue_kind="default",
-            pending=pending,
-            submit_item=submit_item,
-        )
-
-        return tool_result(
-            {
-                "ok": not failed,
-                "episode": episode,
-                "batch_id": batch_id,
-                "requested": requested,
-                "started": started,
-                "waiting": waiting,
-                "failed": failed,
-                "items": items,
-                **(
-                    {"remaining": remaining_after_batch}
-                    if remaining_after_batch is not None
-                    else {}
-                ),
-                "message": (
-                    f"第 {episode} 集首帧批次已登记：运行 {len(started)} 个，等待 {len(waiting)} 个"
-                    if not failed
-                    else (
-                        f"第 {episode} 集首帧批次已登记：运行 {len(started)} 个，"
-                        f"等待 {len(waiting)} 个，{len(failed)} 个提交失败"
-                    )
-                ),
             }
         )
     except Exception as exc:
@@ -2536,7 +2165,6 @@ _RESULT_ARRAY_FIELDS = frozenset(
         "nodes",
         "requested",
         "scenes",
-        "sketches",
         "skills",
         "stages",
         "started",
@@ -2665,15 +2293,6 @@ _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
     "dramaclaw_plan_props": ("task", "task_id", "task_type", "episode"),
     "dramaclaw_generate_scene_master": ("task", "task_id", "scene_id"),
     "dramaclaw_generate_scene_reverse": ("task", "task_id", "scene_id"),
-    "dramaclaw_generate_sketches": (
-        "task",
-        "task_id",
-        "episode",
-        "stage",
-        "grid_index",
-    ),
-    "dramaclaw_detect_sketch_identities": ("task", "task_id", "episode"),
-    "dramaclaw_optimize_video_global": ("task", "task_id", "episode"),
     "dramaclaw_generate_audio": ("task", "task_id", "episode"),
     "dramaclaw_prepare_system_voices": (
         "task",
@@ -2682,15 +2301,7 @@ _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
         "episode",
         "confirmed",
     ),
-    "dramaclaw_get_sketches": ("project_id", "episode", "sketches", "count", "ui_spec"),
     "dramaclaw_get_first_frames": ("project_id", "episode", "frames", "count", "ui_spec"),
-    "dramaclaw_get_sketch_candidates": (
-        "project_id",
-        "episode",
-        "candidates",
-        "candidate_count",
-        "ui_spec",
-    ),
     "dramaclaw_get_scene_images": (
         "project_id",
         "scenes",
@@ -2706,15 +2317,6 @@ _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
         "ui_spec",
     ),
     "dramaclaw_get_episode_media": ("project_id", "episode", "beats", "media_type", "ui_spec"),
-    "dramaclaw_render_first_frames": (
-        "batch_id",
-        "episode",
-        "requested",
-        "started",
-        "waiting",
-        "failed",
-        "items",
-    ),
     "dramaclaw_compose_episode": ("task", "task_id", "episode", "add_bgm", "add_subtitles"),
     "dramaclaw_get_final_video": (
         "project_id",
@@ -2772,15 +2374,7 @@ _RESULT_SUCCESS_REQUIRED: dict[str, tuple[str, ...]] = {
         "upload_dir_available",
     ),
     "dramaclaw_update_character_face_prompt": ("character",),
-    "dramaclaw_get_sketches": ("project_id", "episode", "sketches", "count", "ui_spec"),
     "dramaclaw_get_first_frames": ("project_id", "episode", "frames", "count", "ui_spec"),
-    "dramaclaw_get_sketch_candidates": (
-        "project_id",
-        "episode",
-        "candidates",
-        "candidate_count",
-        "ui_spec",
-    ),
     "dramaclaw_get_scene_images": (
         "project_id",
         "scenes",
@@ -2803,17 +2397,13 @@ _TASK_RESULT_TOOLS = {
     "dramaclaw_generate_scene_reverse",
     "dramaclaw_generate_portrait",
     "dramaclaw_generate_identity_image",
-    "dramaclaw_generate_sketches",
-    "dramaclaw_detect_sketch_identities",
     "dramaclaw_generate_audio",
     "dramaclaw_prepare_system_voices",
-    "dramaclaw_optimize_video_global",
     "dramaclaw_compose_episode",
     "dramaclaw_start_single_video",
 }
 
 _BATCH_RESULT_TOOLS = {
-    "dramaclaw_render_first_frames",
     "dramaclaw_start_video_batch",
 }
 
@@ -3128,10 +2718,10 @@ TOOLS = (
         "dramaclaw_run_freezone_skill",
         _schema(
             "dramaclaw_run_freezone_skill",
-            "Run a Freezone canvas SkillNode through /freezone/skills/{skill_id}/run. Pass only the canonical fields below; do not wrap them in request. Use this for canvas graph skills such as sketch_from_context, sketch_from_director_combined, frame_from_context, set_selected_background, and scene_360.",
+            "Run a Freezone canvas SkillNode through /freezone/skills/{skill_id}/run. Pass only the canonical fields below; do not wrap them in request. Use this for canvas graph skills such as set_selected_background and scene_360.",
             {
                 "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "skill_id": {"type": "string", "description": "Skill id from dramaclaw_list_freezone_skills, e.g. freezone.sketch_from_context."},
+                "skill_id": {"type": "string", "description": "Skill id from dramaclaw_list_freezone_skills, e.g. freezone.scene_360."},
                 "skill_node_id": {"type": "string", "description": "Canvas skill node id."},
                 "canvas_id": {"type": "string", "description": "Canvas id, usually default or a preset canvas id."},
                 "idempotency_key": {"type": "string", "description": "Optional idempotency key for retries."},
@@ -3379,7 +2969,7 @@ TOOLS = (
         _schema(
             "dramaclaw_plan_scenes",
             "Plan the scene menu for one episode (场景规划, episode_scene_planner task). Use THIS "
-            "after script generation and before sketch generation when the pipeline needs scene "
+            "after script generation and before episode media generation when the pipeline needs scene "
             "context. Real endpoint POST /projects/{project}/episodes/{episode}/scenes/plan. Poll "
             "with dramaclaw_get_task(task_type='episode_scene_planner', episode=N).",
             {
@@ -3395,7 +2985,7 @@ TOOLS = (
         _schema(
             "dramaclaw_plan_props",
             "Plan the prop menu for one episode (道具规划, episode_prop_planner task). Use THIS "
-            "after script generation and before sketch generation when the pipeline needs prop "
+            "after script generation and before episode media generation when the pipeline needs prop "
             "context. Real endpoint POST /projects/{project}/episodes/{episode}/props/plan. Poll "
             "with dramaclaw_get_task(task_type='episode_prop_planner', episode=N).",
             {
@@ -3471,105 +3061,13 @@ TOOLS = (
         _handle_generate_identity_image,
     ),
     (
-        "dramaclaw_generate_sketches",
-        _schema(
-            "dramaclaw_generate_sketches",
-            "Generate beat sketches for one episode (草图生成, sketch_generation task). Real endpoint "
-            "POST /projects/{project}/episodes/{episode}/sketches/generate with a canonical body. "
-            "This tool automatically runs assign-colors first by default and fills safe defaults: "
-            "model='nanobanana', grid_index=-1 (all grids), sketch_scene_grouping=true, "
-            "aspect_ratio='2:3'. Use THIS instead of dramaclaw_post or guessing the body. Runs "
-            "after the script exists. Poll dramaclaw_get_task(task_type='sketch_generation', episode=N).",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-                "style": {"type": "string", "description": "Optional visual style override."},
-                "model": {"type": "string", "description": "Sketch model. Default: nanobanana."},
-                "grid_index": {
-                    "type": "integer",
-                    "description": "Grid index to generate. Use -1 to generate all grids. Default: -1.",
-                },
-                "sketch_scene_grouping": {
-                    "type": "boolean",
-                    "description": "Group sketch grids by scene. Default: true.",
-                },
-                "aspect_ratio": {
-                    "type": "string",
-                    "enum": ["2:3", "16:9"],
-                    "description": "Sketch aspect ratio. Default: 2:3.",
-                },
-                "image_generation_selection": {
-                    "type": "string",
-                    "description": "Optional backend/provider selection from sketch settings.",
-                },
-                "auto_assign_colors": {
-                    "type": "boolean",
-                    "description": "Run /sketches/assign-colors before generation. Default: true.",
-                },
-            },
-            ["episode"],
-            additional_properties=False,
-        ),
-        _handle_generate_sketches,
-    ),
-    (
-        "dramaclaw_detect_sketch_identities",
-        _schema(
-            "dramaclaw_detect_sketch_identities",
-            "Run AI detection on one episode's generated sketches and persist detected identities "
-            "and props to each beat. Real endpoint POST /projects/{project}/episodes/{episode}/"
-            "sketches/detect-identities. Requires sketches to exist and sketch colors to be assigned; "
-            "if colors are missing, run dramaclaw_generate_sketches or POST assign-colors first. Use "
-            "THIS when the user asks to run AI 检测 / identity detection for sketches. If the tool "
-            "returns a timeout or retryable=false, do not call it again in the same turn; report the "
-            "timeout and stop.",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-            },
-            ["episode"],
-        ),
-        _handle_detect_sketch_identities,
-    ),
-    (
-        "dramaclaw_get_sketches",
-        _schema(
-            "dramaclaw_get_sketches",
-            "Get display-ready official sketch URLs for an episode, to SHOW the user. This tool "
-            "returns only current sketch_url media. It does not fall back to "
-            "grids/epNNN/sketch/beat_XX_t* pool candidates and never substitutes first frames. "
-            "Use dramaclaw_get_first_frames only when the user explicitly "
-            "asks for 首帧/first frames. Do NOT read "
-            "sketch_path from a task result, and do NOT use vision_analyze to 'show' images. "
-            "After calling this tool, do not write markdown images, raw URLs, http/static paths, "
-            "or HTML media tags.",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-                "beat": {"type": "integer", "description": "Show only one beat's sketch."},
-                "beat_indices": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Show only these beat numbers, in episode order.",
-                },
-                "offset": {
-                    "type": "integer",
-                    "description": "Zero-based media offset after beat filtering. Use with limit for paging.",
-                },
-                "limit": {"type": "integer", "description": "Maximum media items to return. Default/max: 12."},
-            },
-            ["episode"],
-        ),
-        _handle_get_sketches,
-    ),
-    (
         "dramaclaw_get_first_frames",
         _schema(
             "dramaclaw_get_first_frames",
             "Get display-ready first-frame URLs for an episode, to SHOW the user. This tool returns "
             "only frame_url media. Use this only when the user explicitly asks for 首帧/first frames. "
-            "Use dramaclaw_get_sketches for sketches. After calling this tool, do not write markdown "
-            "images, raw URLs, http/static paths, or HTML media tags.",
+            "After calling this tool, do not write markdown images, raw URLs, http/static paths, "
+            "or HTML media tags.",
             {
                 "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
                 "episode": {"type": "integer", "description": "Episode number (required)."},
@@ -3588,27 +3086,6 @@ TOOLS = (
             ["episode"],
         ),
         _handle_get_first_frames,
-    ),
-    (
-        "dramaclaw_get_sketch_candidates",
-        _schema(
-            "dramaclaw_get_sketch_candidates",
-            "Get display-ready sketch pool candidates for one beat. This tool shows "
-            "grids/epNNN/sketch/beat_XX_t* candidates and is separate from current sketch_url. "
-            "Use dramaclaw_get_sketches when the user asks for the official/current sketch.",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-                "beat": {"type": "integer", "description": "Beat number (required)."},
-                "offset": {
-                    "type": "integer",
-                    "description": "Zero-based candidate offset. Use with limit for paging.",
-                },
-                "limit": {"type": "integer", "description": "Maximum media items to return. Default/max: 12."},
-            },
-            ["episode", "beat"],
-        ),
-        _handle_get_sketch_candidates,
     ),
     (
         "dramaclaw_get_scene_images",
@@ -3734,32 +3211,6 @@ TOOLS = (
         _handle_get_episode_media,
     ),
     (
-        "dramaclaw_render_first_frames",
-        _schema(
-            "dramaclaw_render_first_frames",
-            "Generate first frames for an episode (首帧生成, selected_regen task). Real endpoint POST "
-            "/projects/{project}/episodes/{episode}/beats/regenerate. One call registers up to nine "
-            "independent beat tasks; only available queue slots start immediately and waiting Beats "
-            "are submitted automatically as capacity opens. Omit beat_indices to render the next "
-            "nine missing first frames. "
-            "Requires sketches first. Poll dramaclaw_list_tasks(task_type='selected_regen', episode=N).",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-                "beat_indices": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "minItems": 1,
-                    "maxItems": 9,
-                    "description": "One to nine beat numbers. Omit to render the next nine missing first frames.",
-                },
-                "style": {"type": "string", "description": "Optional visual style override."},
-            },
-            ["episode"],
-        ),
-        _handle_render_first_frames,
-    ),
-    (
         "dramaclaw_generate_audio",
         _schema(
             "dramaclaw_generate_audio",
@@ -3811,21 +3262,6 @@ TOOLS = (
             ["episode", "confirmed"],
         ),
         _handle_prepare_system_voices,
-    ),
-    (
-        "dramaclaw_optimize_video_global",
-        _schema(
-            "dramaclaw_optimize_video_global",
-            "Run global video optimization for one episode (全局视频优化, global_optimize_video task). "
-            "Real endpoint POST /projects/{project}/episodes/{episode}/optimize/video-global. Poll "
-            "dramaclaw_get_task(task_type='global_optimize_video', episode=N).",
-            {
-                "project_id": {"type": "string", "description": "Defaults to DRAMACLAW_PROJECT_ID."},
-                "episode": {"type": "integer", "description": "Episode number (required)."},
-            },
-            ["episode"],
-        ),
-        _handle_optimize_video_global,
     ),
     (
         "dramaclaw_compose_episode",

@@ -36,6 +36,11 @@ from novelvideo.image_request_usage import (
     update_image_request_status,
 )
 from novelvideo.services.style_service import StyleService
+from novelvideo.skills.realistic_asset_skills import (
+    get_live_action_character_sheet_skill_directives,
+    get_live_action_portrait_skill_directives,
+)
+from novelvideo.generators.image_resolution import resolve_image_model_profile
 from novelvideo.generators.nanobanana_grid import (
     _InlineImagePart,
     _call_huimeng_image_api,
@@ -181,6 +186,7 @@ class NanoBananaCharacterGenerator:
                 }
             )
         self.egress_context = egress_context
+        self.selection = selection
         self.provider = config.get(
             "provider", "google"
         )  # google / openrouter / openai / huimeng / newapi
@@ -188,6 +194,7 @@ class NanoBananaCharacterGenerator:
         self.model = config["model"]
         self.base_url = config.get("base_url", "")
         self.openai_image_quality = config.get("openai_image_quality", "medium")
+        self.newapi_request_schema = config.get("newapi_request_schema") or {}
 
         if not self.api_key:
             if self.provider == "openrouter":
@@ -203,6 +210,22 @@ class NanoBananaCharacterGenerator:
             raise ValueError(f"API key not set. " f"Set {key_name} environment variable.")
 
         print(f"[NanoBanana Character] Provider: {self.provider}, Model: {self.model}")
+
+    def _resolved_image_profile(self):
+        return resolve_image_model_profile(
+            getattr(self, "provider", "newapi"),
+            getattr(self, "model", ""),
+            selection=getattr(self, "selection", None),
+        )
+
+    def _resolved_image_size(self) -> str:
+        return self._resolved_image_profile().max_image_size
+
+    def _resolved_request_schema(self) -> dict:
+        explicit = getattr(self, "newapi_request_schema", None)
+        if isinstance(explicit, dict) and explicit:
+            return explicit
+        return self._resolved_image_profile().request_schema
 
     async def generate_character_portrait(
         self,
@@ -319,11 +342,12 @@ class NanoBananaCharacterGenerator:
             portrait_ref_path = (
                 os.path.join(output_dir, "reference_portrait.png") if output_dir else None
             )
+            image_size = self._resolved_image_size()
             portrait_bytes = await self._generate_single_image(
                 client=client,
                 prompt=front_prompt,
                 output_path=portrait_ref_path,
-                image_size="0.5K",
+                image_size=image_size,
             )
 
             if portrait_bytes and portrait_ref_path:
@@ -493,7 +517,7 @@ class NanoBananaCharacterGenerator:
                 character_tag = self._generate_character_tag(character_name)
 
             print(
-                f"[NanoBanana Character] 基于基准图生成 {character_name} 身份图（4面板: 正面+三分+背面）..."
+                f"[NanoBanana Character] 基于基准图生成 {character_name} 身份图（reference sheet）..."
             )
 
             # 构建 Identity Locked Prompt（4 面板: 全脸 + 正面 + 45° 三分 + 背面）
@@ -584,9 +608,14 @@ class NanoBananaCharacterGenerator:
                 print(f"[NanoBanana Character] 已加载服装参考图: {costume_image_path}")
 
             # 统一流程：生成 body 到临时文件 → 拼接 portrait → 删 temp
-            aspect_ratio = "16:9"  # 4面板: 全脸+正+三分+背面
-            image_size = "1K"
-            body_label = "4面板 reference sheet"
+            aspect_ratio = "16:9"
+            image_size = self._resolved_image_size()
+            family, _ = StyleService.get_style_branch(
+                style or IMAGE_DEFAULT_STYLE,
+                project_dir=project_dir or None,
+                state_dir=state_dir or None,
+            )
+            body_label = "4面板 reference sheet" if family == "animation" else "3栏定妆三联图"
 
             temp_body_path = output_path.replace(".png", "_body_temp.png")
             print(f"[NanoBanana Character] 生成{body_label}到临时文件: {temp_body_path}")
@@ -799,7 +828,7 @@ MUST AVOID:
                 prompt=prompt,
                 output_path=composite_path,
                 aspect_ratio="16:9",
-                image_size="1K",
+                image_size=self._resolved_image_size(),
             )
             if not image_bytes:
                 return CharacterReferenceResult(
@@ -947,7 +976,8 @@ MUST AVOID:
 """
             return prompt.strip()
 
-        prompt = f"""Generate a face-only character identity reference portrait for identity locking.
+        skill_directives = get_live_action_portrait_skill_directives()
+        prompt = f"""Generate one live-action costume-fitting head-and-shoulders identity reference portrait photograph for {character_tag} ({character_name}).
 
 CHARACTER: {character_tag} ({character_name})
 
@@ -955,13 +985,13 @@ DEFAULT ETHNICITY (FALLBACK ONLY):
 {_default_ethnicity_instruction(ethnicity)}
 
 FRAMING & CAMERA (CRITICAL):
-- FRONT-FACING: subject facing camera DIRECTLY, looking STRAIGHT at camera, symmetrical composition
-- Head-and-shoulders close-up, face fills 60-70% of the frame
-- Neutral expression, mouth closed
-- Solid matte gray seamless studio background — NO environment, NO scenery, NO props
+- FRONT-FACING: actual adult actor facing camera DIRECTLY, looking STRAIGHT at camera, symmetrical composition
+- Head-and-shoulders close-up, face fills 60-70% of the frame, complete hair crown visible
+- Neutral observant expression, closed relaxed lips
+- Solid matte warm-off-white or neutral light gray seamless studio background — NO environment, NO scenery, NO props
 - Plain simple dark top (like a basic t-shirt), MINIMAL clothing visible
 - Do NOT show elaborate costumes, accessories, or period clothing
-- This should follow the project visual style while remaining clear enough for identity locking.
+- Broad soft diffuse daylight from slightly above and in front, neutral white balance, natural skin tones, gentle facial modelling, small natural eye catchlights
 
 FACIAL FEATURES TO CAPTURE (from character description):
 {character_prompt}
@@ -969,11 +999,12 @@ FACIAL FEATURES TO CAPTURE (from character description):
 VISUAL STYLE:
 {style_keywords}
 
+{skill_directives}
+
 STRICT REQUIREMENTS:
-- This is a CHARACTER IDENTITY ANCHOR — face must be perfectly front-facing and clearly visible
-- High-quality, 4K resolution
-- Maintain strict facial fidelity to the character description
-- Keep facial structure, hairstyle, skin tone, and expression readable for downstream identity matching
+- This is a CHARACTER IDENTITY ANCHOR — actual actor photography, face must be perfectly front-facing and clearly visible
+- Natural human skin with age- and distance-appropriate pores, fine facial hair, subtle eye-area detail, slight local colour variation and natural sheen; preserve natural bone structure and slight asymmetry
+- Keep eyes, brows, lips, hairline, and facial proportions clear for downstream identity matching
 
 MUST AVOID:
 {negative_keywords}
@@ -983,7 +1014,7 @@ MUST AVOID:
 - Do NOT add ANY background: no rooms, no scenery, no furniture, no props — plain solid color only
 - Do not add text, watermarks, or signatures
 - Do not include multiple characters
-- Do NOT create beauty-filter skin, glamor retouching, fashion-magazine polish, doll-like skin, or cosmetic-ad aesthetics
+- Do NOT create beauty-filter skin, glamor retouching, fashion-magazine polish, porcelain/doll-like skin, CG rendering, or uniform gritty micro-noise
 """
         return prompt.strip()
 
@@ -1084,66 +1115,39 @@ STRICT REQUIREMENTS (MUST AVOID):
 """
             return prompt.strip()
 
-        prompt = f"""Character identity reference sheet. Neutral studio setup.
-PLAIN SOLID WHITE or LIGHT GRAY background ONLY — no environment, no scenery, no props. {style_keywords}
+        skill_directives = get_live_action_character_sheet_skill_directives()
+        prompt = f"""Create ONE landscape 16:9 live-action costume-fitting character reference sheet photograph for {character_tag} ({character_name}).
+NEUTRAL STUDIO SETUP: seamless warm-off-white or light neutral gray background ONLY — NO environment, NO scenery, NO props, NO text, NO borders, NO thick divider lines.
+{style_keywords}
 
-Using the reference image as IDENTITY ANCHOR for {character_tag} ({character_name}),
-create a 4-panel character reference sheet arranged LEFT to RIGHT:
+Using Reference 1 as the IDENTITY ANCHOR for {character_tag} ({character_name}), arrange the same real actor in EXACTLY THREE adjacent non-overlapping zones from LEFT to RIGHT (unless the character description or reference explicitly specifies a different framing or masked/hooded state):
 
-- Panel 1 (LEFT): FACE CLOSEUP — head and shoulders, filling the panel. This is a zoomed-in crop of Panel 2's head: SAME hairstyle, SAME visible clothing (neckline, collar, shoulders)
-- Panel 2 (CENTER-LEFT): FRONT full body — head to feet, standing pose, facing camera
-- Panel 3 (CENTER-RIGHT): THREE-QUARTER VIEW full body — head to feet, body rotated approximately 45 degrees from the left, both eyes still visible, standing pose
-- Panel 4 (RIGHT): BACK VIEW full body — head to feet, facing away from camera, showing back of head and body
+- Zone 1 (LEFT 28%): STRAIGHT FRONTAL COSTUME VIEW — natural relaxed standing pose facing camera, cropped by the top edge of this frame from the collarbones/base of neck down to the soles of both shoes. The actor's head is naturally outside the upper photographic crop (this is a living actor cropped by the camera, with clothing visible at the upper edge — never depict a severed neck, flat cut surface, or mannequin). Both hands (empty) and both shoes are fully visible, arms naturally lowered with a small gap from the torso, parallel feet.
+- Zone 2 (MIDDLE 28%): COMPLETE REAR VIEW — exact same actor rotated strictly 180 degrees, showing complete head crown, hair back, and down to the soles of both shoes, facing away from camera (no head turn, no front face visible). Match shoulder, waist, knee, and shoe-baseline scale with Zone 1.
+- Zone 3 (RIGHT 44%): ENLARGED FRONTAL HEAD-AND-SHOULDERS PORTRAIT — complete head crown and hairstyle visible, eyes level with the camera (~85mm portrait perspective), collar/neckline visible, face as the visual anchor.
 
-IDENTITY LOCKING (CRITICAL):
-Preserve the facial structure, facial proportions, and overall likeness
-of {character_tag} EXACTLY as in the reference image, allowing NO alteration,
-stylization, or reinterpretation of the face under any circumstance.
+IDENTITY & COSTUME LOCKING (CRITICAL):
+Preserve the facial structure, bone structure, eye shape/spacing/color, nose shape, lip shape, skin tone, age impression, hair identity, and overall likeness of {character_tag} EXACTLY as in Reference 1.
+- Preserve natural human skin with age- and distance-appropriate pores, fine facial hair, subtle eye-area detail, slight local colour variation and natural sheen, without beauty retouching.
+- Do NOT preserve beauty-filter smoothing, wax/plastic skin, or conflicting grading from any reference.
+- Lock asymmetrical garment overlaps, fasteners, belts, and accessories by the character's ANATOMICAL left/right (viewer-left in Zone 1 corresponds to viewer-right in Zone 2 — never mirror asymmetrically).
 
-MUST PRESERVE (from reference):
-- Facial structure and bone structure
-- Eye shape, size, spacing, color
-- Nose shape and size
-- Lip shape and fullness
-- Skin tone
-- Hair color, style, texture
-- Preserve the reference identity exactly; do not change face structure, skin tone, hair identity, or silhouette.
-
-DO NOT PRESERVE FROM REFERENCE:
-- Beauty-filter smoothing or retouching
-- Plastic / waxy / overly perfect skin treatment
-- Any rendering finish that conflicts with the selected project style preset
-- The final rendering medium should follow the project style preset, not the reference image
-
-CHARACTER DETAILS (CRITICAL - use this for clothing and appearance):
+CHARACTER & WARDROBE DETAILS (CRITICAL - apply to garments, hair, and equipment):
 {character_prompt}
 {self._costume_reference_block(has_costume_reference)}
-BACKGROUND (CRITICAL — STRICTLY ENFORCED):
-- ALL 4 panels MUST have a PLAIN SOLID-COLOR background (white, light gray, or soft neutral gradient)
-- Do NOT render ANY environment: no rooms, no furniture, no walls, no floors, no scenery
-- This is a production character identity reference sheet, not a fashion catalog, not a glossy poster
+PHOTOGRAPHY & MATERIALITY:
+- Broad soft diffuse daylight from slightly above and in front, gentle facial modelling, small natural eye catchlights, and soft contact shadows below shoes.
+- Neutral white balance, faithful skin colour, moderate contrast, and readable cloth weave, garment weight, seams, and weight-bearing folds.
+- Describe wear locally per material (cuff edges, shoe soles, metal edges) rather than global gritty noise across skin and garments.
 
-FULL BODY FRAMING (Panels 2-4):
-- MUST show COMPLETE figure from top of head to bottom of feet including shoes
-- Standing in neutral pose on a visible ground line
-- Ample space above head and below feet
-- Do NOT crop any body part
-
-CONSISTENCY:
-- ALL 4 panels = SAME person, SAME outfit, SAME hair
-- Panel 1 is a ZOOMED-IN CROP of Panel 2's head area — hairstyle, neckline, collar, and shoulder clothing MUST be identical
-- Panel 1 face MUST match Panels 2-3 face exactly
-- Panel 4 shows the SAME person from behind — SAME hair, SAME outfit, SAME body proportions
-- Only viewing angle changes between Panel 2 (front), Panel 3 (three-quarter), and Panel 4 (back)
+{skill_directives}
 
 STRICT REQUIREMENTS (MUST AVOID):
 {negative_keywords}
-- Do not allow ANY facial feature drift from reference.
-- Do not mix styles or reinterpret the character.
-- Do not include multiple characters.
-- No text, labels, or panel numbers on the image
-- Do NOT create beauty-retouched, glamorized, cosmetic-ad, or fashion-editorial output
-- Keep the project style consistent across all 4 panels
+- Do not allow ANY facial feature drift or age/identity drift from Reference 1.
+- Do not add a 4th panel, side profile, extra views, text labels, panel numbers, or decorative frames.
+- Do not include multiple characters or environment scenery.
+- Do NOT create beauty-retouched, glamorized, cosmetic-ad, fashion-editorial, CG, or 3D-render output.
 """
         return prompt.strip()
 
@@ -1184,6 +1188,7 @@ STRICT REQUIREMENTS (MUST AVOID):
                     "rows": 1,
                     "cols": 1,
                     "total_panels": 1,
+                    "newapi_request_schema": self._resolved_request_schema(),
                 },
                 egress_context=self.egress_context,
                 egress_capability="image.asset.character",
@@ -1264,6 +1269,7 @@ STRICT REQUIREMENTS (MUST AVOID):
                         "quality": normalize_openai_quality(
                             self.openai_image_quality, default="medium"
                         ),
+                        "request_schema": self._resolved_request_schema(),
                     },
                     base_url=self.base_url,
                     delivery_path=output_path,
@@ -1534,6 +1540,7 @@ STRICT REQUIREMENTS (MUST AVOID):
                         "quality": normalize_openai_quality(
                             self.openai_image_quality, default="medium"
                         ),
+                        "request_schema": self._resolved_request_schema(),
                     },
                     base_url=self.base_url,
                     delivery_path=output_path,

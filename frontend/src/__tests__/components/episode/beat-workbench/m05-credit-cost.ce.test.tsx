@@ -204,33 +204,12 @@ describe("M05 CE generation credit cost gating", () => {
     expect(source("src/components/assets/scenes-panel.tsx")).toEqual(
       expect.stringMatching(/<CreditCostInline\s+display=\{buildScenesCostDisplay\}/),
     );
-    expect(source("src/components/episode/beat-workbench/sketch-section.tsx")).toEqual(
-      expect.stringContaining("sketchRegenCost.data?.data.display"),
-    );
-    expect(source("src/components/episode/beat-workbench/render-section.tsx")).toEqual(
-      expect.stringContaining("renderRegenCost.data?.data.display"),
-    );
-    expect(source("src/components/episode/beat-workbench/batch-panel.tsx")).toEqual(
-      expect.stringMatching(/<CreditCostInline\s+display=\{sketchPlanCostDisplay\}/),
-    );
-    expect(source("src/components/episode/beat-workbench/render-plan-dialog.tsx")).toEqual(
-      expect.stringMatching(/<CreditCostInline\s+display=\{renderPlanCostDisplay\}/),
-    );
-    expect(
-      source("src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx"),
-    ).toEqual(
-      expect.stringMatching(/<CreditCostInline\s+display=\{sketchPlanCostDisplay\}/),
-    );
   });
 
   it("does not add CE runtime forks to M05 business paths or the cost query hook", () => {
     const businessPaths = [
       "src/components/assets/scene-asset-card.tsx",
       "src/components/assets/scenes-panel.tsx",
-      "src/components/episode/beat-workbench/sketch-section.tsx",
-      "src/components/episode/beat-workbench/render-section.tsx",
-      "src/components/episode/beat-workbench/batch-panel.tsx",
-      "src/components/episode/beat-workbench/render-plan-dialog.tsx",
       "src/routes/_app/projects.$project/episodes.$episode/beats.lazy.tsx",
       "src/lib/queries/generation-credit-cost.ts",
     ];

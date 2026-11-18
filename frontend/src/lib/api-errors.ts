@@ -369,13 +369,13 @@ export async function jsonWithBackendError<T>(request: Promise<Response>): Promi
 
 /**
  * Classify a raw generation-task error string coming back from the model
- * gateway. Sketch/render/video failures surface as a RuntimeError whose text
+ * gateway. Image/video failures surface as a RuntimeError whose text
  * embeds the gateway response, e.g.
  *
  *   草图重生未生成可用图片（...）: HTTP 429: ...; body={"error":{"code":"huimeng_low_quality_skipped","type":"channel_policy",...}}
  *
  * A `channel_policy` rejection is a *route-layer* refusal (the gateway skipped
- * the channel before dispatching, e.g. low-quality sketch regen), NOT real
+ * the channel before dispatching, e.g. low-quality image regen), NOT real
  * upstream throttling — even though it too rides on an HTTP 429. Callers need
  * to tell the two apart so users don't read a policy block as "try again in a
  * bit". Order matters: check the policy signal before the bare-429 signal.

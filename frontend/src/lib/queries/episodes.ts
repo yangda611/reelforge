@@ -65,7 +65,6 @@ export function derivePipelineEpisodeStatuses(
     {
       episode: status.current_episode,
       script: Boolean(status.episode_status.script),
-      sketch: Boolean(status.episode_status.sketches),
       audio: Boolean(status.episode_status.tts),
       video: Boolean(status.episode_status.video),
       compose: status.next_step === "done",

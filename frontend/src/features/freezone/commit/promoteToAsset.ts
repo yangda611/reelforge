@@ -41,7 +41,6 @@ function validateCommitTarget(target: PushTarget): void {
   }
   if (
     (target.kind === "frame" ||
-      target.kind === "sketch" ||
       target.kind === "director_render" ||
       target.kind === "video" ||
       target.kind === "beat_audio") &&

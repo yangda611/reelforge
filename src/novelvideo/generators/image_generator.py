@@ -168,12 +168,6 @@ class ImageGenerationRequest(BaseModel):
         description="跳过提示词增强，直接使用传入的 prompt",
     )
 
-    # 草图渲染模式标志
-    is_sketch_render: bool = Field(
-        default=False,
-        description="是否为草图渲染模式（用于调整 negative_prompt，移除 sketch 相关词以避免语义冲突）",
-    )
-
 
 class ImageGenResult(BaseModel):
     """图像生成结果。"""
@@ -523,19 +517,13 @@ class VolcengineImageGenerator:
             }
 
             # 添加负向提示词
-            # Seedream 草图渲染模式：完全禁用 negative_prompt
-            # 避免任何词汇与草图参考产生语义冲突（仅 Seedream 模型适用此策略）
-            if request.is_sketch_render:
-                print(f"[Seedream] 草图渲染模式: 完全禁用 negative_prompt (Seedream专用)", flush=True)
-                # 不设置 negative_prompt
-            else:
-                style_negative = style_preset.get("avoid_instructions", "")
-                if request.negative_prompt and style_negative:
-                    request_body["negative_prompt"] = f"{style_negative}, {request.negative_prompt}"
-                elif style_negative:
-                    request_body["negative_prompt"] = style_negative
-                elif request.negative_prompt:
-                    request_body["negative_prompt"] = request.negative_prompt
+            style_negative = style_preset.get("avoid_instructions", "")
+            if request.negative_prompt and style_negative:
+                request_body["negative_prompt"] = f"{style_negative}, {request.negative_prompt}"
+            elif style_negative:
+                request_body["negative_prompt"] = style_negative
+            elif request.negative_prompt:
+                request_body["negative_prompt"] = request.negative_prompt
 
             if request.seed:
                 request_body["seed"] = request.seed

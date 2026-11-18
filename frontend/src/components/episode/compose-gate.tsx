@@ -13,7 +13,7 @@ interface ComposeGateProps {
   episode: number;
 }
 
-type BlockerStageId = Exclude<StageId, "compose" | "script" | "sketch">;
+type BlockerStageId = Exclude<StageId, "compose" | "script">;
 
 const MAX_BEATS_DISPLAYED = 5;
 

@@ -42,21 +42,21 @@ export function aspectRatioFromImageDimensions(width: number, height: number): s
 
 export function shouldForceNaturalImageSize(data: Record<string, unknown>): boolean {
   const outputRole = typeof data.output_role === 'string' ? data.output_role : '';
-  if (outputRole === 'current_sketch_candidate' || outputRole === 'current_frame_candidate') {
+  if (outputRole === 'current_frame_candidate') {
     return true;
   }
   const slotTarget = data.slot_target && typeof data.slot_target === 'object'
     ? data.slot_target as Record<string, unknown>
     : null;
   const slotKind = typeof slotTarget?.kind === 'string' ? slotTarget.kind : '';
-  if (slotKind === 'sketch' || slotKind === 'frame') {
+  if (slotKind === 'frame') {
     return true;
   }
   const source = data.__freezone_source && typeof data.__freezone_source === 'object'
     ? data.__freezone_source as Record<string, unknown>
     : null;
   const sourceRole = typeof source?.role === 'string' ? source.role : '';
-  if (sourceRole === 'current_sketch' || sourceRole === 'current_frame') {
+  if (sourceRole === 'current_frame') {
     return true;
   }
   const contexts = Array.isArray(data.mainline_context) ? data.mainline_context : [];
@@ -65,7 +65,7 @@ export function shouldForceNaturalImageSize(data: Record<string, unknown>): bool
       return false;
     }
     const kind = (context as Record<string, unknown>).kind;
-    return kind === 'sketch' || kind === 'frame';
+    return kind === 'frame';
   });
 }
 

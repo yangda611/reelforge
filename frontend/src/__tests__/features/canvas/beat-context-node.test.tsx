@@ -111,7 +111,6 @@ function makeData(
       detectedIdentities: [],
       detectedProps: [],
       selectedBackgroundExists: false,
-      currentSketchExists: false,
       currentFrameExists: false,
     },
     mainline_context: [
@@ -762,110 +761,6 @@ describe("BeatContextNode", () => {
           scene_ref: { scene_id: "兰州拉面馆", variant_id: "雨夜" },
         }),
       );
-    });
-  });
-
-  it("links selected identities to the frame skill after sync without page refresh", async () => {
-    const user = userEvent.setup();
-    const data = makeData();
-    useCanvasStore.getState().setCanvasData(
-      [
-        {
-          id: "context_beat",
-          type: CANVAS_NODE_TYPES.beatContext,
-          position: { x: 0, y: 0 },
-          data,
-        },
-        {
-          id: "identity_ref",
-          type: CANVAS_NODE_TYPES.upload,
-          position: { x: -300, y: 0 },
-          data: {
-            displayName: "面馆男青年_青年时期",
-            mainline_context: [
-              {
-                kind: "identity",
-                identityId: "面馆男青年_青年时期",
-                role: "character_identity",
-              },
-            ],
-          },
-        },
-        {
-          id: "skill_frame",
-          type: CANVAS_NODE_TYPES.skill,
-          position: { x: 300, y: 0 },
-          data: {
-            displayName: "Frame from context",
-            skill_id: "freezone.frame_from_context",
-          },
-        },
-      ],
-      [
-        {
-          id: "edge_context_to_skill_frame",
-          source: "context_beat",
-          target: "skill_frame",
-          sourceHandle: "source",
-          targetHandle: "beat_context",
-          type: "disconnectableEdge",
-          data: {
-            edgeKind: "role_binding",
-            role: "beat_context",
-            propagates: true,
-          },
-        },
-      ],
-    );
-    listFreezoneBeatContext.mockResolvedValueOnce({
-      episodes: [
-        {
-          episode: 1,
-          beats: [
-            {
-              episode: 1,
-              beat: 3,
-              label: "EP1 / Beat 3",
-              visual_description: "全景镜头，兰州拉面馆内。",
-              narration_segment: "",
-              scene_id: "兰州拉面馆",
-              time_of_day: "夜晚",
-              detected_identities: ["面馆男青年_青年时期"],
-              detected_props: [],
-              sketch_colors: {},
-              prop_marker_colors: {},
-              assets: [],
-            },
-          ],
-        },
-      ],
-    });
-
-    renderNode(data);
-    await user.click(
-      screen.getByRole("button", { name: /面馆男青年_青年时期/ }),
-    );
-
-    await waitFor(() => {
-      expect(
-        useCanvasStore.getState().edges.some((edge) => {
-          const edgeData = edge.data as
-            | {
-                role?: string;
-                autoBeatContextProjection?: boolean;
-                reference_target?: { identity_id?: string };
-              }
-            | undefined;
-          return (
-            edge.source === "identity_ref" &&
-            edge.target === "skill_frame" &&
-            edge.targetHandle === "identity:面馆男青年_青年时期" &&
-            edgeData?.role === "identity" &&
-            edgeData.reference_target?.identity_id === "面馆男青年_青年时期" &&
-            edgeData.autoBeatContextProjection === true
-          );
-        }),
-      ).toBe(true);
     });
   });
 

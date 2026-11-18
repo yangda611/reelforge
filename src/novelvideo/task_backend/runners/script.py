@@ -26,78 +26,6 @@ def run_script_writer(
     )
 
 
-def run_beat_video_prompt(
-    envelope: dict[str, Any], ctx: ProjectContext
-) -> dict[str, Any]:
-    return asyncio.run(
-        await_envelope_with_cancel_watch(
-            _run_beat_video_prompt(envelope, ctx),
-            envelope,
-            task_type="beat_video_prompt",
-        )
-    )
-
-
-async def _run_beat_video_prompt(
-    envelope: dict[str, Any], ctx: ProjectContext
-) -> dict[str, Any]:
-    from novelvideo.api.deps import make_sqlite_store_for_context
-    from novelvideo.api.routes.scripts import _generate_and_save_beat_video_prompt
-
-    payload = envelope.get("payload") or {}
-    episode = int(envelope.get("episode") or payload.get("episode") or 0)
-    beat_num = int(envelope.get("beat_num") or payload.get("beat_num") or 0)
-    output_dir = str(payload.get("output_dir") or ctx.output_dir)
-    language = str(payload.get("language") or "en")
-    manager = get_task_manager()
-
-    def update_progress(progress: float, task: MessageLike) -> None:
-        manager.update_progress_for_project(
-            ctx,
-            "beat_video_prompt",
-            episode,
-            beat_num=beat_num,
-            progress=progress,
-            current_task=task,
-            logs=[task],
-        )
-
-    update_progress(
-        0.05,
-        lmsg(
-            "tasks.progress.script.beatVideoPromptStart",
-            f"开始生成 Beat {beat_num} 视频提示词",
-            beatNum=beat_num,
-        ),
-    )
-    store = await make_sqlite_store_for_context(ctx)
-    try:
-        data = await _generate_and_save_beat_video_prompt(
-            store=store,
-            output_dir=output_dir,
-            project_name=ctx.project_name,
-            episode_num=episode,
-            beat_num=beat_num,
-            language=language,
-        )
-        update_progress(
-            0.95,
-            lmsg(
-                "tasks.progress.script.beatVideoPromptSaved",
-                f"已保存 Beat {beat_num} 视频提示词",
-                beatNum=beat_num,
-            ),
-        )
-        return {
-            "episode": episode,
-            "beat_num": beat_num,
-            "field": data["field"],
-            "prompt": data["prompt"],
-        }
-    finally:
-        await store.close()
-
-
 async def _run_script_writer(
     envelope: dict[str, Any], ctx: ProjectContext
 ) -> dict[str, Any] | None:
@@ -109,9 +37,7 @@ async def _run_script_writer_scoped(
     envelope: dict[str, Any], ctx: ProjectContext
 ) -> dict[str, Any] | None:
     from novelvideo.cognee import CogneeStore
-    from novelvideo.generators.episode_optimizer import EpisodeOptimizer
     from novelvideo.project_config import load_project_config_from_state_dir
-    from novelvideo.utils.path_resolver import PathResolver
     from novelvideo.workflows.script_writing import create_script_writing_workflow
 
     payload = envelope.get("payload") or {}
@@ -194,67 +120,6 @@ async def _run_script_writer_scoped(
 
         script = await workflow.run(**run_kwargs)
 
-        paths = PathResolver(output_dir, episode)
-        deleted = paths.clean_sketches()
-        if deleted:
-            manager.update_progress_for_project(
-                ctx,
-                "script_writer",
-                episode,
-                logs=[f"已清理 {deleted} 个旧草图文件"],
-            )
-
-        try:
-            beats_data = [beat.model_dump() for beat in script.beats]
-            existing_colors = dict(store.get_sketch_colors(episode) or {})
-            colors = EpisodeOptimizer.assign_sketch_colors(
-                [],
-                episode_beats=beats_data,
-                existing_colors=existing_colors,
-            )
-            if colors:
-                await store.set_sketch_colors(episode, colors)
-                manager.update_progress_for_project(
-                    ctx,
-                    "script_writer",
-                    episode,
-                    logs=[f"已分配 {len(colors)} 个身份配色"],
-                )
-        except Exception as exc:  # noqa: BLE001
-            manager.update_progress_for_project(
-                ctx,
-                "script_writer",
-                episode,
-                logs=[f"自动配色失败（不影响脚本）: {exc}"],
-            )
-
-        is_s9_script = any(
-            str(getattr(beat, "s9_subshots_json", "") or "").strip() not in {"", "[]"}
-            for beat in (script.beats or [])
-        )
-        if not is_s9_script:
-            try:
-                from novelvideo.agents.fixed_camera_planner import (
-                    apply_fixed_camera_plan_for_episode,
-                )
-
-                lock_plan = await apply_fixed_camera_plan_for_episode(store, episode)
-                locked_beats = list(lock_plan.get("locked_beats") or [])
-                if locked_beats:
-                    manager.update_progress_for_project(
-                        ctx,
-                        "script_writer",
-                        episode,
-                        logs=[f"已自动规划 {len(locked_beats)} 个固定机位锁定镜头: {locked_beats}"],
-                    )
-            except Exception as exc:  # noqa: BLE001
-                manager.update_progress_for_project(
-                    ctx,
-                    "script_writer",
-                    episode,
-                    logs=[f"自动固定机位规划失败（不影响脚本）: {exc}"],
-                )
-
         refreshed_beats = (
             await store.get_beats_as_dicts(episode)
             if hasattr(store, "get_beats_as_dicts")
@@ -277,4 +142,3 @@ async def _run_script_writer_scoped(
 
 
 register_project_task_runner("script_writer", run_script_writer)
-register_project_task_runner("beat_video_prompt", run_beat_video_prompt)

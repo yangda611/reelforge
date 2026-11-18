@@ -130,8 +130,6 @@ function renderWithProviders(ui: ReactNode) {
   return render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={qc}>
-        {/* 页面里的 ``useEpisodeImageTaskInvalidation`` 要订阅任务事件总线，
-            没有这个 Provider 会直接抛。用真的而不是空壳，省得把订阅逻辑一起 mock 掉。 */}
         <TaskCenterProvider projectId="demo">{ui}</TaskCenterProvider>
       </QueryClientProvider>
     </I18nextProvider>,

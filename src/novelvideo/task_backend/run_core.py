@@ -70,7 +70,6 @@ _PROJECT_TASK_RESOURCE_KINDS = {
     "build_props": "script",
     "build_episodes": "script",
     "script_writer": "script",
-    "beat_video_prompt": "script",
     "identity_planner": "portrait",
     "episode_scene_planner": "script",
     "episode_prop_planner": "script",
@@ -80,20 +79,8 @@ _PROJECT_TASK_RESOURCE_KINDS = {
     "prop_reference_asset": "render",
     "stage_asset": "render",
     "freezone_image_to_3gs": "render",
-    "sketch_generation": "sketch",
-    "director_control_to_sketch": "sketch",
-    "sketch_grid_generation": "sketch",
-    "sketch_regen": "sketch",
-    "mainline_sketch_from_context": "sketch",
-    "mainline_frame_from_context": "render",
-    "mainline_director_control_sketch": "sketch",
-    "sketch_edit_execute": "sketch",
-    "action_sketch": "sketch",
-    "selected_regen": "render",
-    "grid_regenerate": "render",
     "single_video": "video",
     "compose_episode": "video",
-    "global_optimize_video": "script",
     "audio_generation": "tts",
     "indextts2_audio_generation": "tts",
     "audio_generation_indextts2": "tts",
@@ -602,16 +589,11 @@ def _project_task_failure_for_exception(
     exc: BaseException,
 ) -> tuple[str, dict[str, Any], bool]:
     from novelvideo.freezone.audio_node import VoicePrerequisiteError
-    from novelvideo.generators.render_identity_guard import RenderIdentityDetectionRequired
     from novelvideo.identity_prerequisites import IdentityPlanningPrerequisiteError
     from novelvideo.novel_source import NovelImportRequiredError
     from novelvideo.scene_prerequisites import ScenePlanningPrerequisiteError
-    from novelvideo.video_prompt_prerequisite import VideoPromptPrerequisiteError
 
     if isinstance(exc, VoicePrerequisiteError):
-        return str(exc), {"error_code": exc.error_code}, True
-
-    if isinstance(exc, RenderIdentityDetectionRequired):
         return str(exc), {"error_code": exc.error_code}, True
 
     if isinstance(exc, IdentityPlanningPrerequisiteError):
@@ -621,9 +603,6 @@ def _project_task_failure_for_exception(
         return str(exc), {"error_code": exc.error_code}, True
 
     if isinstance(exc, NovelImportRequiredError):
-        return str(exc), {"error_code": exc.error_code}, True
-
-    if isinstance(exc, VideoPromptPrerequisiteError):
         return str(exc), {"error_code": exc.error_code}, True
 
     if isinstance(exc, TaskTimedOut):
@@ -740,11 +719,8 @@ def _ensure_builtin_runners_registered() -> None:
         identity,
         ingest,
         prop_reference,
-        render,
         scene_reference,
         script,
-        sketch,
-        sketch_edit_execute,
         stage_asset,
         video,
     )

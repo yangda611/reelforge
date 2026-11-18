@@ -14,6 +14,7 @@ vi.mock("react-i18next", () => ({
       if (key === "episode.beat.deselect") return "取消选择 Beat";
       if (key === "episode.beat.insertAfter") return `在第 ${vars?.n} 个 beat 后插入`;
       if (key === "episode.beat.openFreezone") return "进入虾画 Beat 工作台";
+      if (key === "episode.beat.insertBeforeShort") return "前插";
       if (key === "episode.beat.s9Badge") return `${vars?.seconds}s · ${vars?.shots}镜`;
       return key;
     },
@@ -24,19 +25,12 @@ const beat = {
   beat_number: 4,
   narration_segment: "发现密室里的书",
   visual_description: "主角翻开旧书",
-  sketch_url: "/static/sketches/beat_04.png",
-  frame_url: "/static/renders/beat_04.png",
 } as Beat;
 
 function renderBeatCard(overrides: Partial<Parameters<typeof BeatCard>[0]> = {}) {
   const props = {
     beat,
     displayNumber: beat.beat_number,
-    showSketch: true,
-    showRender: true,
-    images: [],
-    assignments: {},
-    aspectRatio: "portrait" as const,
     isSelected: false,
     isChecked: false,
     onCardClick: vi.fn(),
@@ -87,41 +81,48 @@ describe("BeatCard", () => {
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
-  it("uses render as the main image and overlays sketch in dual-image mode", () => {
+  it("shows the beat narration and visual description in the card body", () => {
     renderBeatCard();
 
-    const renderImage = screen.getByAltText("render");
-    const sketchImage = screen.getByAltText("sketch");
-
-    expect(renderImage.parentElement?.className).toContain("aspect-[2/3]");
-    expect(sketchImage.closest(".absolute")).toBeInTheDocument();
+    expect(screen.getByText("发现密室里的书")).toBeInTheDocument();
+    expect(screen.getByText("主角翻开旧书")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
-  it("does not duplicate the sketch overlay when dual-image mode falls back to sketch", () => {
-    renderBeatCard({
-      beat: {
-        ...beat,
-        frame_url: null,
-      } as Beat,
-    });
+  it("selects the card from its text body", async () => {
+    const user = userEvent.setup();
+    const { onCardClick } = renderBeatCard();
 
-    expect(screen.getByAltText("sketch")).toBeInTheDocument();
-    expect(screen.queryByAltText("render")).not.toBeInTheDocument();
-    expect(screen.getAllByAltText("sketch")).toHaveLength(1);
+    await user.click(screen.getByText("发现密室里的书"));
+
+    expect(onCardClick).toHaveBeenCalledWith(4);
   });
 
-  it("opens the beat freezone workbench from the bottom-right icon without selecting the card", async () => {
+  it("opens the beat freezone workbench from the always-visible action without selecting the card", async () => {
     const user = userEvent.setup();
     const onOpenFreezone = vi.fn();
     const { onCardClick } = renderBeatCard({ onOpenFreezone });
 
     await user.click(screen.getByRole("button", { name: "进入虾画 Beat 工作台" }));
 
-    expect(onOpenFreezone).toHaveBeenCalledWith(4, "frame");
+    expect(onOpenFreezone).toHaveBeenCalledWith(4);
     expect(onCardClick).not.toHaveBeenCalled();
     expect(screen.queryByText("进入虾画 Beat 工作台")).not.toBeInTheDocument();
   });
 
+  it("shows insert actions even when the beat has no text or media", async () => {
+    const user = userEvent.setup();
+    const onInsertBefore = vi.fn();
+    renderBeatCard({
+      beat: { beat_number: 4, narration_segment: "", visual_description: "" } as Beat,
+      onInsertBefore,
+    });
+
+    expect(screen.getByText("episode.beat.noNarration")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "episode.beat.insertBefore" }));
+
+    expect(onInsertBefore).toHaveBeenCalledWith(4);
+  });
   it("renders s9 planned duration and subshot count badge next to beat badge when present", () => {
     renderBeatCard({
       beat: {

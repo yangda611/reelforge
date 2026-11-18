@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,28 +42,14 @@ M05_EXPECTED_OPERATIONS = {
     ("POST", "/api/v1/projects/{project}/scenes/{name}/3gs/pano-ply/generate-async"),
     ("POST", "/api/v1/projects/{project}/scenes/{name}/pano/generate-async"),
     ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/scenes/plan"),
-    ("GET", "/api/v1/projects/{project}/sketch-settings"),
-    ("PATCH", "/api/v1/projects/{project}/sketch-settings"),
-    ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/sketch-regen-queue"),
-    ("PUT", "/api/v1/projects/{project}/episodes/{episode_num}/sketch-regen-queue"),
-    ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/sketch-image-usage"),
     ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/image-generation-guard"),
     (
         "POST",
         "/api/v1/projects/{project}/episodes/{episode_num}/image-generation-guard/verify-password",
     ),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/sketches/generate"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/render/plan"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/render/execute"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/beats/regenerate"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/sketches/regenerate"),
     (
         "GET",
         "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/pano-background/manifest",
-    ),
-    (
-        "GET",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch-candidates",
     ),
     ("GET", "/api/v1/projects/{project}/director-stage/palette"),
     (
@@ -105,45 +90,7 @@ M05_EXPECTED_OPERATIONS = {
     ),
     (
         "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/director-control-to-sketch",
-    ),
-    (
-        "GET",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/pose-editor",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/pose-editor",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/crop",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/sketches/generate-missing-manual",
-    ),
-    ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/grids"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/grids/rebuild-pool"),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/pool-select",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/upload",
-    ),
-    (
-        "POST",
         "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/render/upload",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/grids/{grid_index}/sketch-preview",
-    ),
-    (
-        "POST",
-        "/api/v1/projects/{project}/episodes/{episode_num}/verify/sketch-edit-execute/start",
     ),
 }
 
@@ -357,9 +304,6 @@ def m05_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(episodes, "resolve_project_scope", resolve_scope)
     monkeypatch.setattr(verification_routes, "resolve_project_scope", resolve_scope)
-    monkeypatch.setattr(verification_routes, "get_task_backend", lambda: task_backend)
-    monkeypatch.setattr(generation, "load_project_config", lambda *_: {})
-    monkeypatch.setattr(generation, "save_project_config", lambda *_, **__: None)
 
     async def build_character_map(*_args, **_kwargs):
         return {
@@ -425,9 +369,6 @@ def m05_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(scenes, "get_task_backend", lambda: task_backend)
         monkeypatch.setattr(generation, "get_task_backend", lambda: task_backend)
         monkeypatch.setattr(episodes, "get_task_backend", lambda: task_backend)
-        monkeypatch.setattr(
-            verification_routes, "get_task_backend", lambda: task_backend
-        )
 
         app = FastAPI()
         app.include_router(scenes.router, prefix="/api/v1")
@@ -519,28 +460,6 @@ def test_scene_pano_derives_source_from_server_asset_state(
     assert task_backend.calls[-1]["payload"]["step"] == expected_step
 
 
-def _seed_labels(project_dir: Path) -> None:
-    labels_dir = project_dir / "verify_reports" / "ep001"
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    row = {
-        "project_dir": str(project_dir),
-        "episode_num": 1,
-        "beat_number": 1,
-        "execution_mode": "polish",
-        "sketch_path": "sketches/ep001/beat_01.png",
-        "beat": {"beat_number": 1},
-        "sketch_colors": [],
-        "result": {
-            "decision": "revise",
-            "main_problem": "composition_weak",
-            "reasoning": "需要强化构图。",
-            "edit_instruction": "Tighten the courtyard composition.",
-            "confidence": 0.8,
-        },
-    }
-    (labels_dir / "labels.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n")
-
-
 def _seed_stage_files(project_dir: Path) -> None:
     from novelvideo.director_world import stage_manifest
     from novelvideo.utils.path_resolver import canonical_scene_master_path
@@ -584,8 +503,16 @@ def test_m05_openapi_exposes_expected_operations(m05_client_factory):
         if method.lower() in {"get", "post", "patch", "put", "delete"}
     }
 
-    assert len(M05_EXPECTED_OPERATIONS) == 60
+    assert len(M05_EXPECTED_OPERATIONS) == 38
     assert not M05_EXPECTED_OPERATIONS - actual
+    assert not {
+        path
+        for path in spec["paths"]
+        if "sketch" in path
+        or "/grids" in path
+        or "/pool-select" in path
+        or path.endswith(("/render/plan", "/render/execute", "/beats/regenerate"))
+    }
     assert (
         "/api/v1/projects/{project}/scenes/{name}/director-stage/world" in spec["paths"]
     )
@@ -595,8 +522,8 @@ def test_m05_openapi_exposes_expected_operations(m05_client_factory):
     )
 
 
-def test_m05_contract_requires_promoted_world_and_sketch_candidate_routes() -> None:
-    assert len(M05_EXPECTED_OPERATIONS) == 60
+def test_m05_contract_requires_promoted_world_routes() -> None:
+    assert len(M05_EXPECTED_OPERATIONS) == 38
     assert (
         "POST",
         "/api/v1/projects/{project}/scenes/{name}/director-stage/world",
@@ -606,8 +533,8 @@ def test_m05_contract_requires_promoted_world_and_sketch_candidate_routes() -> N
         "/api/v1/projects/{project}/scenes/{name}/director-stage/world/clear",
     ) in M05_EXPECTED_OPERATIONS
     assert (
-        "GET",
-        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch-candidates",
+        "POST",
+        "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/render/upload",
     ) in M05_EXPECTED_OPERATIONS
 
 
@@ -655,7 +582,6 @@ def test_scene_pano_generation_uses_dedicated_feature_task(m05_client_factory):
 def test_m05_l2_exercises_happy_path_route_contracts(m05_client_factory):
     client, _backend, project_dir, _store = m05_client_factory("inline")
     _seed_stage_files(project_dir)
-    _seed_labels(project_dir)
 
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/scenes"))
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/scenes/plate-preview"))
@@ -771,101 +697,18 @@ def test_m05_l2_exercises_happy_path_route_contracts(m05_client_factory):
         backend="inline",
         task_type="episode_scene_planner",
     )
-    _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/sketch-settings"))
-    _assert_ok(client.patch(f"/api/v1/projects/{_PROJECT}/sketch-settings", json={}))
-    queue_item = {
-        "id": "q1",
-        "modeKey": "1x1_2-3",
-        "modeLabel": "1x1",
-        "beatNumbers": [1],
-        "sceneIds": [_SCENE],
-        "createdAt": "2026-06-17T00:00:00Z",
-    }
-    _assert_ok(
-        client.put(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/sketch-regen-queue",
-            json={"items": [queue_item]},
-        )
-    )
-    _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/sketch-regen-queue"))
     _assert_ok(
         client.get(
             f"/api/v1/projects/{_PROJECT}/episodes/1/image-generation-guard",
-            params={"task_type": "sketch_grid", "scope": "grid_0"},
+            params={"task_type": "scene_reference_asset", "scope": "scene_0"},
         )
     )
-    _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/sketch-image-usage"))
     _assert_ok(
         client.post(
             f"/api/v1/projects/{_PROJECT}/episodes/1/image-generation-guard/verify-password",
             json={"password": ""},
         )
     )
-    _assert_task_shape(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/sketches/generate",
-            json={"grid_index": 0},
-        ).json(),
-        backend="inline",
-            task_type="sketch_grid_generation",
-    )
-    _assert_task_shape(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/sketches/regenerate",
-            json={"beat_indices": [1]},
-        ).json(),
-        backend="inline",
-        task_type="sketch_regen",
-    )
-    manual = client.post(
-        f"/api/v1/projects/{_PROJECT}/episodes/1/sketches/generate-missing-manual"
-    ).json()
-    assert manual["ok"] is True
-    assert manual["task_type"] == "sketch_regen"
-    _assert_task_shape(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/verify/sketch-edit-execute/start",
-            json={},
-        ).json(),
-        backend="inline",
-        task_type="sketch_edit_execute",
-    )
-
-    plan = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/plan",
-            json={"beat_indices": [1], "strategy": "naive", "aspect_mode": "9:16"},
-        )
-    )["data"]
-    assert {"plan", "plan_hash", "input_fingerprint"} <= set(plan)
-    executed = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute",
-            json={
-                "beat_indices": [1],
-                "strategy": "naive",
-                "aspect_mode": "9:16",
-                "plan": plan["plan"],
-                "plan_hash": plan["plan_hash"],
-                "input_fingerprint": plan["input_fingerprint"],
-            },
-        )
-    )["data"]
-    assert executed["task_type"] == "render_plan"
-    assert len(executed["task_ids"]) == 1
-    assert executed["task_ids"][0].startswith("task-inline-selected_regen-1x1_2-3__")
-    sketch = project_dir / "sketches" / "ep001" / "beat_01.png"
-    sketch.parent.mkdir(parents=True, exist_ok=True)
-    sketch.write_bytes(_png_bytes())
-    _assert_task_shape(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/regenerate",
-            json={"beat_indices": [1]},
-        ).json(),
-        backend="inline",
-        task_type="selected_regen",
-    )
-
     _assert_ok(
         client.get(
             f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/pano-background/manifest"
@@ -903,13 +746,6 @@ def test_m05_l2_exercises_happy_path_route_contracts(m05_client_factory):
             f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/director-control-frame"
         )
     )
-    _assert_task_shape(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/director-control-to-sketch"
-        ).json(),
-        backend="inline",
-        task_type="director_control_to_sketch",
-    )
     _assert_ok(
         client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/background-anchors")
     )
@@ -932,57 +768,14 @@ def test_m05_l2_exercises_happy_path_route_contracts(m05_client_factory):
         )
     )
 
-    _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/grids"))
-    _assert_ok(
-        client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/grids/rebuild-pool")
-    )
-    sketch_upload = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/sketch/upload",
-            files={"file": ("sketch.png", _png_bytes(), "image/png")},
-        )
-    )["data"]
     frame_upload = _assert_ok(
         client.post(
             f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/render/upload",
             files={"file": ("frame.png", _png_bytes(color=(90, 30, 60)), "image/png")},
         )
     )["data"]
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/pool-select",
-            json={"pool_id": sketch_upload["pool_id"], "force": True},
-        )
-    )
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/pool-select",
-            json={"pool_id": frame_upload["pool_id"]},
-        )
-    )
-    _assert_ok(
-        client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/sketch/pose-editor")
-    )
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/sketch/pose-editor",
-            json={"strokes": []},
-        )
-    )
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/sketch/crop",
-            json={"x": 0, "y": 0, "width": 1, "height": 1},
-        )
-    )
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/grids/0/sketch-preview",
-            json={"rows": 1, "cols": 1, "beat_numbers": [1]},
-        )
-    )
-
-    assert (project_dir / "sketches" / "ep001" / "beat_01.png").exists()
+    assert frame_upload["frame_url"].endswith("frames/ep001/beat_01.png")
+    assert "pool_id" not in frame_upload
     assert (project_dir / "frames" / "ep001" / "beat_01.png").exists()
     assert (
         project_dir
@@ -1070,96 +863,17 @@ def test_m05_scene_director_world_missing_scene_uses_ok_false_not_404(
         assert "not found" in payload["error"]
 
 
-def test_m05_sketch_candidates_is_viewer_and_empty_pool_is_ok(m05_client_factory):
-    client, _backend, _project_dir, store = m05_client_factory("inline")
-
-    response = client.get(
-        f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/sketch-candidates"
-    )
-
-    payload = _assert_ok(response)
-    assert payload["data"] == {
-        "episode": 1,
-        "beat": 1,
-        "current_sketch_url": "",
-        "candidate_count": 0,
-        "candidates": [],
-    }
-    assert ("generation", "viewer") in store.resolved_roles
-
-
-def test_m05_negative_render_execute_rejects_stale_fingerprint(m05_client_factory):
-    client, _backend, _project_dir, _store = m05_client_factory("inline")
-    plan = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/plan",
-            json={"beat_indices": [1], "strategy": "naive", "aspect_mode": "9:16"},
-        )
-    )["data"]
-
-    response = client.post(
-        f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute",
-        json={
-            "beat_indices": [1],
-            "strategy": "naive",
-            "aspect_mode": "9:16",
-            "plan": plan["plan"],
-            "plan_hash": plan["plan_hash"],
-            "input_fingerprint": "stale",
-        },
-    )
-
-    assert response.status_code == 409
-    payload = response.json()
-    assert payload["ok"] is False
-    assert payload["error"] == "input_stale"
-    assert {"new_plan", "new_plan_hash", "new_input_fingerprint"} <= set(
-        payload["data"]
-    )
-
-
 def test_m05_task_responses_are_ce_ee_isomorphic_without_celery_only_fields(
     m05_client_factory,
 ):
     for backend in ("inline", "celery"):
         client, task_backend, project_dir, _store = m05_client_factory(backend)
         _seed_stage_files(project_dir)
-        _seed_labels(project_dir)
-        sketch = project_dir / "sketches" / "ep001" / "beat_01.png"
-        sketch.parent.mkdir(parents=True, exist_ok=True)
-        sketch.write_bytes(_png_bytes())
 
         cases = [
             (
                 "episode_scene_planner",
                 client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/scenes/plan"),
-            ),
-            (
-                "selected_regen",
-                client.post(
-                    f"/api/v1/projects/{_PROJECT}/episodes/1/beats/regenerate",
-                    json={"beat_indices": [1]},
-                ),
-            ),
-            (
-                "sketch_grid_generation",
-                client.post(
-                    f"/api/v1/projects/{_PROJECT}/episodes/1/sketches/generate", json={}
-                ),
-            ),
-            (
-                "sketch_regen",
-                client.post(
-                    f"/api/v1/projects/{_PROJECT}/episodes/1/sketches/regenerate",
-                    json={"beat_indices": [1]},
-                ),
-            ),
-            (
-                "sketch_edit_execute",
-                client.post(
-                    f"/api/v1/projects/{_PROJECT}/episodes/1/verify/sketch-edit-execute/start",
-                    json={},
-                ),
             ),
         ]
 
@@ -1169,10 +883,6 @@ def test_m05_task_responses_are_ce_ee_isomorphic_without_celery_only_fields(
 
         assert [call["task_type"] for call in task_backend.calls] == [
             "episode_scene_planner",
-            "selected_regen",
-            "sketch_grid_generation",
-            "sketch_regen",
-            "sketch_edit_execute",
         ]
 
 
@@ -1182,9 +892,10 @@ def test_m05_acceptance_script_keeps_world_split_and_ee_assertions() -> None:
     assert "director-stage/world" in script
     assert "director-stage/world/clear" in script
     assert "CE OpenAPI 暴露 scene director-stage world/clear" in script
-    assert "OpenAPI 暴露 M05 §1.5 实测 60 个 method/path 操作" in script
+    assert "OpenAPI 暴露 M05 §1.5 实测 38 个 method/path 操作" in script
     assert "episode_scene_planner" in script
     assert (
         '"backend"] == ("inline" if os.environ["MODE"] == "ce" else "celery")' in script
     )
-    assert "selected_regen" in script
+    for removed in ("sketch", "render/plan", "render/execute", "grids", "pool-select"):
+        assert removed not in script.split("expected = {", 1)[1].split("}", 1)[0]

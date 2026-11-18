@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ClaymoreLab
 import { createLazyFileRoute, Navigate } from "@tanstack/react-router";
 
-// v3 redirect — see sketches.lazy.tsx for rationale.
+// v3 redirect — the per-stage video page was merged into /beats. Kept so legacy bookmarks keep working.
 function VideoRedirect() {
   const { project, episode } = Route.useParams();
   return (

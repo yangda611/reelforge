@@ -21,23 +21,6 @@ def is_manual_shot(beat: dict | object | None) -> bool:
     return bool(getattr(beat, "is_manual_shot", False))
 
 
-def is_manual_space_map_shot(beat: dict | object | None) -> bool:
-    if not is_manual_shot(beat):
-        return False
-    visual = str(_get_value(beat, "visual_description", "") or "").strip().lower()
-    return visual.startswith("[space_map")
-
-
-def storyboard_beats_for_manual_sketches(beats: Sequence[dict]) -> list[dict]:
-    """Return beats eligible for manual-shot sketch gap scanning.
-
-    Manual space-map entries are planning artifacts in the NiceGUI flow; they
-    must not dispatch sketch regeneration when React asks for missing manual
-    shot sketches.
-    """
-    return [beat for beat in beats if not is_manual_space_map_shot(beat)]
-
-
 def beat_requires_audio(beat: dict | object | None) -> bool:
     if beat is None:
         return False
@@ -91,36 +74,6 @@ def sort_beats_for_display(beats: Iterable[dict]) -> list[dict]:
         list(beats),
         key=lambda beat: (beat_order_value(beat), int(beat.get("beat_number", 0) or 0)),
     )
-
-
-def pick_beats_by_number(
-    beats: Iterable[dict],
-    beat_numbers: Iterable[int],
-) -> list[dict]:
-    """Return beat dicts in the exact requested beat-number order."""
-    beats_by_number: dict[int, dict] = {}
-    for beat in beats:
-        try:
-            beat_number = int(beat.get("beat_number", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        if beat_number > 0 and beat_number not in beats_by_number:
-            beats_by_number[beat_number] = beat
-
-    picked: list[dict] = []
-    seen: set[int] = set()
-    for beat_number in beat_numbers:
-        try:
-            normalized = int(beat_number)
-        except (TypeError, ValueError):
-            continue
-        if normalized in seen:
-            continue
-        beat = beats_by_number.get(normalized)
-        if beat is not None:
-            picked.append(beat)
-            seen.add(normalized)
-    return picked
 
 
 def normalize_shot_orders(beats: Sequence[dict]) -> list[tuple[int, int]]:
@@ -238,55 +191,6 @@ def resolve_target_video_duration(
         except (TypeError, ValueError):
             pass
     return float(default)
-
-
-def choose_manual_sketch_mode_key(count: int) -> str:
-    from novelvideo.generators.nanobanana_grid import sketch_scene_grid_split
-
-    beats = [{"beat_number": idx} for idx in range(1, max(1, count) + 1)]
-    return sketch_scene_grid_split(beats)[0]["mode_key"]
-
-
-def _scene_id_of(beat: dict) -> str:
-    scene_ref = beat.get("scene_ref")
-    if isinstance(scene_ref, dict):
-        return str(scene_ref.get("scene_id") or "").strip()
-    return ""
-
-
-def missing_manual_shot_segments(
-    beats: Sequence[dict],
-    sketches_dir: str | Path,
-) -> list[list[int]]:
-    sketches_path = Path(sketches_dir)
-    ordered = sort_beats_for_display(beats)
-    segments: list[list[int]] = []
-    current: list[int] = []
-    current_scene_id = ""
-
-    for beat in ordered:
-        beat_num = int(beat.get("beat_number", 0) or 0)
-        scene_id = _scene_id_of(beat)
-        missing_manual = (
-            beat_num > 0
-            and is_manual_shot(beat)
-            and not (sketches_path / f"beat_{beat_num:02d}.png").exists()
-        )
-        if missing_manual:
-            if current and scene_id != current_scene_id:
-                segments.append(current)
-                current = []
-            current.append(beat_num)
-            current_scene_id = scene_id
-            continue
-        if current:
-            segments.append(current)
-            current = []
-            current_scene_id = ""
-
-    if current:
-        segments.append(current)
-    return segments
 
 
 def split_video_generation_prereqs(
@@ -521,28 +425,9 @@ def _delete_manual_shot_artifacts(
         return
     project_dir = Path(project_dir_value)
     ep_token = f"ep{episode_number:03d}"
-    candidates = [
-        project_dir / "sketches" / ep_token / f"beat_{beat_number:02d}.png",
-        project_dir / "frames" / ep_token / f"beat_{beat_number:02d}.png",
-        project_dir / "renders" / ep_token / f"beat_{beat_number:02d}.png",
-    ]
-    for path in candidates:
-        try:
-            if path.exists() and path.is_file():
-                path.unlink()
-        except OSError:
-            pass
-
-    # Candidate pool cells use timestamped filenames; remove only this manual beat's cells.
-    for root in [
-        project_dir / "grids" / ep_token / "sketch" / "cells",
-        project_dir / "grids" / ep_token / "render" / "cells",
-    ]:
-        if not root.exists():
-            continue
-        for path in root.glob(f"beat_{beat_number:02d}_*"):
-            try:
-                if path.is_file():
-                    path.unlink()
-            except OSError:
-                pass
+    frame_path = project_dir / "frames" / ep_token / f"beat_{beat_number:02d}.png"
+    try:
+        if frame_path.exists() and frame_path.is_file():
+            frame_path.unlink()
+    except OSError:
+        pass

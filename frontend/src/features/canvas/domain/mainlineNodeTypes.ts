@@ -11,10 +11,10 @@
  *
  * Naming reminder — do not confuse the two layers:
  *   - `PushTargetKind` (this file's domain, 19 values): slot 落点 kind.
- *     e.g. "sketch" / "frame" / "identity" / "scene_master" — these are the
+ *     e.g. "frame" / "identity" / "scene_master" — these are the
  *     short verbs the Push route writes against.
  *   - `PresetRef.role` (preset emit domain, ~22 values): asset discovery role.
- *     e.g. "current_sketch" / "current_frame" / "character_identity" — used
+ *     e.g. "current_frame" / "character_identity" — used
  *     when preset-emitting nodes; not for Push routing.
  *
  * Node `data.slot_target` carries a `SlotTarget` (= `PushTarget`) shape, NOT
@@ -68,7 +68,6 @@ export function coerceSlotTarget(value: unknown): SlotTarget | null {
 
 const SLOT_TARGET_KINDS: ReadonlySet<PushTargetKind> = new Set<PushTargetKind>([
   "frame",
-  "sketch",
   "director_render",
   "selected_background",
   "identity",
@@ -101,7 +100,6 @@ export function slotTargetsEqual(a: SlotTarget, b: SlotTarget): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "frame":
-    case "sketch":
     case "director_render":
     case "selected_background":
     case "video":

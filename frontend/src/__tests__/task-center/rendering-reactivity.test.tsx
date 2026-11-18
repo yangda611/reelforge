@@ -47,7 +47,7 @@ beforeAll(async () => {
               relative: { justNow: "just now" },
             },
             tasks: {
-              types: { script_writer: "Script writer", sketch_regen: "Sketch regen" },
+              types: { script_writer: "Script writer", single_video: "Single video" },
             },
           },
         },

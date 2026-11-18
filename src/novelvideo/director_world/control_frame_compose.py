@@ -88,8 +88,7 @@ def compose_combined(
     create_control_frame_layers(target_dir)
 
     # Mirror env_only → selected_background.png. selected_background.png 是本
-    # beat 对外唯一"当前背景 slot",downstream(sketch_from_context / frame 上色 /
-    # freezone canvas 投影)统一从这里读。
+    # beat 对外唯一"当前背景 slot",downstream(freezone canvas 投影)统一从这里读。
     # env_only.png 继续保留为 compose pipeline 的内部输入 artifact
     # (control_frame_layers 等仍直接读它),但用户/freezone 视角的"当前背景"
     # 就是这个 mirror 出来的 selected_background.png。这样 cropper 路径

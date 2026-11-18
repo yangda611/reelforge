@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from novelvideo.api.routes.generation import _color_assignment_requires_full_sketch_clean
 from novelvideo.generators.episode_optimizer import (
     BRIDGMAN_CHARACTER_PALETTE,
     EpisodeOptimizer,
     PROP_MARKER_PALETTE,
 )
-from novelvideo.generators.nanobanana_grid import _global_prop_marker_colors
 
 
 def _rgb_distance(a: str, b: str) -> float:
@@ -55,73 +53,3 @@ def test_assign_sketch_colors_preserves_existing_when_identity_set_changes():
     assert colors["Hero_Removed"] == "#00FFFF FLUORESCENT CYAN"
     assert "Hero_B" in colors
     assert colors["Hero_B"] not in set(existing.values())
-
-
-def test_prop_marker_colors_preserve_existing_when_prop_set_changes():
-    beats = [
-        {"visual_description": "男人抱起[[新道具]]，旁边没有旧道具。"},
-    ]
-    prop_menu = [
-        {
-            "prop_id": "旧道具",
-            "is_global_asset": True,
-            "marker_color": "#0D47A1 ROYAL BLUE",
-        },
-        {"prop_id": "新道具", "is_global_asset": True},
-    ]
-
-    colors = _global_prop_marker_colors(
-        beats,
-        prop_menu=prop_menu,
-        assign_missing=True,
-    )
-
-    assert colors["新道具"] != "#0D47A1 ROYAL BLUE"
-
-    beats_with_old = [{"visual_description": "[[旧道具]] 和 [[新道具]] 同时出现。"}]
-    colors_with_old = _global_prop_marker_colors(
-        beats_with_old,
-        prop_menu=prop_menu,
-        assign_missing=True,
-    )
-    assert colors_with_old["旧道具"] == "#0D47A1 ROYAL BLUE"
-
-
-def test_incremental_color_assignment_does_not_force_full_sketch_clean():
-    assert (
-        _color_assignment_requires_full_sketch_clean(
-            {"Hero_A": "#FF00FF FLUORESCENT MAGENTA"},
-            {
-                "Hero_A": "#FF00FF FLUORESCENT MAGENTA",
-                "Hero_B": "#00FFFF FLUORESCENT CYAN",
-            },
-        )
-        is False
-    )
-
-
-def test_first_prop_after_existing_identity_does_not_force_full_sketch_clean():
-    previous = {"identity:Hero_A": "#FF00FF FLUORESCENT MAGENTA"}
-    current = {
-        "identity:Hero_A": "#FF00FF FLUORESCENT MAGENTA",
-        "prop:账单": "#0D47A1 ROYAL BLUE",
-    }
-
-    assert _color_assignment_requires_full_sketch_clean(previous, current) is False
-
-
-def test_initial_or_changed_color_assignment_forces_full_sketch_clean():
-    assert (
-        _color_assignment_requires_full_sketch_clean(
-            {},
-            {"Hero_A": "#FF00FF FLUORESCENT MAGENTA"},
-        )
-        is True
-    )
-    assert (
-        _color_assignment_requires_full_sketch_clean(
-            {"Hero_A": "#FF00FF FLUORESCENT MAGENTA"},
-            {"Hero_A": "#00FFFF FLUORESCENT CYAN"},
-        )
-        is True
-    )

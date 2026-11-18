@@ -89,9 +89,9 @@ vi.mock("react-i18next", () => ({
 vi.mock("@/api/skills", () => ({
   getSkillRegistry: vi.fn().mockResolvedValue([
     {
-      id: "freezone.sketch_from_context",
+      id: "freezone.set_selected_background",
       provider: "freezone_mainline",
-      display_name: "Sketch From Context",
+      display_name: "Set Selected Background",
       description: "",
       inputs: [
         {
@@ -118,9 +118,9 @@ vi.mock("@/api/skills", () => ({
       outputs: [],
     },
     {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -252,7 +252,7 @@ describe("Canvas manual skill connections", () => {
           id: "skill",
           type: CANVAS_NODE_TYPES.skill,
           position: { x: 400, y: 0 },
-          data: { skill_id: "freezone.sketch_from_context" },
+          data: { skill_id: "freezone.set_selected_background" },
         },
       ],
       [],
@@ -320,7 +320,7 @@ describe("Canvas manual skill connections", () => {
           id: "skill",
           type: CANVAS_NODE_TYPES.skill,
           position: { x: 400, y: 0 },
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
       [

@@ -91,7 +91,7 @@ def test_backend_authored_display_name_stays_localizable():
 
     task = TaskState(
         task_id="task-1",
-        task_type="sketch_regen",
+        task_type="single_video",
         project_id="proj_123",
         episode=1,
         beat_num=3,
@@ -347,7 +347,7 @@ async def test_project_task_stream_includes_logs(tmp_path, monkeypatch):
         monkeypatch,
         task=TaskState(
             task_id="t1",
-            task_type="sketch_regen",
+            task_type="single_video",
             username="admin",
             project="demo",
             project_id=ctx.project_id,
@@ -364,7 +364,7 @@ async def test_project_task_stream_includes_logs(tmp_path, monkeypatch):
 
     resp = await stream_project_task(
         project=ctx.project_id,
-        task_type="sketch_regen",
+        task_type="single_video",
         episode=1,
         request=None,  # type: ignore[arg-type]
         scope="scope-a",

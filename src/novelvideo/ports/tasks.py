@@ -17,7 +17,7 @@ class QueuedTask:
 def _selected_beat_numbers(payload: dict[str, Any]) -> list[int]:
     """把入队 payload 里的选中 beat 号挖出来，去重保序。
 
-    选中 Beats 再生（``sketch_regen`` / ``selected_regen``）把 beat 列表放在
+    选中 Beats 的任务把 beat 列表放在
     ``payload["config"]["selected_beat_numbers"]``，个别调用方放在顶层，两处都认。
     """
     for container in (payload, payload.get("config")):
@@ -75,9 +75,8 @@ def display_metadata_for_task(task_type: str, payload: dict[str, Any] | None) ->
             if value:
                 metadata[key] = value
 
-    # 选中 Beats 再生的任务行 beat_num 是 None，scope 又是 mode_key + beats 的
-    # sha1，前端反推不出来。不留下这份名单的话，每个 beat 的草图 / 渲染图面板都会
-    # 认领同一条任务，一个 beat 在跑、整集都在转圈。
+    # 选中 Beats 的任务行 beat_num 是 None，scope 又是 mode_key + beats 的
+    # sha1，前端反推不出来。不留下这份名单的话，每个 beat 的面板都会认领同一条任务。
     beat_numbers = _selected_beat_numbers(payload)
     if beat_numbers:
         metadata["beat_numbers"] = beat_numbers

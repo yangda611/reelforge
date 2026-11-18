@@ -1,7 +1,7 @@
 """视频池索引管理模块。
 
 管理所有生成的视频版本，提供统一的索引和检索功能。
-参考 pool_indexer.py 的模式，但无 grid/cell 逻辑，大幅简化。
+视频池索引：按 beat 绑定视频条目，无 grid/cell 逻辑。
 """
 
 import json

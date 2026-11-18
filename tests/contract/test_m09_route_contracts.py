@@ -25,12 +25,8 @@ _PROP = "umbrella"
 
 _M09_OPERATIONS = {
     ("GET", "/api/v1/projects/{project}/video-backends"),
-    ("GET", "/api/v1/projects/{project}/render-settings"),
-    ("PATCH", "/api/v1/projects/{project}/render-settings"),
     ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/videos/compose"),
     ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/final"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/render/plan"),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/render/execute"),
     ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/render/upload"),
     ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/export/srt"),
     ("GET", "/api/v1/projects/{project}/episodes/{episode_num}/export/video"),
@@ -55,11 +51,6 @@ _M09_OPERATIONS = {
         "POST",
         "/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/seedance2/assets/audio-trim",
     ),
-    (
-        "GET",
-        "/api/v1/projects/{project}/episodes/{episode_num}/optimize/video-global/billing-quote",
-    ),
-    ("POST", "/api/v1/projects/{project}/episodes/{episode_num}/optimize/video-global"),
     ("GET", "/api/v1/projects/{project}/assets/{asset_type}/{asset_id}/references"),
     ("GET", "/api/v1/projects/{project}/media/{file_path}"),
 }
@@ -123,10 +114,6 @@ class _M09Store:
     def get_all_characters(self):
         return list(self.characters)
 
-    def get_sketch_colors(self, episode: int):
-        assert episode == 1
-        return {}
-
     def get_episode(self, episode: int):
         assert episode == 1
         return None
@@ -186,33 +173,6 @@ class _FakeTaskBackend:
         )
 
 
-class _FakeCreditQuote:
-    async def generation_credit_quote(
-        self,
-        *,
-        kind,
-        model,
-        params,
-        quantity,
-        product_surface,
-        user_id="",
-    ):
-        assert kind == "feature"
-        assert model == "mainline.beat_video_prompt"
-        assert product_surface == "mainline"
-        assert user_id == "local"
-        assert params == {
-            "pricing_metrics": {"call_count": quantity, "item_count": quantity}
-        }
-        return SimpleNamespace(
-            total_cost=6 * quantity,
-            display=str(6 * quantity),
-            unit="call",
-            unit_cost=6,
-            quantity=quantity,
-        )
-
-
 @pytest.fixture()
 def m09_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from novelvideo.api import auth as api_auth
@@ -236,9 +196,6 @@ def m09_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     for rel in (
         "frames/ep001/beat_01.png",
         "frames/ep001/beat_02.png",
-        "sketches/ep001/beat_01.png",
-        "sketches/ep001/beat_02.png",
-        "grids/ep001/grid_01.png",
     ):
         target = project_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -335,9 +292,6 @@ def m09_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(generation, "make_sqlite_store", make_store)
     monkeypatch.setattr(generation, "_build_character_map", character_map)
     monkeypatch.setattr(generation, "_api_audio_duration_seconds", audio_duration)
-    monkeypatch.setattr(generation, "load_project_config", lambda *_: {})
-    monkeypatch.setattr(generation, "save_project_config", lambda *_, **__: None)
-    monkeypatch.setattr(generation, "get_credit_quote", lambda: _FakeCreditQuote())
     monkeypatch.setattr(
         generation,
         "make_static_url_for_context",
@@ -413,7 +367,7 @@ def _assert_task_payload(payload: dict, *, backend: str, task_type: str):
     assert "celery_id" not in payload
 
 
-def test_m09_openapi_exposes_all_23_owned_operations(m09_client_factory):
+def test_m09_openapi_exposes_all_17_owned_operations(m09_client_factory):
     client, _task_backend, _project_dir, _pool_id = m09_client_factory("inline")
     spec = client.get("/openapi.json").json()
     actual = {
@@ -423,51 +377,28 @@ def test_m09_openapi_exposes_all_23_owned_operations(m09_client_factory):
         if method.lower() in {"get", "post", "patch", "delete"}
     }
 
-    assert len(_M09_OPERATIONS) == 23
+    assert len(_M09_OPERATIONS) == 17
     assert not sorted(_M09_OPERATIONS - actual)
+    removed_markers = ("render-settings", "render/plan", "render/execute", "optimize/video-global")
+    assert not [path for _method, path in actual if any(m in path for m in removed_markers)]
 
 
-def test_m09_l2_exercises_all_23_endpoint_contracts(m09_client_factory):
+def test_m09_l2_exercises_all_17_endpoint_contracts(m09_client_factory):
     client, _task_backend, _project_dir, pool_id = m09_client_factory("inline")
     png = _png_bytes()
 
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/video-backends"))
-    _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/render-settings"))
-    _assert_ok(
-        client.patch(
-            f"/api/v1/projects/{_PROJECT}/render-settings",
-            json={"render_image_selection": "newapi_nanobanana2", "sketch_aspect_padding": True},
-        )
-    )
     _assert_ok(client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/videos/compose", json={}))
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/final"))
 
-    plan_payload = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/plan",
-            json={"beat_indices": [1], "strategy": "naive", "aspect_mode": "9:16"},
-        )
-    )
-    plan_data = plan_payload["data"]
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute",
-            json={
-                "plan": plan_data["plan"],
-                "plan_hash": plan_data["plan_hash"],
-                "input_fingerprint": plan_data["input_fingerprint"],
-                "strategy": "naive",
-                "aspect_mode": "9:16",
-                "beat_indices": [1],
-            },
-        )
-    )
-    _assert_ok(
+    uploaded = _assert_ok(
         client.post(
             f"/api/v1/projects/{_PROJECT}/episodes/1/beats/1/render/upload",
             files={"file": ("frame.png", png, "image/png")},
         )
     )
+    assert uploaded["data"]["frame_url"].endswith("frames/ep001/beat_01.png")
+    assert "pool_id" not in uploaded["data"]
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/export/srt"))
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/episodes/1/export/video"))
     _assert_ok(client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/export/zip"))
@@ -515,12 +446,6 @@ def test_m09_l2_exercises_all_23_endpoint_contracts(m09_client_factory):
             },
         )
     )
-    _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/optimize/video-global",
-            json={"language": "zh"},
-        )
-    )
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/assets/identity/{_IDENTITY}/references"))
     _assert_ok(client.get(f"/api/v1/projects/{_PROJECT}/media/media/existing.mp4"))
 
@@ -534,107 +459,10 @@ def test_m09_task_backend_responses_are_ce_ee_isomorphic(m09_client_factory, bac
     )
     _assert_task_payload(single_video, backend=backend, task_type="single_video")
 
-    plan_data = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/plan",
-            json={"beat_indices": [1], "strategy": "naive", "aspect_mode": "9:16"},
-        )
-    )["data"]
-    execute_payload = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute",
-            json={
-                "plan": plan_data["plan"],
-                "plan_hash": plan_data["plan_hash"],
-                "input_fingerprint": plan_data["input_fingerprint"],
-                "strategy": "naive",
-                "aspect_mode": "9:16",
-                "beat_indices": [1],
-            },
-        )
-    )
-    assert execute_payload["data"]["task_ids"]
-    selected = [item for item in task_backend.queued if item["task_type"] == "selected_regen"]
-    assert selected
-    for queued in selected:
-        assert queued["task_id"]
-        assert queued["backend"] == backend
-        assert "queue" in queued
-        assert "celery_id" not in queued
-
     compose = _assert_ok(
         client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/videos/compose", json={})
     )
     _assert_task_payload(compose, backend=backend, task_type="compose_episode")
-
-
-@pytest.mark.parametrize("backend", ["inline", "celery"])
-def test_global_video_prompt_batch_bills_existing_sketches(
-    m09_client_factory,
-    backend: str,
-):
-    client, task_backend, _project_dir, _pool_id = m09_client_factory(backend)
-
-    quote = _assert_ok(
-        client.get(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/optimize/video-global/billing-quote"
-        )
-    )
-    assert quote["data"]["beat_numbers"] == [1, 2]
-    assert quote["data"]["quantity"] == 2
-    assert quote["data"]["unit_cost"] == 6
-    assert quote["data"]["cost"] == 12
-    assert quote["data"]["display"] == "12"
-
-    response = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/optimize/video-global",
-            json={"language": "zh"},
-        )
-    )
-
-    _assert_task_payload(response, backend=backend, task_type="global_optimize_video")
-    call = next(
-        call for call in reversed(task_backend.calls) if call["task_type"] == "global_optimize_video"
-    )
-    assert call["payload"]["billing"]["items"] == 2
-    assert call["payload"]["billing"]["beat_numbers"] == [1, 2]
-    assert call["payload"]["billing"]["pricing_metrics"] == {
-        "call_count": 2,
-        "item_count": 2,
-    }
-    assert call["payload"]["beat_numbers"] == [1, 2]
-    assert call["payload"]["language"] == "en"
-
-
-def test_m09_render_execute_rejects_stale_fingerprint_and_plan_hash(m09_client_factory):
-    client, _task_backend, _project_dir, _pool_id = m09_client_factory("inline")
-    plan_data = _assert_ok(
-        client.post(
-            f"/api/v1/projects/{_PROJECT}/episodes/1/render/plan",
-            json={"beat_indices": [1], "strategy": "naive", "aspect_mode": "9:16"},
-        )
-    )["data"]
-    body = {
-        "plan": plan_data["plan"],
-        "plan_hash": plan_data["plan_hash"],
-        "input_fingerprint": "stale-fingerprint",
-        "strategy": "naive",
-        "aspect_mode": "9:16",
-        "beat_indices": [1],
-    }
-
-    response = client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute", json=body)
-
-    assert response.status_code == 409
-    assert response.json()["error"] == "input_stale"
-
-    body["input_fingerprint"] = plan_data["input_fingerprint"]
-    body["plan_hash"] = "stale-plan"
-    response = client.post(f"/api/v1/projects/{_PROJECT}/episodes/1/render/execute", json=body)
-
-    assert response.status_code == 409
-    assert response.json()["error"] == "plan_stale"
 
 
 def test_m09_media_rejects_traversal_reports_missing_and_serves_existing(m09_client_factory):

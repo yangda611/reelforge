@@ -41,7 +41,6 @@ from novelvideo.freezone.skill_registry import (
     get_skill,
     list_skills,
 )
-from novelvideo.models import NO_CHARACTER_MARKER
 from novelvideo.project_context import ProjectContext
 from novelvideo.shared.billing_errors import (
     BillingRuleNotConfiguredError,
@@ -50,201 +49,6 @@ from novelvideo.shared.billing_errors import (
 from novelvideo.stage_asset_tasks import resolve_scene_360_image_model
 from novelvideo.task_backend.limits import ProjectUserTaskLimitExceeded
 from novelvideo.task_state import get_task_manager
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "entry", ["frame", "standalone_frame", "sketch", "beat_sketch", "director"]
-)
-@pytest.mark.parametrize(
-    "selection,model",
-    [
-        ("newapi_gpt_image2", "LingShan-G2"),
-        ("newapi_nanobanana2", "LingShan-NB-2"),
-    ],
-)
-@pytest.mark.parametrize("quality", ["low", "medium", "high"])
-@pytest.mark.parametrize("aspect", ["2:3", "16:9"])
-async def test_mainline_canvas_enqueue_carries_effective_feature_price(
-    tmp_path,
-    monkeypatch,
-    entry,
-    selection,
-    model,
-    quality,
-    aspect,
-):
-    from novelvideo import config as image_config, project_config
-    from novelvideo.ports.local.projection import NoOpTaskProjection
-    from novelvideo.ports.registry import register_port
-
-    register_port("task_projection", NoOpTaskProjection())
-    monkeypatch.setattr(
-        project_config,
-        "load_project_config",
-        lambda *_: {
-            "render_image_selection": selection,
-            "sketch_image_selection": selection,
-        },
-    )
-    monkeypatch.setattr(
-        project_config,
-        "load_project_config_file",
-        lambda *_: {
-            "sketch_image_selection": selection,
-        },
-    )
-    monkeypatch.setattr(image_config, "OPENAI_SKETCH_IMAGE_QUALITY", quality)
-    monkeypatch.setenv("DIRECTOR_CONTROL_SKETCH_IMAGE_QUALITY", quality)
-    monkeypatch.delenv("DIRECTOR_CONTROL_SKETCH_IMAGE_SELECTION", raising=False)
-    # This legacy setting is not a generate_grid override: mode_key wins.
-    monkeypatch.setenv("DIRECTOR_CONTROL_SKETCH_IMAGE_SIZE", "4K")
-    for key, name in [
-        ("newapi_gpt_image2", "LingShan-G2"),
-        ("newapi_nanobanana2", "LingShan-NB-2"),
-    ]:
-        monkeypatch.setitem(
-            image_config.IMAGE_GENERATION_SELECTIONS,
-            key,
-            {
-                "provider": "newapi",
-                "model": name,
-                "label": name,
-            },
-        )
-    ctx = _project_ctx(tmp_path)
-    source = ctx.output_dir / "freezone" / "source.png"
-    _write_image(source, size=(160, 90) if aspect == "16:9" else (80, 120))
-    url = "/api/v1/projects/proj_freezone/media/freezone/source.png"
-    captured = {}
-
-    async def store(_ctx):
-        return _FakeContextBeatStore()
-
-    async def enqueue(_ctx, **kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="billing-test"),
-            backend="celery",
-            queue="test",
-        )
-
-    monkeypatch.setattr(freezone_routes, "make_sqlite_store_for_context", store)
-    monkeypatch.setattr(
-        freezone_routes,
-        "get_task_backend",
-        lambda: SimpleNamespace(enqueue_project_task=enqueue),
-    )
-    common = dict(
-        ctx=ctx, username="admin", project_name="demo", project_dir=ctx.output_dir
-    )
-    if entry == "frame":
-        await freezone_routes._start_or_enqueue_mainline_frame_from_context_job(
-            **common,
-            episode=1,
-            beat=8,
-            beat_payload=None,
-            sketch_url=url,
-            reference_urls=[],
-            quality=quality,
-        )
-    elif entry == "standalone_frame":
-        await freezone_routes._start_or_enqueue_standalone_frame_from_context_job(
-            **common,
-            beat_input=freezone_routes.ResolvedSkillInput(
-                **_standalone_skill_beat_input()
-            ),
-            sketch_url=url,
-            reference_urls=[],
-            quality=quality,
-        )
-    elif entry == "sketch":
-        await freezone_routes._start_or_enqueue_mainline_sketch_from_context_job(
-            **common,
-            episode=1,
-            beat=8,
-            beat_payload=None,
-            background_url=url,
-            aspect_ratio=aspect,
-        )
-    elif entry == "beat_sketch":
-        await freezone_routes._start_or_enqueue_mainline_beat_sketch_task(
-            **common,
-            episode=1,
-            beat=8,
-            canvas_id=None,
-            node_id=None,
-        )
-    else:
-        await freezone_routes._start_or_enqueue_mainline_director_control_sketch_job(
-            ctx=ctx,
-            project_dir=ctx.output_dir,
-            episode=1,
-            beat=8,
-            director_combined_url=url,
-            aspect_ratio=aspect,
-            canvas_id=None,
-            node_id=None,
-        )
-    feature = (
-        "render_regen"
-        if "frame" in entry
-        else "director_control_to_sketch" if entry == "director" else "sketch_regen"
-    )
-    params = {"size": "1K"}
-    if selection == "newapi_gpt_image2":
-        params["quality"] = quality
-    assert captured["payload"]["billing"] == {
-        "feature_key": f"mainline.{feature}",
-        "pricing_kind": "image",
-        "pricing_model": model,
-        "pricing_params": params,
-    }
-    if entry != "director":
-        assert captured["payload"]["config"]["image_generation_selection"] == selection
-
-
-def test_director_canvas_billing_uses_projection_and_director_override(monkeypatch):
-    from novelvideo import project_config
-
-    def no_local_read(*_):
-        raise AssertionError("projected director task must use its projected model")
-
-    monkeypatch.setattr(project_config, "load_project_config_file", no_local_read)
-    monkeypatch.delenv("DIRECTOR_CONTROL_SKETCH_IMAGE_SELECTION", raising=False)
-    projection = {
-        "projection": {
-            "projection_version": 1,
-            "task_type": "mainline_director_control_sketch",
-            "fields": {
-                "sketch_image_selection": "newapi_nanobanana2",
-                "beats": [],
-                "characters": [],
-                "sketch_colors": {},
-                "visual_style": "",
-            },
-        }
-    }
-    args = dict(
-        username="admin",
-        project_name="demo",
-        mode_key="1x1_16-9_sketch",
-        projection_payload=projection,
-    )
-    billing = freezone_routes._director_sketch_task_billing(**args)
-    assert (
-        billing["pricing_model"]
-        == freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_nanobanana2"]["model"]
-    )
-    assert billing["pricing_params"] == {"size": "1K"}
-    monkeypatch.setenv("DIRECTOR_CONTROL_SKETCH_IMAGE_SELECTION", "newapi_gpt_image2")
-    monkeypatch.setenv("DIRECTOR_CONTROL_SKETCH_IMAGE_QUALITY", "high")
-    billing = freezone_routes._director_sketch_task_billing(**args)
-    assert (
-        billing["pricing_model"]
-        == freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_gpt_image2"]["model"]
-    )
-    assert billing["pricing_params"] == {"size": "1K", "quality": "high"}
 
 
 def _project_ctx(tmp_path: Path) -> ProjectContext:
@@ -2278,159 +2082,6 @@ async def test_put_canvas_backs_up_previous_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_put_canvas_prunes_stale_frame_identity_edges_from_beat_context(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    state_dir = _canvas_state_dir(tmp_path)
-    canvas_file = state_dir / "freezone" / "canvases" / "beat_canvas.json"
-    canvas_file.parent.mkdir(parents=True)
-    canvas_file.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "canvas_id": "beat_canvas",
-                "project_id": "proj_freezone",
-                "canvas_scope": "beat",
-                "revision": 3,
-                "nodes": [],
-                "edges": [],
-                "metadata": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-    nodes = [
-        {
-            "id": "context_beat",
-            "type": "beatContextNode",
-            "data": {
-                "beat_edit_fields": {
-                    "detected_identities": ["女鬼_白衣时期", "秋菊_中年时期"],
-                    "detected_props": ["小衣服"],
-                },
-            },
-        },
-        {
-            "id": "skill_frame_from_context",
-            "type": "skillNode",
-            "data": {"skill_id": "freezone.frame_from_context"},
-        },
-        {
-            "id": "ref_kept_identity_1",
-            "type": "imageGenNode",
-            "data": {
-                "__freezone_source": {
-                    "kind": "identity",
-                    "role": "character_identity",
-                    "meta": {"identity_id": "女鬼_白衣时期"},
-                }
-            },
-        },
-        {
-            "id": "ref_kept_identity_2",
-            "type": "imageGenNode",
-            "data": {
-                "__freezone_source": {
-                    "kind": "identity",
-                    "role": "character_identity",
-                    "meta": {"identity_id": "秋菊_中年时期"},
-                }
-            },
-        },
-        {"id": "ref_removed_identity_1", "type": "imageGenNode", "data": {}},
-        {"id": "ref_removed_identity_2", "type": "imageGenNode", "data": {}},
-        {"id": "ref_kept_prop", "type": "imageGenNode", "data": {}},
-        {"id": "ref_removed_prop", "type": "imageGenNode", "data": {}},
-    ]
-    edges = [
-        {
-            "id": "edge_context",
-            "source": "context_beat",
-            "target": "skill_frame_from_context",
-            "data": {"edgeKind": "role_binding", "role": "beat_context"},
-        },
-        {
-            "id": "edge_identity_keep_1",
-            "source": "ref_kept_identity_1",
-            "target": "skill_frame_from_context",
-            "targetHandle": "identity:女鬼_白衣时期",
-            "data": {
-                "edgeKind": "role_binding",
-                "role": "identity",
-                "reference_target": {"kind": "identity", "identity_id": "女鬼_白衣时期"},
-            },
-        },
-        {
-            "id": "edge_identity_remove_1",
-            "source": "ref_removed_identity_1",
-            "target": "skill_frame_from_context",
-            "targetHandle": "identity:明珠_青年时期",
-            "data": {
-                "edgeKind": "role_binding",
-                "role": "identity",
-                "reference_target": {"kind": "identity", "identity_id": "明珠_青年时期"},
-            },
-        },
-        {
-            "id": "edge_identity_remove_2",
-            "source": "ref_removed_identity_2",
-            "target": "skill_frame_from_context",
-            "targetHandle": "identity:春柳_青年时期",
-            "data": {
-                "edgeKind": "role_binding",
-                "role": "identity",
-                "reference_target": {"kind": "identity", "identity_id": "春柳_青年时期"},
-            },
-        },
-        {
-            "id": "edge_prop_keep",
-            "source": "ref_kept_prop",
-            "target": "skill_frame_from_context",
-            "targetHandle": "prop:小衣服",
-            "data": {
-                "edgeKind": "role_binding",
-                "role": "prop",
-                "reference_target": {"kind": "prop", "prop_id": "小衣服"},
-            },
-        },
-        {
-            "id": "edge_prop_remove",
-            "source": "ref_removed_prop",
-            "target": "skill_frame_from_context",
-            "targetHandle": "prop:账本",
-            "data": {
-                "edgeKind": "role_binding",
-                "role": "prop",
-                "reference_target": {"kind": "prop", "prop_id": "账本"},
-            },
-        },
-    ]
-
-    await freezone_routes.put_canvas(
-        project="proj_freezone",
-        canvas_id="beat_canvas",
-        body=CanvasPayload(nodes=nodes, edges=edges, metadata={}, base_revision=3),
-        user={"username": "admin", "id": "owner_1"},
-    )
-
-    saved = json.loads(canvas_file.read_text(encoding="utf-8"))
-    edge_ids = {edge["id"] for edge in saved["edges"]}
-    assert "edge_identity_keep_1" in edge_ids
-    assert "edge_prop_keep" in edge_ids
-    assert "edge_identity_remove_1" not in edge_ids
-    assert "edge_identity_remove_2" not in edge_ids
-    assert "edge_prop_remove" not in edge_ids
-    identity_handles = {
-        edge.get("targetHandle")
-        for edge in saved["edges"]
-        if (edge.get("data") or {}).get("role") == "identity"
-    }
-    assert identity_handles == {"identity:女鬼_白衣时期", "identity:秋菊_中年时期"}
-
-
-@pytest.mark.asyncio
 async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2450,10 +2101,10 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
                 "nodes": [
                     {"id": "context_beat", "data": {"preset_managed": True}},
                     {
-                        "id": "skill_frame_from_context",
+                        "id": "skill_scene_360",
                         "data": {
                             "preset_managed": True,
-                            "skill_id": "freezone.frame_from_context",
+                            "skill_id": "freezone.scene_360",
                         },
                     },
                     {"id": "user_note", "data": {"user_spawned": True}},
@@ -2462,7 +2113,7 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
                     {
                         "id": "edge_identity_old_only",
                         "source": "ref_character_identity_1",
-                        "target": "skill_frame_from_context",
+                        "target": "skill_scene_360",
                         "targetHandle": "identity:沈月白_青年时期",
                         "data": {
                             "edgeKind": "role_binding",
@@ -2501,10 +2152,10 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
             "nodes": [
                 {"id": "context_beat", "data": {"preset_managed": True}},
                 {
-                    "id": "skill_frame_from_context",
+                    "id": "skill_scene_360",
                     "data": {
                         "preset_managed": True,
-                        "skill_id": "freezone.frame_from_context",
+                        "skill_id": "freezone.scene_360",
                     },
                 },
                 {
@@ -2520,7 +2171,7 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
                 {
                     "id": "edge_identity_1",
                     "source": "ref_character_identity_1",
-                    "target": "skill_frame_from_context",
+                    "target": "skill_scene_360",
                     "targetHandle": "identity:沈月白_青年时期",
                     "data": {
                         "edgeKind": "role_binding",
@@ -2534,7 +2185,7 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
                 {
                     "id": "edge_identity_2",
                     "source": "ref_character_identity_2",
-                    "target": "skill_frame_from_context",
+                    "target": "skill_scene_360",
                     "targetHandle": "identity:陆辰_青年时期",
                     "data": {
                         "edgeKind": "role_binding",
@@ -2570,7 +2221,7 @@ async def test_get_canvas_refreshes_beat_preset_from_mainline_context(
     assert data["revision"] == 7
     assert {node["id"] for node in data["nodes"]} == {
         "context_beat",
-        "skill_frame_from_context",
+        "skill_scene_360",
         "ref_character_identity_1",
         "ref_character_identity_2",
         "user_note",
@@ -4653,159 +4304,6 @@ async def test_freezone_story_script_job_uses_model_visible_chars_for_billing(
 
 
 @pytest.mark.asyncio
-async def test_sketch_from_context_uses_beat_db_and_routes_to_gen_without_source(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _project_ctx(tmp_path)
-    captured: dict = {}
-
-    async def fake_resolve_freezone_project(*_args, **_kwargs):
-        return ctx, "admin", "demo", ctx.output_dir, str(ctx.output_dir)
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_sketch"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(freezone_routes, "_resolve_freezone_project", fake_resolve_freezone_project)
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-
-    result = await freezone_routes.freezone_sketch_from_context(
-        project="proj_freezone",
-        body=freezone_routes.FreezoneSketchFromContextRequest(
-            episode=1,
-            beat=8,
-            source_kind="beat",
-            canvas_id="canvas_a",
-            node_id="node_ctx",
-        ),
-        user={"username": "admin"},
-    )
-
-    assert result["data"]["task_type"] == "sketch_generation"
-    assert captured["episode"] == 1
-    assert captured["payload"]["config"]["direct_sketch_beats"] is True
-    assert captured["payload"]["config"]["beat_numbers"] == [8]
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "node_ctx"
-
-
-@pytest.mark.asyncio
-async def test_frame_from_context_uses_sketch_as_base_and_optional_background_ref(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _project_ctx(tmp_path)
-    captured: dict = {}
-
-    async def fake_resolve_freezone_project(*_args, **_kwargs):
-        return ctx, "admin", "demo", ctx.output_dir, str(ctx.output_dir)
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(freezone_routes, "_resolve_freezone_project", fake_resolve_freezone_project)
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(ctx.output_dir / "freezone" / "sketch.png")
-    _write_image(ctx.output_dir / "freezone" / "bg.png")
-
-    result = await freezone_routes.freezone_frame_from_context(
-        project="proj_freezone",
-        body=freezone_routes.FreezoneFrameFromContextRequest(
-            episode=1,
-            beat=8,
-            sketch_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-            background_url="/api/v1/projects/proj_freezone/media/freezone/bg.png",
-            canvas_id="canvas_a",
-            node_id="node_frame",
-        ),
-        user={"username": "admin"},
-    )
-
-    assert result["data"]["task_type"] == "mainline_frame_from_context"
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    assert captured["payload"]["config"]["canvas_sketch_paths"]["8"].endswith(
-        "/freezone/sketch.png"
-    )
-    assert captured["payload"]["config"]["canvas_scene_refs"][0]["image_path"].endswith(
-        "/freezone/bg.png"
-    )
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "node_frame"
-
-
-@pytest.mark.asyncio
-async def test_frame_from_context_infers_landscape_from_sketch_and_medium_quality_default(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _project_ctx(tmp_path)
-    captured: dict = {}
-
-    async def fake_resolve_freezone_project(*_args, **_kwargs):
-        return ctx, "admin", "demo", ctx.output_dir, str(ctx.output_dir)
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame_16_9"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(freezone_routes, "_resolve_freezone_project", fake_resolve_freezone_project)
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(ctx.output_dir / "freezone" / "sketch.png", size=(1600, 900))
-
-    await freezone_routes.freezone_frame_from_context(
-        project="proj_freezone",
-        body=freezone_routes.FreezoneFrameFromContextRequest(
-            episode=1,
-            beat=8,
-            aspect_ratio="2:3",
-            sketch_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["payload"]["mode_key"] == "1x1_16-9"
-    assert captured["payload"]["config"]["mode_key"] == "1x1_16-9"
-    assert captured["payload"]["config"]["aspect_ratio"] == "16:9"
-    assert captured["payload"]["config"]["image_quality"] == "medium"
-
-
-@pytest.mark.asyncio
 async def test_scene_360_endpoint_caps_mainline_image_size_to_2k(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5321,65 +4819,7 @@ def _standalone_skill_beat_input() -> dict:
             "scene_id": "便利店门口",
             "detected_identities": ["Kris"],
             "detected_props": ["雨伞"],
-            "sketch_colors": {"Kris": "#FF00FF"},
-            "prop_marker_colors": {"雨伞": "#B71C1C"},
         },
-    }
-
-
-def test_standalone_beat_context_normalizes_plain_identity_to_mainline_prompt_shape() -> None:
-    beat_context = {
-        "source": "standalone",
-        "visual_description": "{{Kris}}拿着[[雨伞]]。",
-        "detected_identities": ["Kris"],
-        "sketch_colors": {"Kris": "#FF00FF"},
-    }
-
-    prompt_beat = freezone_routes._skill_beat_context_as_prompt_beat(
-        SkillRunRequest(
-            resolved_inputs=[
-                {
-                    "role": "beat_context",
-                    "node_id": "standalone",
-                    "node_type": "beatContextNode",
-                    "beat_context": beat_context,
-                }
-            ]
-        ).resolved_inputs[0]
-    )
-    character_map = freezone_routes._standalone_beat_context_character_map(
-        beat_context
-    )
-
-    assert prompt_beat["visual_description"] == "{{Kris_Kris}}拿着[[雨伞]]。"
-    assert prompt_beat["detected_identities"] == ["Kris_Kris"]
-    assert character_map == {
-        "Kris": {
-            "base_prompt": "Kris",
-            "reference_mode": "prompt_only",
-            "sketch_color": "#FF00FF",
-            "identity_appearances": {"Kris": "Kris"},
-            "identity_sketch_colors": {"Kris": "#FF00FF"},
-        }
-    }
-
-
-def test_standalone_beat_context_character_map_uses_mainline_identity_suffix_shape() -> None:
-    character_map = freezone_routes._standalone_beat_context_character_map(
-        {
-            "detected_identities": ["陆辰_青年时期"],
-            "sketch_colors": {"陆辰_青年时期": "#00FFFF"},
-        }
-    )
-
-    assert character_map == {
-        "陆辰": {
-            "base_prompt": "陆辰",
-            "reference_mode": "prompt_only",
-            "sketch_color": "#00FFFF",
-            "identity_appearances": {"青年时期": "陆辰_青年时期"},
-            "identity_sketch_colors": {"青年时期": "#00FFFF"},
-        }
     }
 
 
@@ -5411,25 +4851,6 @@ def _skill_image_input(
 def _required_contract_input_for_spec(role: str) -> dict:
     if role == "beat_context":
         return _standalone_skill_beat_input()
-    if role == "background":
-        return _skill_image_input(
-            "background",
-            image_url="/api/v1/projects/proj_freezone/media/freezone/background.png",
-            slot_kind="selected_background",
-        )
-    if role == "director_combined":
-        return _skill_image_input(
-            "director_combined",
-            node_type="exportImageNode",
-            image_url="/api/v1/projects/proj_freezone/media/freezone/director.png",
-            slot_kind="director_combined",
-        )
-    if role == "sketch":
-        return _skill_image_input(
-            "sketch",
-            image_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-            slot_kind="sketch",
-        )
     if role == "source_image":
         return _skill_image_input(
             "source_image",
@@ -5457,9 +4878,6 @@ def test_skill_contract_accepts_standalone_beat_context_for_every_beat_context_s
     ]
 
     assert {skill.id for skill in beat_context_skills} == {
-        "freezone.sketch_from_context",
-        "freezone.sketch_from_director_combined",
-        "freezone.frame_from_context",
         "freezone.set_selected_background",
         "freezone.set_director_combined",
         "agent.review_frame",
@@ -5498,43 +4916,6 @@ def _read_canvas_events(project_dir: Path, canvas_id: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def test_standalone_unified_sketch_prompt_keeps_missing_beat_number_null(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict = {}
-
-    class FakePromptBuilder:
-        def __init__(self, ctx):
-            self.ctx = ctx
-
-        def build(self) -> str:
-            return "unified prompt"
-
-    def fake_create_prompt_context(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace()
-
-    import novelvideo.generators.prompt_builder as prompt_builder
-
-    monkeypatch.setattr(prompt_builder, "UnifiedPromptBuilder", FakePromptBuilder)
-    monkeypatch.setattr(prompt_builder, "create_prompt_context", fake_create_prompt_context)
-
-    result = freezone_routes._standalone_beat_context_unified_sketch_prompt(
-        input_item=SkillRunRequest(resolved_inputs=[_standalone_skill_beat_input()]).resolved_inputs[
-            0
-        ],
-        project_dir=tmp_path,
-        reference_path=str(tmp_path / "combined.png"),
-        reference_role="director_combined",
-        aspect_ratio="16:9",
-    )
-
-    assert result == "unified prompt"
-    assert captured["beats"][0]["episode_number"] is None
-    assert captured["beats"][0]["beat_number"] is None
-
-
 def test_skill_run_output_accepts_graph_patch_contract_stub() -> None:
     output = SkillRunOutput(
         role="planned_canvas_patch",
@@ -5568,18 +4949,12 @@ def test_skill_registry_returns_skills_with_providers_and_typed_contracts() -> N
     by_id = {skill.id: skill for skill in skills}
 
     assert set(by_id) == {
-        "freezone.sketch_from_context",
-        "freezone.sketch_from_director_combined",
-        "freezone.frame_from_context",
         "freezone.set_selected_background",
         "freezone.set_director_combined",
         "freezone.scene_360",
         "agent.review_frame",
         "workflow.plan_beat_graph",
     }
-    assert by_id["freezone.sketch_from_context"].provider == "freezone_mainline"
-    assert by_id["freezone.sketch_from_director_combined"].provider == "freezone_mainline"
-    assert by_id["freezone.frame_from_context"].provider == "freezone_mainline"
     assert by_id["freezone.set_selected_background"].provider == "freezone_mainline"
     assert by_id["freezone.set_director_combined"].provider == "freezone_mainline"
     assert by_id["freezone.scene_360"].provider == "freezone_mainline"
@@ -5602,73 +4977,15 @@ def test_skill_registry_returns_skills_with_providers_and_typed_contracts() -> N
         for input_spec in skill.inputs
         if "image_url" in input_spec.accepts.has_field
     )
-    assert by_id["freezone.sketch_from_context"].capabilities.can_read_project_state is True
-    assert by_id["freezone.sketch_from_context"].capabilities.can_propose_canvas_patch is False
+    assert by_id["freezone.set_selected_background"].capabilities.can_read_project_state is True
+    assert (
+        by_id["freezone.set_selected_background"].capabilities.can_propose_canvas_patch
+        is False
+    )
     assert by_id["agent.review_frame"].capabilities.can_propose_canvas_patch is False
     assert by_id["agent.review_frame"].capabilities.can_apply_canvas_patch is False
     assert by_id["workflow.plan_beat_graph"].capabilities.can_propose_canvas_patch is True
     assert by_id["workflow.plan_beat_graph"].capabilities.can_apply_canvas_patch is False
-
-    sketch = get_skill("freezone.sketch_from_context")
-    assert sketch.parameters["aspect_ratio"]["default"] == "2:3"
-    assert sketch.parameters["aspect_ratio"]["options"] == ["2:3", "16:9"]
-    sketch_inputs = {item.role: item for item in sketch.inputs}
-    assert list(sketch_inputs) == ["beat_context", "background"]
-    assert sketch_inputs["beat_context"].required is True
-    assert sketch_inputs["beat_context"].cardinality == "single"
-    assert sketch_inputs["beat_context"].accepts.node_types == ["beatContextNode"]
-    assert sketch_inputs["background"].required is True
-    assert sketch_inputs["background"].cardinality == "single"
-    assert set(sketch_inputs["background"].accepts.canonical_slot_kinds) >= {
-        "selected_background",
-        "background_candidate",
-    }
-
-    director_sketch = get_skill("freezone.sketch_from_director_combined")
-    assert director_sketch.parameters["aspect_ratio"]["default"] == "2:3"
-    assert director_sketch.parameters["aspect_ratio"]["options"] == ["2:3", "16:9"]
-    director_inputs = {item.role: item for item in director_sketch.inputs}
-    assert list(director_inputs) == ["beat_context", "director_combined"]
-    assert director_inputs["beat_context"].required is True
-    assert director_inputs["director_combined"].required is True
-    assert director_inputs["director_combined"].cardinality == "single"
-    assert "exportImageNode" in director_inputs["director_combined"].accepts.node_types
-    assert director_inputs["director_combined"].accepts.canonical_slot_kinds == [
-        "director_combined"
-    ]
-    assert "freezone.director_combined" in (
-        director_inputs["director_combined"].accepts.candidate_origin_skill_ids
-    )
-    assert sketch.outputs[0].role == "current_sketch_candidate"
-    assert sketch.outputs[0].media_type == "image"
-    assert sketch.outputs[0].node_type == "imageGenNode"
-    assert sketch.outputs[0].pushable is True
-
-    frame = get_skill("freezone.frame_from_context")
-    assert "aspect_ratio" not in frame.parameters
-    assert frame.parameters["quality"]["default"] == "medium"
-    assert frame.parameters["background_reference_mode"]["type"] == "enum"
-    assert frame.parameters["background_reference_mode"]["default"] == "material_only"
-    assert frame.parameters["background_reference_mode"]["options"] == [
-        "material_only",
-        "scene_anchor",
-    ]
-    frame_inputs = {item.role: item for item in frame.inputs}
-    assert list(frame_inputs) == ["beat_context", "sketch", "background", "identity", "prop"]
-    assert frame_inputs["beat_context"].required is True
-    assert frame_inputs["beat_context"].cardinality == "single"
-    assert frame_inputs["sketch"].required is True
-    assert frame_inputs["sketch"].cardinality == "single"
-    assert frame_inputs["background"].required is False
-    assert frame_inputs["background"].cardinality == "single"
-    assert frame_inputs["identity"].required is False
-    assert frame_inputs["identity"].cardinality == "multi"
-    assert frame_inputs["prop"].required is False
-    assert frame_inputs["prop"].cardinality == "multi"
-    assert frame.outputs[0].role == "current_frame_candidate"
-    assert frame.outputs[0].media_type == "image"
-    assert frame.outputs[0].node_type == "imageGenNode"
-    assert frame.outputs[0].pushable is True
 
     set_background = get_skill("freezone.set_selected_background")
     set_background_inputs = {item.role: item for item in set_background.inputs}
@@ -5758,9 +5075,9 @@ async def test_skill_run_missing_required_role_returns_422(
     with pytest.raises(freezone_routes.HTTPException) as exc:
         await freezone_routes.freezone_skill_run(
             project="proj_freezone",
-            skill_id="freezone.frame_from_context",
+            skill_id="freezone.set_selected_background",
             body=SkillRunRequest(
-                skill_node_id="skill_frame",
+                skill_node_id="skill_set_background",
                 canvas_id="canvas_a",
                 resolved_inputs=[_skill_beat_input()],
             ),
@@ -5768,69 +5085,11 @@ async def test_skill_run_missing_required_role_returns_422(
         )
 
     assert exc.value.status_code == 422
-    assert "sketch" in str(exc.value.detail)
+    assert "source_image" in str(exc.value.detail)
     assert exc.value.detail["code"] == "skill_input_missing_required"
     assert exc.value.detail["category"] == "validation"
     assert exc.value.detail["retryable"] is False
     assert "Connect the missing input" in exc.value.detail["user_action_hint"]
-
-
-@pytest.mark.asyncio
-async def test_skill_run_frame_accepts_plain_canvas_image_as_sketch_input(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame_plain_sketch"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "plain_sketch.png", size=(800, 1200))
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "sketch",
-                    node_id="plain_sketch_node",
-                    node_type="imageNode",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/plain_sketch.png",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_frame_from_context"
-    assert captured["product_surface"] == "freezone"
-    assert captured["payload"]["billing"] == {
-        "feature_key": "mainline.render_regen",
-        "pricing_kind": "image",
-        "pricing_model": freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_gpt_image2"]["model"],
-        "pricing_params": {"size": "1K", "quality": "medium"},
-    }
-    assert captured["payload"]["config"]["canvas_sketch_paths"]["8"].endswith(
-        "/freezone/plain_sketch.png"
-    )
 
 
 @pytest.mark.asyncio
@@ -5843,15 +5102,15 @@ async def test_skill_run_accept_mismatch_returns_422(
     with pytest.raises(freezone_routes.HTTPException) as exc:
         await freezone_routes.freezone_skill_run(
             project="proj_freezone",
-            skill_id="freezone.frame_from_context",
+            skill_id="freezone.set_selected_background",
             body=SkillRunRequest(
-                skill_node_id="skill_frame",
+                skill_node_id="skill_set_background",
                 canvas_id="canvas_a",
                 resolved_inputs=[
                     _skill_beat_input(),
                     {
-                        "role": "sketch",
-                        "node_id": "not_a_sketch",
+                        "role": "source_image",
+                        "node_id": "not_an_image",
                         "node_type": "textAnnotationNode",
                         "text": "not an image",
                     },
@@ -5861,7 +5120,7 @@ async def test_skill_run_accept_mismatch_returns_422(
         )
 
     assert exc.value.status_code == 422
-    assert "sketch" in str(exc.value.detail)
+    assert "source_image" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5874,16 +5133,15 @@ async def test_skill_run_rejects_external_image_url(
     with pytest.raises(freezone_routes.HTTPException) as exc:
         await freezone_routes.freezone_skill_run(
             project="proj_freezone",
-            skill_id="freezone.sketch_from_context",
+            skill_id="freezone.set_selected_background",
             body=SkillRunRequest(
-                skill_node_id="skill_sketch",
+                skill_node_id="skill_set_background",
                 canvas_id="canvas_a",
                 resolved_inputs=[
                     _skill_beat_input(),
                     _skill_image_input(
-                        "background",
+                        "source_image",
                         image_url="https://evil.example/not-project.png",
-                        slot_kind="selected_background",
                     ),
                 ],
             ),
@@ -5904,16 +5162,15 @@ async def test_skill_run_rejects_wrong_project_api_media_url(
     with pytest.raises(freezone_routes.HTTPException) as exc:
         await freezone_routes.freezone_skill_run(
             project="proj_freezone",
-            skill_id="freezone.sketch_from_context",
+            skill_id="freezone.set_selected_background",
             body=SkillRunRequest(
-                skill_node_id="skill_sketch",
+                skill_node_id="skill_set_background",
                 canvas_id="canvas_a",
                 resolved_inputs=[
                     _skill_beat_input(),
                     _skill_image_input(
-                        "background",
+                        "source_image",
                         image_url="/api/v1/projects/other/media/freezone/bg.png",
-                        slot_kind="selected_background",
                     ),
                 ],
             ),
@@ -5925,211 +5182,50 @@ async def test_skill_run_rejects_wrong_project_api_media_url(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "/api/v1/projects/proj_freezone/media/freezone/bg.png?v=1",
+        "/static/admin/demo/freezone/bg.png?v=1",
+        "/static/projects/proj_freezone/freezone/bg.png?v=1",
+    ],
+)
 async def test_skill_run_normalizes_project_media_url_before_dispatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    image_url: str,
 ) -> None:
     project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_media_url"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_media_url")
     _write_image(project_dir / "freezone" / "bg.png")
 
-    await freezone_routes.freezone_skill_run(
+    async def fail_make_sqlite_store_for_context(_ctx):
+        raise AssertionError("standalone set background must not read or write beat DB")
+
+    monkeypatch.setattr(
+        freezone_routes, "make_sqlite_store_for_context", fail_make_sqlite_store_for_context
+    )
+
+    response = await freezone_routes.freezone_skill_run(
         project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
+        skill_id="freezone.set_selected_background",
         body=SkillRunRequest(
-            skill_node_id="skill_sketch",
+            skill_node_id="skill_set_background",
             canvas_id="canvas_a",
             resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/bg.png?v=1",
-                    slot_kind="selected_background",
-                ),
+                _standalone_skill_beat_input(),
+                _skill_image_input("source_image", image_url=image_url),
             ],
         ),
         user={"username": "admin"},
     )
 
-    assert captured["task_type"] == "mainline_sketch_from_context"
-    assert captured["product_surface"] == "freezone"
-    assert captured["payload"]["billing"] == {
-        "feature_key": "mainline.sketch_regen",
-        "pricing_kind": "image",
-        "pricing_model": freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_gpt_image2"]["model"],
-        "pricing_params": {"size": "1K", "quality": "low"},
-    }
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    assert captured["payload"]["config"]["canvas_scene_refs"][0]["image_path"].endswith(
-        "/freezone/bg.png"
-    )
-
-
-@pytest.mark.asyncio
-async def test_skill_run_background_sketch_accepts_landscape_aspect(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_sketch_landscape"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    await freezone_routes.freezone_skill_run(
+    assert response.status == "completed"
+    result = await freezone_routes.freezone_skill_run_result(
         project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            parameters={"aspect_ratio": "16:9"},
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/bg.png",
-                ),
-            ],
-        ),
+        run_id=response.run_id,
         user={"username": "admin"},
     )
-
-    assert captured["task_type"] == "mainline_sketch_from_context"
-    assert captured["payload"]["config"]["mode_key"] == "1x1_16-9_sketch"
-
-
-@pytest.mark.asyncio
-async def test_skill_run_accepts_project_static_url_for_dispatch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_static_url"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/static/admin/demo/freezone/bg.png?v=1",
-                    slot_kind="selected_background",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_sketch_from_context"
-    assert captured["payload"]["config"]["canvas_scene_refs"][0]["image_path"].endswith(
-        "/freezone/bg.png"
-    )
-
-
-@pytest.mark.asyncio
-async def test_skill_run_accepts_canonical_project_static_url_for_dispatch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_project_static_url"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/static/projects/proj_freezone/freezone/bg.png?v=1",
-                    slot_kind="selected_background",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_sketch_from_context"
-    assert captured["payload"]["config"]["canvas_scene_refs"][0]["image_path"].endswith(
-        "/freezone/bg.png"
-    )
+    assert urlsplit(result.outputs[0].image_url or "").path.endswith("/freezone/bg.png")
 
 
 @pytest.mark.asyncio
@@ -6142,9 +5238,9 @@ async def test_skill_run_invalid_beat_context_returns_422(
     with pytest.raises(freezone_routes.HTTPException) as exc:
         await freezone_routes.freezone_skill_run(
             project="proj_freezone",
-            skill_id="freezone.sketch_from_context",
+            skill_id="freezone.set_selected_background",
             body=SkillRunRequest(
-                skill_node_id="skill_sketch",
+                skill_node_id="skill_set_background",
                 canvas_id="canvas_a",
                 resolved_inputs=[
                     {
@@ -6160,419 +5256,6 @@ async def test_skill_run_invalid_beat_context_returns_422(
 
     assert exc.value.status_code == 422
     assert "beat_context" in str(exc.value.detail)
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_sketch_from_context_queues_candidate_without_db_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fail_make_sqlite_store_for_context(_ctx):
-        raise AssertionError("standalone beat context must not read or write beat DB")
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_standalone_sketch"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fail_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_standalone_sketch")
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _standalone_skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/bg.png",
-                    slot_kind="selected_background",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "freezone_gen:job_standalone_sketch"
-    assert response.task_type == "freezone_gen"
-    assert captured["task_type"] == "freezone_gen"
-    assert captured["episode"] == 0
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "skill_sketch"
-    assert captured["payload"]["reference_paths"][0].endswith("/freezone/bg.png")
-    assert "雨夜里" in captured["payload"]["prompt"]
-    assert "便利店门口回头" in captured["payload"]["prompt"]
-    assert "#FF00FF" in captured["payload"]["prompt"]
-    assert "便利店门口" in captured["payload"]["prompt"]
-    metadata = json.loads(
-        (project_dir / "freezone" / "_skill_runs" / f"{response.run_id}.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert metadata["output"]["slot_target"] is None
-    assert metadata["output"]["auto_commit"] is False
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_returns_run_id_and_result_outputs_without_db_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    ctx = _project_ctx(tmp_path)
-    captured: dict = {}
-
-    async def fail_make_sqlite_store_for_context(_ctx):
-        raise AssertionError("standalone beat context must not read or write beat DB")
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_standalone_skill"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fail_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_standalone_skill")
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _standalone_skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/bg.png",
-                    slot_kind="selected_background",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "freezone_gen:job_standalone_skill"
-    assert response.status == "queued"
-    assert response.task_type == "freezone_gen"
-    assert response.task_key == "task:freezone_gen:project:proj_freezone:0:job_standalone_skill"
-    assert captured["episode"] == 0
-    assert "beat_num" not in captured
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "skill_sketch"
-    assert captured["payload"]["reference_paths"][0].endswith("/freezone/bg.png")
-    assert captured["payload"]["aspect_ratio"] == "2:3"
-    assert "雨夜里" in captured["payload"]["prompt"]
-    assert "便利店门口回头" in captured["payload"]["prompt"]
-    assert "#FF00FF" in captured["payload"]["prompt"]
-    assert "#B71C1C" in captured["payload"]["prompt"]
-
-    output_path = (
-        project_dir / "freezone" / "_outputs" / "freezone_gen" / "job_standalone_skill.png"
-    )
-    _write_image(output_path)
-    get_task_manager().create_task_for_project(
-        ctx,
-        "freezone_gen",
-        0,
-        scope="job_standalone_skill",
-        status="running",
-    )
-    pending = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-    assert pending.status == "running"
-    assert pending.outputs == []
-
-    get_task_manager().complete_task_for_project(
-        ctx,
-        "freezone_gen",
-        0,
-        scope="job_standalone_skill",
-        result={"output_path": str(output_path)},
-    )
-    result = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-
-    assert result.run_id == response.run_id
-    assert result.status == "done"
-    assert result.outputs[0].role == "current_sketch_candidate"
-    assert result.outputs[0].media_type == "image"
-    assert result.outputs[0].node_type == "imageGenNode"
-    assert result.outputs[0].pushable is True
-    assert result.outputs[0].slot_target is None
-    assert getattr(result.outputs[0], "auto_commit", None) is False
-    assert getattr(result.outputs[0], "committed", None) is None
-    assert urlsplit(result.outputs[0].image_url or "").path.endswith(
-        "/freezone/_outputs/freezone_gen/job_standalone_skill.png"
-    )
-    assert not (project_dir / "sketches" / "ep001" / "beat_08.png").exists()
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_director_sketch_queues_candidate_without_db_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fail_make_sqlite_store_for_context(_ctx):
-        raise AssertionError("standalone beat context must not read or write beat DB")
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_standalone_director_sketch"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fail_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_standalone_director_sketch")
-    _write_image(project_dir / "freezone" / "_uploads" / "combined.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_director_combined",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch_director",
-            canvas_id="canvas_a",
-            parameters={"aspect_ratio": "16:9", "quality": "high"},
-            resolved_inputs=[
-                _standalone_skill_beat_input(),
-                _skill_image_input(
-                    "director_combined",
-                    node_type="exportImageNode",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/_uploads/combined.png",
-                    slot_kind="director_combined",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "freezone_gen:job_standalone_director_sketch"
-    assert response.task_type == "freezone_gen"
-    assert captured["task_type"] == "freezone_gen"
-    assert captured["episode"] == 0
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "skill_sketch_director"
-    assert captured["payload"]["reference_paths"][0].endswith("/freezone/_uploads/combined.png")
-    assert captured["payload"]["aspect_ratio"] == "16:9"
-    assert captured["payload"]["quality"] == "high"
-    assert "雨夜里" in captured["payload"]["prompt"]
-    assert "便利店门口回头" in captured["payload"]["prompt"]
-    assert "#FF00FF" in captured["payload"]["prompt"]
-    assert "#B71C1C" in captured["payload"]["prompt"]
-    assert "Convert the attached 3GS director control frame" in captured["payload"]["prompt"]
-    assert "CONTROL LOCK" in captured["payload"]["prompt"]
-    assert "SCENE DESCRIPTIONS" in captured["payload"]["prompt"]
-    assert "根据用户自定义 Beat Context 生成一张草图候选图" not in captured["payload"]["prompt"]
-    assert "导演合成图" in captured["payload"]["source_label"]
-    metadata = json.loads(
-        (project_dir / "freezone" / "_skill_runs" / f"{response.run_id}.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert metadata["output"]["slot_target"] is None
-    assert metadata["output"]["auto_commit"] is False
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_frame_from_context_queues_candidate_without_db_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from novelvideo.ports.registry import register_port
-    from novelvideo.task_backend.projection import build_projection
-
-    class InstalledProjector:
-        async def build(self, store, config, *, task_type):
-            assert store is None
-            return await build_projection(store, config, task_type=task_type)
-
-    register_port("task_projection", InstalledProjector())
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    _write_canvas_with_node(
-        tmp_path,
-        "canvas_a",
-        {"id": "skill_frame", "type": "skillNode", "data": {"preset_managed": True}},
-    )
-    captured: dict = {}
-
-    async def fail_make_sqlite_store_for_context(_ctx):
-        raise AssertionError("standalone frame skill must not read or write beat DB")
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_standalone_frame"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fail_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_standalone_frame")
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    _write_image(project_dir / "freezone" / "background.png", size=(800, 1200))
-    _write_image(project_dir / "assets" / "identity_kris.png")
-    _write_image(project_dir / "assets" / "prop_umbrella.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            parameters={"quality": "high"},
-            resolved_inputs=[
-                _standalone_skill_beat_input(),
-                _skill_image_input(
-                    "sketch",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-                    slot_kind="sketch",
-                ),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/background.png",
-                    slot_kind="selected_background",
-                ),
-                _skill_image_input(
-                    "identity",
-                    node_id="identity_kris",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/identity_kris.png",
-                    slot_kind="identity",
-                )
-                | {"reference_target": {"kind": "identity", "identity_id": "Kris"}},
-                _skill_image_input(
-                    "prop",
-                    node_id="prop_umbrella",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/prop_umbrella.png",
-                    slot_kind="prop",
-                )
-                | {"reference_target": {"kind": "prop", "prop_id": "雨伞"}},
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "mainline_frame_from_context:job_standalone_frame"
-    assert response.task_type == "mainline_frame_from_context"
-    assert captured["task_type"] == "mainline_frame_from_context"
-    assert captured["episode"] == 0
-    assert "beat_num" not in captured
-    assert captured["payload"]["projection"] == {
-        "projection_version": 1,
-        "task_type": "mainline_frame_from_context",
-        "fields": {},
-    }
-    config = captured["payload"]["config"]
-    assert config["standalone_beat_context"] is True
-    assert config["selected_panel_indices"] == [0]
-    assert "selected_beat_numbers" not in config
-    assert config["beats"][0]["episode_number"] == 0
-    assert config["beats"][0]["beat_number"] == 0
-    assert config["beats"][0]["panel_index"] == 0
-    assert config["beats"][0]["visual_description"].startswith("雨夜里")
-    assert config["beats"][0]["detected_identities"] == ["Kris_Kris"]
-    assert config["canvas_sketch_paths"]["0"].endswith("/freezone/sketch.png")
-    assert config["canvas_scene_refs"][0]["panel_index"] == 0
-    assert config["canvas_scene_refs"][0]["image_path"].endswith("/freezone/background.png")
-    assert config["canvas_scene_refs"][0]["reference_mode"] == "material_only"
-    assert config["canvas_identity_refs"][0]["panel_index"] == 0
-    assert config["canvas_identity_refs"][0]["identity_id"] == "Kris"
-    assert config["canvas_prop_refs"][0]["panel_index"] == 0
-    assert config["canvas_prop_refs"][0]["prop_id"] == "雨伞"
-    assert config["image_quality"] == "high"
-    metadata = json.loads(
-        (project_dir / "freezone" / "_skill_runs" / f"{response.run_id}.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert metadata["output"]["slot_target"] is None
-    assert metadata["output"]["auto_commit"] is False
-
-    output_path = (
-        project_dir
-        / "freezone"
-        / "_outputs"
-        / "mainline_frame_from_context"
-        / "job_standalone_frame.png"
-    )
-    _write_image(output_path)
-    get_task_manager().create_task_for_project(
-        _project_ctx(tmp_path),
-        "mainline_frame_from_context",
-        0,
-        scope="job_standalone_frame",
-        status="running",
-    )
-    pending = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-    assert pending.status == "running"
-    assert pending.outputs == []
-
-    get_task_manager().complete_task_for_project(
-        _project_ctx(tmp_path),
-        "mainline_frame_from_context",
-        0,
-        scope="job_standalone_frame",
-        result={"output_path": str(output_path)},
-    )
-    result = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-
-    assert result.status == "done"
-    assert result.outputs[0].role == "current_frame_candidate"
-    assert result.outputs[0].media_type == "image"
-    assert result.outputs[0].node_type == "imageGenNode"
-    assert result.outputs[0].pushable is True
-    assert result.outputs[0].slot_target is None
-    assert getattr(result.outputs[0], "auto_commit", None) is False
-    assert urlsplit(result.outputs[0].image_url or "").path.endswith(
-        "/freezone/_outputs/mainline_frame_from_context/job_standalone_frame.png"
-    )
 
 
 @pytest.mark.asyncio
@@ -6793,118 +5476,6 @@ async def test_skill_run_scene_360_rejects_beat_context_role(
 
     assert exc.value.status_code == 422
     assert "beat_context" in str(exc.value.detail)
-
-
-@pytest.mark.asyncio
-async def test_skill_run_mainline_returns_run_id_and_result_outputs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    ctx = _project_ctx(tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_skill"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_skill")
-    _write_image(project_dir / "freezone" / "bg.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "background",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/bg.png",
-                    slot_kind="selected_background",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "mainline_sketch_from_context:job_skill"
-    assert response.status == "queued"
-    assert response.task_type == "mainline_sketch_from_context"
-    assert (
-        response.task_key == "task:mainline_sketch_from_context:project:proj_freezone:1:8:job_skill"
-    )
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    assert captured["payload"]["canvas_id"] == "canvas_a"
-    assert captured["payload"]["node_id"] == "skill_sketch"
-    config = captured["payload"]["config"]
-    assert config["promote_direct_sketch"] is False
-    assert config["direct_sketch_beats"] is True
-    assert config["mode_key"] == "1x1_2-3_sketch"
-    assert config["beats"][0]["beat_number"] == 8
-    assert config["beats"][0]["scene_ref"]["scene_id"] == "兰州拉面馆"
-    assert config["canvas_scene_refs"][0]["image_path"].endswith("/bg.png")
-    assert config["canvas_scene_refs"][0]["source_level"] == "selected_background_image"
-
-    output_path = (
-        project_dir / "freezone" / "_outputs" / "mainline_sketch_from_context" / "job_skill.png"
-    )
-    _write_image(output_path)
-    get_task_manager().create_task_for_project(
-        ctx,
-        "mainline_sketch_from_context",
-        1,
-        beat_num=8,
-        scope="job_skill",
-        status="running",
-    )
-    pending = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-    assert pending.status == "running"
-    assert pending.outputs == []
-
-    get_task_manager().complete_task_for_project(
-        ctx,
-        "mainline_sketch_from_context",
-        1,
-        beat_num=8,
-        scope="job_skill",
-        result={"output_path": str(output_path)},
-    )
-    result = await freezone_routes.freezone_skill_run_result(
-        project="proj_freezone",
-        run_id=response.run_id,
-        user={"username": "admin"},
-    )
-
-    assert result.run_id == response.run_id
-    assert result.status == "done"
-    assert result.outputs[0].role == "current_sketch_candidate"
-    assert result.outputs[0].media_type == "image"
-    assert result.outputs[0].node_type == "imageGenNode"
-    assert result.outputs[0].pushable is True
-    assert result.outputs[0].slot_target == {"kind": "sketch", "episode": 1, "beat": 8}
-    assert urlsplit(result.outputs[0].image_url or "").path.endswith(
-        "/freezone/_outputs/mainline_sketch_from_context/job_skill.png"
-    )
-    assert not (project_dir / "sketches" / "ep001" / "beat_08.png").exists()
 
 
 @pytest.mark.asyncio
@@ -7171,377 +5742,6 @@ async def test_skill_run_set_director_combined_preserves_control_bundle(
     assert result.outputs[0].committed_slot_url == result.outputs[0].image_url
 
 
-@pytest.mark.asyncio
-async def test_skill_run_sketch_accepts_director_combined_background(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_director"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_director")
-    _write_image(project_dir / "freezone" / "_uploads" / "combined.png")
-
-    response = await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_director_combined",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            parameters={"aspect_ratio": "16:9"},
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "director_combined",
-                    image_url=(
-                        "/api/v1/projects/proj_freezone/media/freezone/_uploads/combined.png"
-                    ),
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert response.run_id == "mainline_director_control_sketch:job_director"
-    assert captured["task_type"] == "mainline_director_control_sketch"
-    assert captured["payload"]["billing"] == {
-        "feature_key": "mainline.director_control_to_sketch",
-        "pricing_kind": "image",
-        "pricing_model": freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_gpt_image2"]["model"],
-        "pricing_params": {"size": "1K", "quality": "low"},
-    }
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    assert captured["payload"]["control_frame_path"].endswith("/freezone/_uploads/combined.png")
-    assert captured["payload"]["mode_key"] == "1x1_16-9_sketch"
-    assert captured["payload"]["aspect_ratio"] == "16:9"
-    assert captured["payload"]["source_label"] == "导演合成图"
-
-
-@pytest.mark.asyncio
-async def test_skill_run_sketch_prefers_director_combined_over_background(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_director_preferred"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    monkeypatch.setattr(freezone_routes, "_new_job_id", lambda: "job_director_preferred")
-    _write_image(project_dir / "freezone" / "_uploads" / "combined.png")
-
-    with pytest.raises(freezone_routes.HTTPException) as exc:
-        await freezone_routes.freezone_skill_run(
-            project="proj_freezone",
-            skill_id="freezone.sketch_from_context",
-            body=SkillRunRequest(
-                skill_node_id="skill_sketch",
-                canvas_id="canvas_a",
-                resolved_inputs=[
-                    _skill_beat_input(),
-                    _skill_image_input(
-                        "background",
-                        image_url="/api/v1/projects/proj_freezone/media/freezone/selected.png",
-                        slot_kind="selected_background",
-                    ),
-                    _skill_image_input(
-                        "director_combined",
-                        image_url=(
-                            "/api/v1/projects/proj_freezone/media/freezone/_uploads/combined.png"
-                        ),
-                        slot_kind="director_combined",
-                    ),
-                ],
-            ),
-            user={"username": "admin"},
-        )
-
-    assert exc.value.status_code == 422
-    assert "director_combined" in str(exc.value.detail)
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.sketch_from_director_combined",
-        body=SkillRunRequest(
-            skill_node_id="skill_sketch",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "director_combined",
-                    image_url=(
-                        "/api/v1/projects/proj_freezone/media/freezone/_uploads/combined.png"
-                    ),
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_director_control_sketch"
-    assert captured["payload"]["billing"] == {
-        "feature_key": "mainline.director_control_to_sketch",
-        "pricing_kind": "image",
-        "pricing_model": freezone_routes.IMAGE_GENERATION_SELECTIONS["newapi_gpt_image2"]["model"],
-        "pricing_params": {"size": "1K", "quality": "low"},
-    }
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    assert captured["payload"]["control_frame_path"].endswith("/freezone/_uploads/combined.png")
-    assert captured["payload"]["source_label"] == "导演合成图"
-
-
-@pytest.mark.asyncio
-async def test_skill_run_frame_uses_resolved_identity_and_prop_references(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame_refs"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    import novelvideo.project_config as project_config
-
-    monkeypatch.setattr(
-        project_config,
-        "load_project_config",
-        lambda _username, _project: {"visual_style": "realistic", "ethnicity": "Mixed"},
-    )
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    _write_image(project_dir / "assets" / "identity_a.png")
-    _write_image(project_dir / "assets" / "prop_b.png")
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                {
-                    **_skill_beat_input(),
-                    "beat_context": {
-                        "episode": 1,
-                        "beat": 8,
-                        "scene_id": "画布场景",
-                        "visual_description": "画布里的分镜描述",
-                        "detected_identities": ["画布身份"],
-                        "detected_props": ["画布道具"],
-                    },
-                },
-                _skill_image_input(
-                    "sketch",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-                    slot_kind="sketch",
-                ),
-                _skill_image_input(
-                    "identity",
-                    node_id="identity_a",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/identity_a.png",
-                    slot_kind="identity",
-                )
-                | {"reference_target": {"kind": "identity", "identity_id": "画布身份"}},
-                _skill_image_input(
-                    "prop",
-                    node_id="prop_b",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/prop_b.png",
-                    slot_kind="prop",
-                )
-                | {"reference_target": {"kind": "prop", "prop_id": "画布道具"}},
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_frame_from_context"
-    assert captured["episode"] == 1
-    assert captured["beat_num"] == 8
-    config = captured["payload"]["config"]
-    assert config["mode_key"] == "1x1_2-3"
-    assert config["aspect_ratio"] == "2:3"
-    assert config["canvas_sketch_paths"]["8"].endswith("/freezone/sketch.png")
-    assert config["canvas_identity_refs"][0]["image_path"].endswith("/assets/identity_a.png")
-    assert config["canvas_prop_refs"][0]["image_path"].endswith("/assets/prop_b.png")
-    assert config["style"] == "realistic"
-    assert config["ethnicity"] == "Mixed"
-    assert config["beats"][0]["visual_description"] == "画布里的分镜描述"
-    assert config["beats"][0]["detected_identities"] == ["画布身份"]
-    assert config["beats"][0]["detected_props"] == ["画布道具"]
-    assert captured["payload"]["task_label"] == "渲染分镜"
-
-
-@pytest.mark.asyncio
-async def test_skill_run_frame_filters_stale_canvas_identity_refs_by_beat_context(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    _write_image(project_dir / "assets" / "identity_keep.png")
-    _write_image(project_dir / "assets" / "identity_stale.png")
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                {
-                    **_skill_beat_input(),
-                    "beat_context": {
-                        "episode": 1,
-                        "beat": 8,
-                        "scene_id": "画布场景",
-                        "visual_description": "画布里的分镜描述",
-                        "detected_identities": ["保留身份"],
-                    },
-                },
-                _skill_image_input(
-                    "sketch",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-                    slot_kind="sketch",
-                ),
-                _skill_image_input(
-                    "identity",
-                    node_id="identity_keep",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/identity_keep.png",
-                    slot_kind="identity",
-                )
-                | {"reference_target": {"kind": "identity", "identity_id": "保留身份"}},
-                _skill_image_input(
-                    "identity",
-                    node_id="identity_stale",
-                    image_url="/api/v1/projects/proj_freezone/media/assets/identity_stale.png",
-                    slot_kind="identity",
-                )
-                | {"reference_target": {"kind": "identity", "identity_id": "过期身份"}},
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    config = captured["payload"]["config"]
-    assert [item["identity_id"] for item in config["canvas_identity_refs"]] == ["保留身份"]
-    assert config["canvas_identity_refs"][0]["image_path"].endswith("/assets/identity_keep.png")
-
-
-@pytest.mark.asyncio
-async def test_skill_run_frame_uses_sketch_aspect_ratio_and_quality(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    async def fake_make_sqlite_store_for_context(_ctx):
-        return _FakeContextBeatStore()
-
-    async def fake_enqueue_project_task(_ctx: ProjectContext, **kwargs):
-        captured.update(kwargs)
-        captured["payload"] = kwargs.get("payload") or {}
-        return SimpleNamespace(
-            task_state=SimpleNamespace(task_id="task_frame_landscape"),
-            backend="celery",
-            queue="node.node_a.default",
-        )
-
-    monkeypatch.setattr(
-        freezone_routes, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context
-    )
-    monkeypatch.setattr(freezone_routes, "get_task_backend", lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task))
-    _write_image(project_dir / "freezone" / "sketch.png", size=(1600, 900))
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            parameters={"aspect_ratio": "2:3", "quality": "high"},
-            resolved_inputs=[
-                _skill_beat_input(),
-                _skill_image_input(
-                    "sketch",
-                    image_url="/api/v1/projects/proj_freezone/media/freezone/sketch.png",
-                    slot_kind="sketch",
-                ),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert captured["task_type"] == "mainline_frame_from_context"
-    assert captured["payload"]["mode_key"] == "1x1_16-9"
-    assert captured["payload"]["config"]["mode_key"] == "1x1_16-9"
-    assert captured["payload"]["config"]["aspect_ratio"] == "16:9"
-    assert captured["payload"]["config"]["image_quality"] == "high"
-
-
 def _patch_frame_enqueue_recorder(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     enqueued: list[dict] = []
 
@@ -7565,117 +5765,6 @@ def _patch_frame_enqueue_recorder(monkeypatch: pytest.MonkeyPatch) -> list[dict]
         lambda: SimpleNamespace(enqueue_project_task=fake_enqueue_project_task),
     )
     return enqueued
-
-
-@pytest.mark.asyncio
-async def test_skill_run_frame_rejects_beat_without_identity_detection_before_enqueue(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    enqueued = _patch_frame_enqueue_recorder(monkeypatch)
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    beat_input = _skill_beat_input()
-    beat_input["beat_context"].pop("detected_identities")
-
-    with pytest.raises(freezone_routes.HTTPException) as exc:
-        await freezone_routes.freezone_skill_run(
-            project="proj_freezone",
-            skill_id="freezone.frame_from_context",
-            body=SkillRunRequest(
-                skill_node_id="skill_frame",
-                canvas_id="canvas_a",
-                resolved_inputs=[
-                    beat_input,
-                    _skill_image_input("sketch", slot_kind="sketch"),
-                ],
-            ),
-            user={"username": "admin"},
-        )
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "render_identity_detection_required"
-    assert "AI 检测" in exc.value.detail["message"]
-    assert "#8" in exc.value.detail["message"]
-    assert enqueued == []
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_frame_rejects_missing_identities_with_node_hint(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    _write_canvas_with_node(
-        tmp_path,
-        "canvas_a",
-        {"id": "skill_frame", "type": "skillNode", "data": {"preset_managed": True}},
-    )
-    enqueued = _patch_frame_enqueue_recorder(monkeypatch)
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    beat_input = _standalone_skill_beat_input()
-    beat_input["beat_context"]["detected_identities"] = []
-
-    with pytest.raises(freezone_routes.HTTPException) as exc:
-        await freezone_routes.freezone_skill_run(
-            project="proj_freezone",
-            skill_id="freezone.frame_from_context",
-            body=SkillRunRequest(
-                skill_node_id="skill_frame",
-                canvas_id="canvas_a",
-                resolved_inputs=[
-                    beat_input,
-                    _skill_image_input("sketch", slot_kind="sketch"),
-                ],
-            ),
-            user={"username": "admin"},
-        )
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "render_identity_detection_required"
-    message = exc.value.detail["message"]
-    assert "镜头上下文" in message
-    assert "无角色出场" in message
-    assert "AI 检测" not in message
-    assert "#0" not in message
-    assert enqueued == []
-
-
-@pytest.mark.asyncio
-async def test_skill_run_standalone_frame_accepts_no_character_marker_at_beat_zero(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_dir, _output_dir = _patch_freezone_project(monkeypatch, tmp_path)
-    _write_canvas_with_node(
-        tmp_path,
-        "canvas_a",
-        {"id": "skill_frame", "type": "skillNode", "data": {"preset_managed": True}},
-    )
-    enqueued = _patch_frame_enqueue_recorder(monkeypatch)
-    _write_image(project_dir / "freezone" / "sketch.png", size=(800, 1200))
-    beat_input = _standalone_skill_beat_input()
-    beat_input["beat_context"]["visual_description"] = "雨夜便利店门口，空无一人。"
-    beat_input["beat_context"]["detected_identities"] = [NO_CHARACTER_MARKER]
-
-    await freezone_routes.freezone_skill_run(
-        project="proj_freezone",
-        skill_id="freezone.frame_from_context",
-        body=SkillRunRequest(
-            skill_node_id="skill_frame",
-            canvas_id="canvas_a",
-            resolved_inputs=[
-                beat_input,
-                _skill_image_input("sketch", slot_kind="sketch"),
-            ],
-        ),
-        user={"username": "admin"},
-    )
-
-    assert len(enqueued) == 1
-    beat = enqueued[0]["payload"]["config"]["beats"][0]
-    assert beat["beat_number"] == 0
-    assert beat["detected_identities"] == [NO_CHARACTER_MARKER]
 
 
 @pytest.mark.asyncio
@@ -7972,13 +6061,13 @@ async def test_skill_result_uses_task_result_dict_output_url(
         run_id,
         {
             "run_id": run_id,
-            "skill_id": "freezone.sketch_from_context",
+            "skill_id": "freezone.scene_360",
             "status": "queued",
             "task_type": "freezone_gen",
             "job_id": "job_result_dict",
             "task_key": "task:freezone_gen:project:proj_freezone:0:job_result_dict",
             "output": {
-                "role": "current_sketch_candidate",
+                "role": "scene_360_candidate",
                 "media_type": "image",
                 "node_type": "imageGenNode",
                 "pushable": True,
@@ -8020,13 +6109,13 @@ async def test_skill_result_falls_back_to_known_output_suffixes(
         run_id,
         {
             "run_id": run_id,
-            "skill_id": "freezone.frame_from_context",
+            "skill_id": "freezone.scene_360",
             "status": "queued",
             "task_type": "freezone_edit",
             "job_id": "job_result_webp",
             "task_key": "task:freezone_edit:project:proj_freezone:0:job_result_webp",
             "output": {
-                "role": "current_frame_candidate",
+                "role": "scene_360_candidate",
                 "media_type": "image",
                 "node_type": "imageGenNode",
                 "pushable": True,
@@ -8085,13 +6174,13 @@ async def test_skill_result_normalizes_nested_outputs_from_task_result(
         run_id,
         {
             "run_id": run_id,
-            "skill_id": "freezone.frame_from_context",
+            "skill_id": "freezone.scene_360",
             "status": "queued",
             "task_type": "freezone_edit",
             "job_id": "job_nested_outputs",
             "task_key": "task:freezone_edit:project:proj_freezone:0:job_nested_outputs",
             "output": {
-                "role": "current_frame_candidate",
+                "role": "scene_360_candidate",
                 "media_type": "image",
                 "node_type": "imageGenNode",
                 "pushable": True,
@@ -8108,7 +6197,7 @@ async def test_skill_result_normalizes_nested_outputs_from_task_result(
                 result={
                     "outputs": [
                         {
-                            "role": "current_frame_candidate",
+                            "role": "scene_360_candidate",
                             "media_type": "image",
                             "node_type": "imageGenNode",
                             "pushable": True,
@@ -8135,7 +6224,7 @@ async def test_skill_result_normalizes_nested_outputs_from_task_result(
 
     assert result.status == "done"
     assert [output.role for output in result.outputs] == [
-        "current_frame_candidate",
+        "scene_360_candidate",
         "review_report",
     ]
     assert result.outputs[0].image_url == "/static/admin/demo/freezone/_outputs/nested.png"
@@ -8158,13 +6247,13 @@ async def test_skill_result_normalizes_output_path_from_task_result(
         run_id,
         {
             "run_id": run_id,
-            "skill_id": "freezone.frame_from_context",
+            "skill_id": "freezone.scene_360",
             "status": "queued",
             "task_type": "freezone_edit",
             "job_id": "job_output_path",
             "task_key": "task:freezone_edit:project:proj_freezone:0:job_output_path",
             "output": {
-                "role": "current_frame_candidate",
+                "role": "scene_360_candidate",
                 "media_type": "image",
                 "node_type": "imageGenNode",
                 "pushable": True,
@@ -9211,7 +7300,7 @@ def test_all_preset_node_factories_emit_preset_managed_true() -> None:
         _image_gen_node("g1", 0, 0, "L", "p"),
         _asset_image_node("a1", 0, 0, {"url": "/a.png", "role": "scene_master"}),
         _prompt_text_node("pt1", 0, 0, "L", "p"),
-        _skill_node("s1", 0, 0, skill_id="freezone.sketch_from_context", display_name="Skill"),
+        _skill_node("s1", 0, 0, skill_id="freezone.scene_360", display_name="Skill"),
     ]
     for node in nodes:
         assert (
@@ -9321,7 +7410,7 @@ def _beat_skill_emit_payload(
         "episode": 1,
         "beat": 8,
         "primary_slot": "render",
-        "sketch_aspect_ratio": "2:3",
+        "frame_aspect_ratio": "2:3",
         "beat_data": {
             "beat_number": 8,
             "narration_segment": "男青年盯着桌上的账单。",
@@ -9331,17 +7420,6 @@ def _beat_skill_emit_payload(
             "detected_props": prop_ids,
         },
         "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "label": "当前草图",
-                "rel_path": "sketches/ep001/beat_08.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_08.png",
-                "exists": True,
-                "media_type": "image",
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 8},
-            },
             {
                 "kind": "frame",
                 "role": "current_frame",
@@ -9462,18 +7540,6 @@ def test_beat_preset_skill_node_emit_expected_skill_ids() -> None:
     assert {node_id: node["data"].get("skill_id") for node_id, node in skill_nodes.items()} == {
         "skill_set_selected_background": "freezone.set_selected_background",
         "skill_set_director_combined": "freezone.set_director_combined",
-        "skill_sketch_from_background": "freezone.sketch_from_context",
-        "skill_sketch_from_director_combined": "freezone.sketch_from_director_combined",
-        "skill_frame_from_context": "freezone.frame_from_context",
-    }
-    assert skill_nodes["skill_sketch_from_background"]["data"]["parameters"] == {
-        "aspect_ratio": "2:3"
-    }
-    assert skill_nodes["skill_sketch_from_director_combined"]["data"]["parameters"] == {
-        "aspect_ratio": "2:3"
-    }
-    assert skill_nodes["skill_frame_from_context"]["data"]["parameters"] == {
-        "quality": "medium",
     }
 
 
@@ -9530,87 +7596,7 @@ def test_beat_preset_skill_role_edges_target_handle_equals_role() -> None:
     assert actual == {
         ("context_beat", "skill_set_selected_background", "beat_context", "beat_context"),
         ("context_beat", "skill_set_director_combined", "beat_context", "beat_context"),
-        ("context_beat", "skill_sketch_from_background", "beat_context", "beat_context"),
-        ("context_beat", "skill_sketch_from_director_combined", "beat_context", "beat_context"),
-        ("context_beat", "skill_frame_from_context", "beat_context", "beat_context"),
-        ("ref_selected_background_1", "skill_sketch_from_background", "background", "background"),
-        ("ref_selected_background_1", "skill_frame_from_context", "background", "background"),
-        (
-            "ref_director_combined_1",
-            "skill_sketch_from_director_combined",
-            "director_combined",
-            "director_combined",
-        ),
-        ("ref_current_sketch_1", "skill_frame_from_context", "sketch", "sketch"),
-        (
-            "ref_character_identity_1",
-            "skill_frame_from_context",
-            "identity",
-            "identity:男青年_default",
-        ),
-        ("ref_character_portrait_1", "skill_frame_from_context", "identity", "identity:男青年"),
-        ("ref_prop_reference_1", "skill_frame_from_context", "prop", "prop:账单"),
     }
-    edges_by_pair = {(edge["source"], edge["target"]): edge for edge in role_edges}
-    assert edges_by_pair[("ref_character_identity_1", "skill_frame_from_context")]["data"][
-        "reference_target"
-    ] == {"kind": "identity", "identity_id": "男青年_default"}
-    assert edges_by_pair[("ref_character_portrait_1", "skill_frame_from_context")]["data"][
-        "reference_target"
-    ] == {"kind": "identity", "identity_id": "男青年"}
-    assert edges_by_pair[("ref_prop_reference_1", "skill_frame_from_context")]["data"][
-        "reference_target"
-    ] == {"kind": "prop", "prop_id": "账单"}
-
-
-def test_beat_preset_does_not_duplicate_reference_skill_input_edges() -> None:
-    payload = _beat_skill_emit_payload()
-
-    reference_edges = [
-        edge
-        for edge in payload["edges"]
-        if edge.get("target") == "skill_frame_from_context"
-        and (edge.get("data") or {}).get("role") in {"identity", "prop"}
-    ]
-    binding_keys = [
-        (
-            edge.get("source"),
-            edge.get("target"),
-            edge.get("targetHandle"),
-            json.dumps((edge.get("data") or {}).get("reference_target"), sort_keys=True),
-        )
-        for edge in reference_edges
-    ]
-
-    assert len(binding_keys) == len(set(binding_keys))
-
-
-def test_beat_preset_prefers_identity_reference_over_portrait_for_same_identity() -> None:
-    payload = _beat_skill_emit_payload(detected_identities=["男青年_default"])
-
-    identity_edges = [
-        edge
-        for edge in payload["edges"]
-        if edge.get("target") == "skill_frame_from_context"
-        and (edge.get("data") or {}).get("role") == "identity"
-        and edge.get("targetHandle") == "identity:男青年_default"
-    ]
-
-    assert len(identity_edges) == 1
-    assert identity_edges[0]["source"] == "ref_character_identity_1"
-
-
-def test_beat_preset_does_not_connect_no_prop_marker_as_skill_prop_input() -> None:
-    payload = _beat_skill_emit_payload(detected_props=["__NO_PROP__"])
-
-    prop_edges = [
-        edge
-        for edge in payload["edges"]
-        if (edge.get("data") or {}).get("role") == "prop"
-        and edge.get("target") == "skill_frame_from_context"
-    ]
-
-    assert prop_edges == []
 
 
 def test_beat_preset_skill_role_edges_match_skill_registry_inputs() -> None:
@@ -9647,11 +7633,9 @@ def test_beat_preset_skill_outputs_feed_canonical_slots() -> None:
     payload = _beat_skill_emit_payload()
     edges_by_pair = {(edge["source"], edge["target"]): edge for edge in payload["edges"]}
 
-    assert ("skill_sketch_from_background", "ref_current_sketch_1") in edges_by_pair
-    assert ("skill_sketch_from_director_combined", "ref_current_sketch_1") in edges_by_pair
     assert ("skill_set_selected_background", "ref_selected_background_1") in edges_by_pair
     assert ("skill_set_director_combined", "ref_director_combined_1") in edges_by_pair
-    assert ("skill_frame_from_context", "ref_current_frame_1") in edges_by_pair
+    assert not [edge for edge in edges_by_pair if edge[1] == "ref_current_frame_1"]
     assert (
         edges_by_pair[("skill_set_selected_background", "ref_selected_background_1")][
             "sourceHandle"
@@ -9662,22 +7646,7 @@ def test_beat_preset_skill_outputs_feed_canonical_slots() -> None:
         edges_by_pair[("skill_set_director_combined", "ref_director_combined_1")]["sourceHandle"]
         == "director_combined"
     )
-    assert (
-        edges_by_pair[("skill_sketch_from_background", "ref_current_sketch_1")]["sourceHandle"]
-        == "current_sketch_candidate"
-    )
-    assert (
-        edges_by_pair[("skill_sketch_from_director_combined", "ref_current_sketch_1")][
-            "sourceHandle"
-        ]
-        == "current_sketch_candidate"
-    )
-    assert (
-        edges_by_pair[("skill_frame_from_context", "ref_current_frame_1")]["sourceHandle"]
-        == "current_frame_candidate"
-    )
 
-    assert ("ref_current_sketch_1", "ref_current_frame_1") not in edges_by_pair
     assert ("ref_character_identity_1", "ref_current_frame_1") not in edges_by_pair
     assert ("ref_prop_reference_1", "ref_current_frame_1") not in edges_by_pair
 
@@ -9692,7 +7661,6 @@ def test_beat_preset_edges_are_preset_managed() -> None:
 def test_beat_preset_canonical_source_nodes_have_no_typed_action_fields() -> None:
     payload = _beat_skill_emit_payload()
     canonical_node_ids = {
-        "ref_current_sketch_1",
         "ref_current_frame_1",
         "ref_selected_background_1",
         "ref_director_combined_1",

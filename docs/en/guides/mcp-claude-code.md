@@ -77,12 +77,11 @@ The tools cover the full pipeline. A typical end-to-end run:
 4. `dramaclaw_plan_identities` → per-episode identities
 5. `dramaclaw_generate_script` → episode script
 6. `dramaclaw_generate_portrait` / `dramaclaw_generate_scene_master` → key art
-7. `dramaclaw_generate_sketches` → storyboards
-8. `dramaclaw_render_first_frames` → first frames
-9. `dramaclaw_start_single_video` → shot video
-10. `dramaclaw_generate_audio` → voice-over
-11. `dramaclaw_compose_episode` → assemble
-12. `dramaclaw_get_final_video` → the finished episode (returns a servable URL)
+7. `dramaclaw_post` → `/projects/{p}/episodes/{n}/beats/{b}/render/upload` — upload a first frame per shot
+8. `dramaclaw_start_single_video` → shot video
+9. `dramaclaw_generate_audio` → voice-over
+10. `dramaclaw_compose_episode` → assemble
+11. `dramaclaw_get_final_video` → the finished episode (returns a servable URL)
 
 Generation is **asynchronous**: a tool call starts a task, then the agent polls
 `dramaclaw_pipeline_status` / `dramaclaw_list_tasks` / `dramaclaw_get_task` until

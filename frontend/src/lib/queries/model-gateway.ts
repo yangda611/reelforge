@@ -862,8 +862,6 @@ export function useSaveMediaModels() {
                 || query.queryKey.includes("video")
                 || query.queryKey.includes("audio")
                 || query.queryKey.includes("blockout")))
-            || query.queryKey.includes("render-settings")
-            || query.queryKey.includes("sketch-settings")
             || query.queryKey.includes("character-image-selection")
             || query.queryKey.includes("image-source-selection")
             || query.queryKey.includes("video-backends")

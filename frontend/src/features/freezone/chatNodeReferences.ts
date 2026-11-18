@@ -1239,7 +1239,7 @@ function buildCanvasCommandCatalog(canvasId: string): Record<string, unknown> {
               "request.episode": "Required for episode and beat scopes.",
               "request.beat": "Required for beat scope.",
               "request.primary_slot":
-                "For beat scope, use sketch or frame when the user specifies 草图 or 分镜.",
+                "For beat scope, use frame when the user specifies 分镜.",
               "request.asset_kind":
                 "Required for asset scope. Examples: character, identity, portrait, scene, prop.",
               "request.character":

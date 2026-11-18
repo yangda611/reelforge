@@ -54,7 +54,7 @@ Agent 处理用户编辑请求时，查此文档获取具体字段名、类型�
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `identity_name` | string | 身份名称（如"便装"、"朝服"、"战甲"） |
-| `appearance_details` | string | 外观描述（**必须**具体到服装颜色+款式+材质，避免"正装"、"便装"、"休闲装"等模糊词）。不含面部。→ 重做身份图 → 影响草图/首帧服装一致性 |
+| `appearance_details` | string | 外观描述（**必须**具体到服装颜色+款式+材质，避免"正装"、"便装"、"休闲装"等模糊词）。不含面部。→ 重做身份图 → 影响首帧服装一致性 |
 
 ## 剧集
 
@@ -76,7 +76,7 @@ Agent 处理用户编辑请求时，查此文档获取具体字段名、类型�
 | 字段 | API | 说明 | 下游影响 |
 |------|-----|------|----------|
 | `raw_content` | `GET/PUT /projects/{project}/episodes/{ep}/raw-content` | 原文（剧集工作台原始文案） | 改变后：改写稿（若已存在）变旧 → 需重新改写；直接生成剧本时 → 需重新生成 beats |
-| `adapted_content` | `GET/PUT/DELETE /projects/{project}/episodes/{ep}/adapted-content` | 解说改写后的工作副本 | → 重新生成剧本 → 草图/首帧/视频/合成 |
+| `adapted_content` | `GET/PUT/DELETE /projects/{project}/episodes/{ep}/adapted-content` | 解说改写后的工作副本 | → 重新生成剧本 → 首帧/视频/合成 |
 
 **DELETE 语义**：清空改写稿后，剧本生成会回退到原文。
 
@@ -89,9 +89,9 @@ Agent 处理用户编辑请求时，查此文档获取具体字段名、类型�
 | 字段 | 类型 | 说明 | 下游影响 |
 |------|------|------|----------|
 | `narration_segment` | string | 旁白/台词文本 | → 重做配音 |
-| `visual_description` | string | 画面描述 | → 重做草图 → 首帧 → 视频 |
-| `location` | string | 场景地点 | → 可能影响草图 |
-| `location_description` | string | 场景详细描述 | → 可能影响草图 |
+| `visual_description` | string | 画面描述 | → 重做首帧 → 视频 |
+| `location` | string | 场景地点 | → 可能影响首帧 |
+| `location_description` | string | 场景详细描述 | → 可能影响首帧 |
 | `time_of_day` | string | 时间（day/night/…） | → 影响光影氛围 |
 | `video_prompt` | string | i2v 视频提示词 | → 重做视频 |
 | `keyframe_prompt` | string | k2v 关键帧提示词 | → 重做视频 |
@@ -144,19 +144,6 @@ Agent 处理用户编辑请求时，查此文档获取具体字段名、类型�
 | 上传小说 | `POST /projects/{project}/ingest/upload` | multipart `file=novel.txt` |
 | 上传肖像 | `POST /projects/{project}/characters/{name}/portrait/upload` | multipart `file=portrait.png` |
 | 上传身份图 | `POST /projects/{project}/characters/{name}/identities/{identity_name}/upload` | multipart `file=identity.png` |
-
-## 图池选择
-
-**工作流**：浏览图池 → 选图 → 更新 beat 首帧
-
-```
-1. GET /projects/{project}/episodes/{ep}/grids → 获取图池数据（含 cell_url、stale 字段）
-2. 向用户展示图池时，交付边界见 delivery-boundaries.md；默认读取摘要策略见 read-behavior.md
-3. 用户选定图片后，先检查该图的 stale 字段：
-   - stale=false → 正常选图：POST pool-select {"pool_id": "..."}
-   - stale=true → 警告旧批次颜色不兼容，用户确认后传 {"pool_id": "...", "force": true}
-   - 禁止 try→fail→force 模式（先不带 force → 被拒 → 再加 force 重试）
-```
 
 ## 音频操作
 

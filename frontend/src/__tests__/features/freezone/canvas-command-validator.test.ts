@@ -680,7 +680,7 @@ describe("canvas command validator", () => {
     const skillNode = node({
       id: "skill-node",
       type: CANVAS_NODE_TYPES.skill,
-      data: { skill_id: "freezone.sketch_from_context" },
+      data: { skill_id: "freezone.set_selected_background" },
     });
     const envelope: CanvasChatCommandEnvelope = {
       schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
@@ -708,15 +708,15 @@ describe("canvas command validator", () => {
           id: "edge-background",
           source: "pending-background",
           target: "skill-node",
-          targetHandle: "background",
-          data: { role: "background" },
+          targetHandle: "source_image",
+          data: { role: "source_image" },
         },
       ],
     );
 
     expect(result.ok).toBe(false);
     expect(result.issues[0]?.message).toContain("action preconditions are not satisfied");
-    expect(result.issues[0]?.message).toContain("background");
+    expect(result.issues[0]?.message).toContain("source_image");
     expect(result.issues[0]?.message).toContain("imageUrl");
   });
 

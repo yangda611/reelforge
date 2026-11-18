@@ -50,10 +50,9 @@ function computeCounts(
   totalBeats: number,
   requireAudio: boolean,
 ): EpisodeCounts {
-  const stages: Array<Exclude<StageId, "compose">> = ["script", "sketch", "audio", "video"];
+  const stages: Array<Exclude<StageId, "compose">> = ["script", "audio", "video"];
   const per: Record<Exclude<StageId, "compose">, StageCount> = {
     script: { ready: 0, total: totalBeats, active: 0, failed: 0 },
-    sketch: { ready: 0, total: totalBeats, active: 0, failed: 0 },
     audio: { ready: 0, total: totalBeats, active: 0, failed: 0 },
     video: { ready: 0, total: totalBeats, active: 0, failed: 0 },
   };
@@ -69,9 +68,8 @@ function computeCounts(
 
   // Compose readiness mirrors the BE actor's own pre-flight
   // (supertale-be ray_tasks.py _run_compose_episode): only the audio and
-  // video files per beat are required. Sketch is an upstream input to video
-  // generation — once the video clip exists, compose (which concatenates
-  // clips + audio) no longer needs the sketch/keyframe image.
+  // video files per beat are required. Compose concatenates clips + audio and
+  // does not need any upstream image once the video clip exists.
   // 精品剧 (requireAudio === false) embeds narration in the video, so audio is
   // not a compose blocker for it.
   const missing: EpisodeCounts["compose"]["missing"] = [];

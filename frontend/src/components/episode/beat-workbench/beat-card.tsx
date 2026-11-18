@@ -9,27 +9,19 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { resolveMediaUrl } from "@/lib/media-url";
-import { resolveImage } from "@/lib/resolve-image";
 import { cn } from "@/lib/utils";
 import type { Beat } from "@/types/episode";
-import type { PoolImage } from "@/lib/queries/sketches";
 
 interface BeatCardProps {
   beat: Beat;
   displayNumber: number;
-  showSketch: boolean;
-  showRender: boolean;
-  images: PoolImage[];
-  assignments: Record<string, string>;
-  aspectRatio: "portrait" | "landscape";
   isSelected: boolean;
   isChecked: boolean;
   onCardClick: (beatNum: number) => void;
   onCheckboxClick: (beatNum: number) => void;
   onInsertBefore?: (beatNum: number) => void;
   onInsertAfter?: (beatNum: number) => void;
-  onOpenFreezone?: (beatNum: number, primarySlot: "sketch" | "frame") => void;
+  onOpenFreezone?: (beatNum: number) => void;
   onDeleteManual?: (beatNum: number, displayNumber: number) => void;
   isOpeningFreezone?: boolean;
   isDeletingManual?: boolean;
@@ -38,11 +30,6 @@ interface BeatCardProps {
 function BeatCardImpl({
   beat,
   displayNumber,
-  showSketch,
-  showRender,
-  images,
-  assignments,
-  aspectRatio,
   isSelected,
   isChecked,
   onCardClick,
@@ -55,23 +42,6 @@ function BeatCardImpl({
   isDeletingManual = false,
 }: BeatCardProps) {
   const { t } = useTranslation();
-  const hasVisibleMedia = showSketch || showRender;
-  const dualImage = showSketch && showRender;
-
-  const sketch = showSketch
-    ? resolveImage(images, assignments, beat.beat_number, "sketch", beat.sketch_url ?? null)
-    : null;
-  const render = showRender
-    ? resolveImage(images, assignments, beat.beat_number, "render", beat.frame_url ?? null)
-    : null;
-  const mainImage = dualImage ? (render?.url ? render : sketch) : showRender ? render : sketch;
-  const mainAlt = dualImage ? (render?.url ? "render" : "sketch") : showRender ? "render" : "sketch";
-  const mainPlaceholder =
-    mainAlt === "render" ? t("episode.beat.noRender") : t("episode.beat.noSketch");
-  const shouldShowSketchOverlay = dualImage && mainAlt === "render";
-  const freezonePrimarySlot = mainAlt === "render" ? "frame" : "sketch";
-  const useHorizontalActions = aspectRatio === "landscape";
-
   const s9SubshotCount = (() => {
     if (Array.isArray(beat.s9_subshots) && beat.s9_subshots.length > 0) {
       return beat.s9_subshots.length;
@@ -119,8 +89,7 @@ function BeatCardImpl({
         isSelected && "border-primary/65 bg-white/[0.03]",
         isChecked && !isSelected && "border-primary/45 bg-white/[0.03]",
         !isSelected && !isChecked && "border-white/[0.08] hover:border-white/[0.28] hover:bg-white/[0.03]",
-        // Ensure text-only cards have reasonable minimum height
-        !hasVisibleMedia && "min-h-[100px]",
+        "min-h-[120px]",
       )}
     >
       <div className="absolute left-1.5 top-1.5 z-20 flex max-w-[calc(100%-3.75rem)] flex-wrap items-center gap-1">
@@ -201,53 +170,32 @@ function BeatCardImpl({
         </button>
       </div>
 
-      {/* Card body — clickable */}
+      {/* Card body — clickable, shows the beat text */}
       <button
         type="button"
         onClick={() => onCardClick(beat.beat_number)}
-        className="flex flex-1 flex-col text-left"
+        className="flex flex-1 flex-col gap-1.5 px-2.5 pb-2 pt-9 text-left"
       >
-        {hasVisibleMedia && (
-          <div className="relative w-full">
-            <ImageSlot
-              src={mainImage?.url ?? null}
-              alt={mainAlt}
-              placeholder={mainPlaceholder}
-              className="w-full"
-              aspectRatio={aspectRatio}
-            />
-            {shouldShowSketchOverlay && (
-              <div
-                className={cn(
-                  "absolute bottom-1.5 left-1.5 w-[32%] min-w-10 max-w-16 overflow-hidden rounded-[5px] border border-white/[0.16] bg-black/50 shadow-[0_10px_26px_rgba(0,0,0,0.48)] backdrop-blur",
-                  aspectRatio === "landscape" && "w-[24%]",
-                )}
-              >
-                <ImageSlot
-                  src={sketch?.url ?? null}
-                  alt="sketch"
-                  placeholder={t("episode.beat.noSketch")}
-                  className="w-full"
-                  aspectRatio={aspectRatio}
-                />
-              </div>
-            )}
-          </div>
+        <p className="line-clamp-3 text-xs leading-5 text-foreground">
+          {beat.narration_segment || (
+            <span className="italic text-muted-foreground/60">
+              {t("episode.beat.noNarration")}
+            </span>
+          )}
+        </p>
+        {beat.visual_description && (
+          <p className="line-clamp-3 text-[11px] leading-4 text-muted-foreground">
+            {beat.visual_description}
+          </p>
         )}
       </button>
-      {(onInsertBefore || onInsertAfter || onOpenFreezone) && hasVisibleMedia && (
-        <div
-          className={cn(
-            "absolute bottom-1.5 right-1.5 z-20 flex items-center gap-1",
-            useHorizontalActions ? "flex-row" : "flex-col",
-          )}
-        >
+      {(onInsertBefore || onInsertAfter || onOpenFreezone) && (
+        <div className="flex items-center justify-end gap-1 px-2 pb-2">
           {onInsertBefore && (
             <BeatCardActionButton
               label={t("episode.beat.insertBeforeShort")}
               tooltip={t("episode.beat.insertBefore", { n: displayNumber })}
               onClick={() => onInsertBefore(beat.beat_number)}
-              tooltipSide={useHorizontalActions ? "top" : "right"}
             />
           )}
           {onInsertAfter && (
@@ -255,7 +203,6 @@ function BeatCardImpl({
               label={t("episode.beat.insertAfterShort")}
               tooltip={t("episode.beat.insertAfter", { n: displayNumber })}
               onClick={() => onInsertAfter(beat.beat_number)}
-              tooltipSide={useHorizontalActions ? "top" : "right"}
             />
           )}
           {onOpenFreezone && (
@@ -268,10 +215,9 @@ function BeatCardImpl({
                 )
               }
               tooltip={t("episode.beat.openFreezoneTip")}
-              onClick={() => onOpenFreezone(beat.beat_number, freezonePrimarySlot)}
+              onClick={() => onOpenFreezone(beat.beat_number)}
               disabled={isOpeningFreezone}
               ariaLabel={t("episode.beat.openFreezone")}
-              tooltipSide={useHorizontalActions ? "top" : "right"}
             />
           )}
         </div>
@@ -288,14 +234,12 @@ function BeatCardActionButton({
   onClick,
   disabled = false,
   ariaLabel,
-  tooltipSide = "right",
 }: {
   label: React.ReactNode;
   tooltip: string;
   onClick: () => void;
   disabled?: boolean;
   ariaLabel?: string;
-  tooltipSide?: "top" | "right";
 }) {
   return (
     <Tooltip>
@@ -318,7 +262,7 @@ function BeatCardActionButton({
         {label}
       </TooltipTrigger>
       <TooltipContent
-        side={tooltipSide}
+        side="top"
         sideOffset={8}
         showArrow={false}
         className="border border-white/10 bg-background/95 text-foreground shadow-none"
@@ -326,40 +270,5 @@ function BeatCardActionButton({
         {tooltip}
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-function ImageSlot({
-  src,
-  alt,
-  placeholder,
-  className,
-  aspectRatio,
-}: {
-  src: string | null;
-  alt: string;
-  placeholder: string;
-  className?: string;
-  aspectRatio: "portrait" | "landscape";
-}) {
-  const resolved = src ? resolveMediaUrl(src) : null;
-  return (
-    <div
-      className={cn(
-        "relative overflow-hidden bg-black/35",
-        aspectRatio === "portrait"
-          ? "aspect-[2/3]"
-          : "aspect-video",
-        className,
-      )}
-    >
-      {resolved ? (
-        <img src={resolved} alt={alt} className="h-full w-full object-cover" loading="lazy" decoding="async" />
-      ) : (
-        <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground/40">
-          {placeholder}
-        </div>
-      )}
-    </div>
   );
 }

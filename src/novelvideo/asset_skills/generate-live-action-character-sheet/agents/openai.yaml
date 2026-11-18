@@ -1,0 +1,13 @@
+interface:
+  display_name: 真人电影角色三视图
+  short_description: 用于真人实拍角色定妆、正背面衣装与头像特写的三联资产图生成
+  default_prompt: 请使用 $generate-live-action-character-sheet 生成真人演员定妆三联图，保留自然皮肤与衣料细节；优先遵从我的描述及认可参考图的取景和穿戴状态，无参考时采用左侧无头正面衣装、中间完整背面、右侧正面头像。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -11,7 +11,6 @@ import {
   shouldDisableDialogueOnlyBackendForBeat,
   VideoPane,
 } from "@/components/episode/beat-workbench/video-pane";
-import { BackendStatusError } from "@/lib/api-errors";
 import { useAspectRatioStore } from "@/stores/aspect-ratio-store";
 import type { Beat } from "@/types/episode";
 
@@ -114,13 +113,11 @@ beforeAll(async () => {
                 generateVideo: "生成视频",
                 preview: {
                   render: "Render",
-                  sketch: "草图",
                   audio: "音频",
                   video: "视频",
                 },
                 previewMissing: {
                   render: "暂无 Render 首帧",
-                  sketch: "暂无草图",
                   audio: "暂无音频",
                   video: "暂无视频",
                 },
@@ -177,10 +174,6 @@ beforeAll(async () => {
                 seedance2PromptGenerateFailed: "Seedance2 Prompt 生成失败",
                 videoPrompt: "视频提示词",
                 keyframePrompt: "单个 Beat 视频提示词",
-                generateBeatVideoPrompt: "生成本 Beat 提示词",
-                beatVideoPromptGenerated: "本 Beat 视频提示词已生成",
-                beatVideoPromptGenerateStarted: "本 Beat 视频提示词生成已启动",
-                beatVideoPromptGenerateFailed: "本 Beat 视频提示词生成失败",
                 beatVideoPromptRequired:
                   "Beat #{{n}} 缺少视频提示词，请先点击“生成本 Beat 提示词”。",
                 seedance2PromptRequired:
@@ -231,7 +224,6 @@ const poolSelectMock: Mock = vi.fn();
 const taskStartMock: Mock = vi.fn();
 const deleteNarratorVoiceMock: Mock = vi.fn();
 const generateSeedance2PromptMock: Mock = vi.fn();
-const generateBeatVideoPromptMock: Mock = vi.fn();
 const cropSeedance2AssetMock: Mock = vi.fn();
 const trimSeedance2AssetMock: Mock = vi.fn();
 const videoQueryMockState = vi.hoisted(() => ({
@@ -459,10 +451,6 @@ vi.mock("@/lib/queries/video", () => ({
     mutateAsync: generateSeedance2PromptMock,
     isPending: false,
   }),
-  useGenerateBeatVideoPrompt: () => ({
-    mutateAsync: generateBeatVideoPromptMock,
-    isPending: false,
-  }),
   useSeedance2BeatStatus: () => ({
     data: videoQueryMockState.voiceStatusAvailable ? {
       ok: true,
@@ -674,10 +662,8 @@ vi.mock("@/lib/queries/scripts", () => ({
 vi.mock("@/lib/queries/generation-credit-cost", () => ({
   useGenerationCreditCost: (kind: string, value?: string) => ({
     data:
-      kind === "feature" && value === "mainline.beat_video_prompt"
-        ? { ok: true, data: { cost: 5, display: "5" } }
-        : kind === "feature" && value === "mainline.seedance2_prompt"
-          ? { ok: true, data: { cost: 6, display: "6" } }
+      kind === "feature" && value === "mainline.seedance2_prompt"
+        ? { ok: true, data: { cost: 6, display: "6" } }
         : kind === "feature" && value === "mainline.beat_video_generation"
           ? { ok: true, data: { cost: 10, display: "10" } }
         : { ok: true, data: { cost: 0, display: null } },
@@ -805,15 +791,6 @@ beforeEach(() => {
       }),
     },
   });
-  generateBeatVideoPromptMock.mockReset();
-  generateBeatVideoPromptMock.mockResolvedValue({
-    ok: true,
-    data: {
-      field: "video_prompt",
-      prompt: "generated 1.x motion prompt",
-      beat: makeBeat({ video_prompt: "generated 1.x motion prompt" }),
-    },
-  });
 });
 
 async function waitForSeedance2Autosave(times = 1) {
@@ -921,72 +898,6 @@ describe("VideoPane Seedance2 inspector", () => {
     expect(await screen.findByText("裁剪 9:16")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "2:3" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "16:9" })).not.toBeInTheDocument();
-  });
-
-  it("generates a single 1.x beat video prompt from the video pane", async () => {
-    const user = userEvent.setup();
-    renderPane(
-      makeBeat({ video_mode: "first_frame", video_prompt: "" }),
-      { defaultBackend: "newapi_seedance-1.0-pro-fast" },
-    );
-
-    const promptButton = screen.getByRole("button", {
-      name: "生成本 Beat 提示词",
-    });
-    expect(promptButton).toHaveTextContent("5");
-    await user.click(promptButton);
-
-    expect(generateBeatVideoPromptMock).toHaveBeenCalledWith({ beatNum: 1 });
-    expect(screen.getByLabelText("视频提示词")).toHaveValue(
-      "generated 1.x motion prompt",
-    );
-  });
-
-  it("treats async 1.x beat video prompt task startup as success", async () => {
-    const user = userEvent.setup();
-    generateBeatVideoPromptMock.mockResolvedValueOnce({
-      ok: true,
-      task_type: "beat_video_prompt",
-      task_id: "task-prompt-1",
-      task_key: "task:beat_video_prompt:project:proj_123:1:beat:1",
-      message: "第 1 集 Beat 1 提示词生成已入队",
-    });
-    renderPane(
-      makeBeat({ video_mode: "first_frame", video_prompt: "" }),
-      { defaultBackend: "newapi_seedance-1.0-pro-fast" },
-    );
-
-    await user.click(screen.getByRole("button", { name: "生成本 Beat 提示词" }));
-
-    expect(generateBeatVideoPromptMock).toHaveBeenCalledWith({ beatNum: 1 });
-    expect(screen.getByLabelText("视频提示词")).toHaveValue("");
-    expect(toast.success).toHaveBeenCalledWith(
-      "本 Beat 视频提示词生成已启动",
-    );
-    expect(toast.error).not.toHaveBeenCalledWith(
-      "本 Beat 视频提示词生成失败",
-    );
-  });
-
-  it("shows a missing-media prerequisite without starting task tracking", async () => {
-    const user = userEvent.setup();
-    const message = "Beat 1 缺少草图或首帧，请先生成草图或预览";
-    generateBeatVideoPromptMock.mockRejectedValueOnce(
-      new BackendStatusError(message, 409, {
-        ok: false,
-        code: "VIDEO_PROMPT_PREREQUISITE_REQUIRED",
-        error: message,
-      }),
-    );
-    renderPane(
-      makeBeat({ video_mode: "first_frame", video_prompt: "" }),
-      { defaultBackend: "newapi_seedance-1.0-pro-fast" },
-    );
-
-    await user.click(screen.getByRole("button", { name: "生成本 Beat 提示词" }));
-
-    expect(toast.error).toHaveBeenCalledWith(message);
-    expect(taskStartMock).not.toHaveBeenCalled();
   });
 
   it("renders keyframe prompt editing for 1.x keyframe beats", () => {

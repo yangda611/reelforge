@@ -12,17 +12,16 @@ pytestmark = pytest.mark.m09
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_render_plan_routes_are_restored_without_legacy_episode_video_route() -> None:
+def test_render_plan_routes_are_removed() -> None:
     source = (REPO_ROOT / "src/novelvideo/api/routes/generation.py").read_text(
         encoding="utf-8"
     )
 
     assert "/videos/generate" not in source
-    assert "/render/plan" in source
-    assert "/render/execute" in source
-    assert "RenderPlanRequest" in source
-    assert "RenderPlanExecuteRequest" in source
-    assert "start_render_plan_task" not in source
+    for removed in ("/render/plan", "RenderPlanRequest", "start_render_plan_task"):
+        assert removed not in source
+    # first-frame upload is the one render-prefixed route that stays
+    assert "/render/upload" in source
 
 
 def test_legacy_video_generation_task_surface_is_removed() -> None:

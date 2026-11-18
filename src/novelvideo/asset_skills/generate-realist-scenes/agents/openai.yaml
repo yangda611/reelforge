@@ -1,0 +1,13 @@
+interface:
+  display_name: 写实电影场景生成
+  short_description: 从一句场景描述生成自然光、可信空间与生活质感的中英文电影写实提示词
+  default_prompt: 请用 $generate-realist-scenes 为我生成一处县城修车铺的写实电影场景提示词，保留自然光、空间层次与真实使用痕迹。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

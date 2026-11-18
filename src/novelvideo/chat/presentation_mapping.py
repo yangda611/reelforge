@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import re
 from collections.abc import Callable
@@ -213,18 +212,6 @@ def _extract_tool_chat_error(value: Any, *, redact: Callable[[str], str]) -> str
             raw = raw[:1200].rstrip() + "..."
         return raw
 
-    def business_chat_error_from_text(text: object) -> str | None:
-        raw = normalize_error_text(text)
-        if not raw:
-            return None
-        if "Render 模式需要草图" in raw or "未生成可用图片" in raw:
-            return (
-                "Render 任务没有生成可用图片：当前缺少必要草图前置。"
-                "请先在「虾塘」生成或确认对应 Beat 的草图后，再重新生成 Render。"
-                f"\n\n错误原因：{raw[:1200]}"
-            )
-        return None
-
     def generic_chat_error_from_text(text: object) -> str | None:
         raw = normalize_error_text(text)
         if not raw:
@@ -265,11 +252,6 @@ def _extract_tool_chat_error(value: Any, *, redact: Callable[[str], str]) -> str
         chat_error = node.get("chat_error")
         if isinstance(chat_error, str) and chat_error.strip():
             return chat_error.strip()
-
-        for key in ("error", "detail", "message"):
-            mapped = business_chat_error_from_text(node.get(key))
-            if mapped:
-                return mapped
 
         status = str(node.get("status") or "").strip().lower()
         failed_status = status in {"failed", "error", "cancelled", "canceled"}
@@ -361,46 +343,6 @@ def _append_tool_ui_specs(
     return f"{prefix}\n\n" + "\n\n".join(blocks)
 
 
-def _prompt_wants_sketch_only(prompt: str) -> bool:
-    text = str(prompt or "")
-    if "草图" not in text and "sketch" not in text.casefold():
-        return False
-    frame_terms = (
-        "首帧",
-        "第一帧",
-        "关键帧",
-        "first frame",
-        "first-frame",
-        "keyframe",
-        "frame",
-    )
-    return not any(term in text.casefold() for term in frame_terms)
-
-
-def _is_frame_image_element(element: Any) -> bool:
-    if not isinstance(element, dict):
-        return False
-    props = element.get("props")
-    if not isinstance(props, dict):
-        return False
-    fields = [
-        props.get("src"),
-        props.get("poster"),
-        props.get("title"),
-        props.get("alt"),
-        props.get("description"),
-        props.get("overlayTitle"),
-        props.get("overlayDescription"),
-    ]
-    text = "\n".join(str(value or "") for value in fields).casefold()
-    return (
-        "首帧" in text
-        or "/frames/" in text
-        or "first frame" in text
-        or "first-frame" in text
-    )
-
-
 def _filter_tool_ui_specs_for_prompt(
     prompt: str, specs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -409,54 +351,7 @@ def _filter_tool_ui_specs_for_prompt(
 
     if _prompt_continues_video_generation_without_display(prompt):
         specs = [spec for spec in specs if not _is_beat_video_ui_spec(spec)]
-
-    if not specs or not _prompt_wants_sketch_only(prompt):
-        return specs
-
-    filtered_specs: list[dict[str, Any]] = []
-    for spec in specs:
-        if not isinstance(spec, dict) or spec.get("type") != "sketch_gallery":
-            filtered_specs.append(spec)
-            continue
-        elements = spec.get("elements")
-        root_key = spec.get("root")
-        if not isinstance(elements, dict) or not isinstance(root_key, str):
-            filtered_specs.append(spec)
-            continue
-        root = elements.get(root_key)
-        if not isinstance(root, dict):
-            filtered_specs.append(spec)
-            continue
-        children = root.get("children")
-        if not isinstance(children, list):
-            filtered_specs.append(spec)
-            continue
-
-        kept_children: list[str] = []
-        kept_elements: dict[str, Any] = {}
-        for key, element in elements.items():
-            if key == root_key:
-                continue
-            if key in children and _is_frame_image_element(element):
-                continue
-            kept_elements[key] = element
-            if key in children:
-                kept_children.append(key)
-
-        if not kept_children:
-            continue
-        new_root = copy.deepcopy(root)
-        new_root["children"] = kept_children
-        filtered_specs.append(
-            {
-                **spec,
-                "elements": {
-                    root_key: new_root,
-                    **{key: kept_elements[key] for key in kept_elements},
-                },
-            }
-        )
-    return filtered_specs
+    return specs
 
 
 def _prompt_continues_video_generation_without_display(prompt: str) -> bool:

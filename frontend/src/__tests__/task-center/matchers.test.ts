@@ -5,8 +5,8 @@ import { sampleTask } from "@/__mocks__/msw/handlers/tasks";
 import { matchByType, matchByEpisode, matchBeat } from "@/task-center/matchers";
 
 describe("matchByType", () => {
-  const m = matchByType("sketch_regen");
-  it("matches task_type", () => expect(m(sampleTask({ task_type: "sketch_regen" }))).toBe(true));
+  const m = matchByType("single_video");
+  it("matches task_type", () => expect(m(sampleTask({ task_type: "single_video" }))).toBe(true));
   it("rejects other types", () => expect(m(sampleTask({ task_type: "script_writer" }))).toBe(false));
 });
 

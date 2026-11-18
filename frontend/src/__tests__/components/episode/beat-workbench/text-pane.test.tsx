@@ -165,7 +165,7 @@ describe("TextPane", () => {
     expect(screen.queryByText("episode.workbench.text.setProps")).not.toBeInTheDocument();
   });
 
-  it("keeps prompt optimization out of the text editor; SuperPower lives on the sketch workflow", () => {
+  it("keeps prompt optimization out of the text editor; SuperPower lives elsewhere", () => {
     render(
       <Wrapper>
         <TextPane

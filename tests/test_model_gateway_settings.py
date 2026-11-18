@@ -1048,7 +1048,7 @@ def test_ee_cannot_mutate_ce_model_gateway_settings(monkeypatch, tmp_path):
 
 
 def test_ce_runtime_refresh_never_mutates_process_environment(monkeypatch, tmp_path):
-    from novelvideo.agents import global_video_optimizer
+    from novelvideo.agents import character_reviewer
 
     _isolate_settings_db(monkeypatch, tmp_path)
     tracked = {
@@ -1064,7 +1064,7 @@ def test_ce_runtime_refresh_never_mutates_process_environment(monkeypatch, tmp_p
     }
     for key, value in tracked.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(global_video_optimizer, "_global_video_optimizer", object())
+    monkeypatch.setattr(character_reviewer, "_reviewer_agent", object())
     save_official_newapi_key(
         api_key="sk-database-secret",
         base_url="https://official-user.example/v1",
@@ -1075,9 +1075,9 @@ def test_ce_runtime_refresh_never_mutates_process_environment(monkeypatch, tmp_p
 
     assert runtime["configured"] is True
     assert {key: os.environ.get(key) for key in tracked} == tracked
-    assert global_video_optimizer._global_video_optimizer is None
+    assert character_reviewer._reviewer_agent is None
     assert (
-        "novelvideo.agents.global_video_optimizer._global_video_optimizer"
+        "novelvideo.agents.character_reviewer._reviewer_agent"
         in runtime["clearedCaches"]
     )
 
@@ -5519,7 +5519,7 @@ def test_direct_mode_blocks_dc_fallback_and_routes_text_agent_and_singletons(
         "MODEL_NAME",
         "FREEZONE_TEXT_WRITER_MODEL",
         "STAGING_PROP_MODEL",
-        "GLOBAL_VIDEO_MODEL",
+        "SEEDANCE2_PROMPT_COMPOSER_MODEL",
         "COGNEE_LLM_MODEL",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -5626,7 +5626,7 @@ def test_direct_mode_blocks_dc_fallback_and_routes_text_agent_and_singletons(
 
     monkeypatch.setattr(config, "_newapi_text_openai_model", fake_text_model)
     config.get_pydantic_model()
-    config.get_superpower_pydantic_model(feature_model_env="GLOBAL_VIDEO_MODEL")
+    config.get_superpower_pydantic_model(feature_model_env="SEEDANCE2_PROMPT_COMPOSER_MODEL")
     assert captured_calls[0]["model_name"] == "gpt-6.1-sol"
     assert captured_calls[0]["api_key"] == "sk-text-only-8888"
     assert captured_calls[1]["model_name"] == "gpt-6.1-sol"
@@ -5645,7 +5645,7 @@ def test_direct_mode_blocks_dc_fallback_and_routes_text_agent_and_singletons(
                 "channelId": "openai-media-only",
                 "upstreamModel": "gpt-4.1",
             },
-            "GLOBAL_VIDEO_OPTIMIZER": {
+            "SEEDANCE2_PROMPT_COMPOSER": {
                 "channelId": "anthropic-text-only",
                 "upstreamModel": "gpt-5-video",
             },
@@ -5662,6 +5662,6 @@ def test_direct_mode_blocks_dc_fallback_and_routes_text_agent_and_singletons(
         "https://zeroshell.top/v1",
     )
     captured_calls.clear()
-    config.get_superpower_pydantic_model(feature_model_env="GLOBAL_VIDEO_MODEL")
+    config.get_superpower_pydantic_model(feature_model_env="SEEDANCE2_PROMPT_COMPOSER_MODEL")
     assert captured_calls[0]["model_name"] == "gpt-5-video"
     assert captured_calls[0]["api_key"] == "sk-text-only-8888"

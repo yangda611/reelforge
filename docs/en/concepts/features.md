@@ -16,8 +16,8 @@ Turn the novel into a **structured script**, automatically **split into episodes
 ### 🎭 Characters and Props
 AI generates **character designs** and **three-view prop sheets**, building reusable identity assets; identity schemes keep characters / props **visually consistent** across different shots, and per-episode variants can be generated.
 
-### 🏞️ Scenes, Sketches, and First Frames
-Build a **scene library** and generate shot **sketches** and **first-frame images**; the optional `director_world` (3GS / world) feature enhances scenes. Each shot sets its visual tone before moving into production.
+### 🏞️ Scenes and First Frames
+Build a **scene library** and give each shot a **first-frame image** (uploaded, or made on the Freezone canvas); the optional `director_world` (3GS / world) feature enhances scenes. Each shot sets its visual tone before moving into production.
 
 ### 🎬 Final Composition and Export
 Shot-by-shot **video generation** plus emotion-aware **voiceover (TTS)**, then **compose, edit, and export an MP4** (including subtitles and a full asset bundle).

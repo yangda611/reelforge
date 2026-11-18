@@ -45,9 +45,7 @@ PLACEMENT_FREE_TASKS = {
     "freezone_video_gen",
     "freezone_video_story",
     "freezone_video_upscale",
-    "mainline_director_control_sketch",
-    "mainline_frame_from_context",
-    "mainline_sketch_from_context",
+    "freezone_audio_speech",
 }
 
 
@@ -381,14 +379,14 @@ def test_projected_placement_free_task_requires_projection_off_home_node(
         return {"ok": True}
 
     register_project_task_runner(
-        "mainline_frame_from_context",
+        "freezone_audio_speech",
         tracking_runner,
         requires_home_node=False,
     )
 
     with pytest.raises(HTTPException) as exc_info:
         quiet_run_core.run_project_task_core_sync(
-            _verified_delivery(task_type="mainline_frame_from_context"),
+            _verified_delivery(task_type="freezone_audio_speech"),
             _ctx(tmp_path, is_home_node=False),
             _FakeTaskManager(),
             run_task_id="task_1",
@@ -408,21 +406,26 @@ def test_projected_placement_free_task_runs_with_projection_off_home_node(
         return {"ok": True}
 
     register_project_task_runner(
-        "mainline_frame_from_context",
+        "freezone_audio_speech",
         tracking_runner,
         requires_home_node=False,
     )
     payload = {
         "projection": {
             "projection_version": 1,
-            "task_type": "mainline_frame_from_context",
-            "fields": {},
+            "task_type": "freezone_audio_speech",
+            "fields": {
+                "voice_character": None,
+                "narrator_main_character": None,
+                "narration_style": "first_person",
+                "narrator_reference_audio": None,
+            },
         }
     }
 
     result = quiet_run_core.run_project_task_core_sync(
         _verified_delivery(
-            task_type="mainline_frame_from_context",
+            task_type="freezone_audio_speech",
             payload=payload,
         ),
         _ctx(tmp_path, is_home_node=False),

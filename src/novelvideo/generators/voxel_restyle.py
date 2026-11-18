@@ -178,7 +178,6 @@ async def render_voxel_shot_styled(
         image_size_override=size,
     )
     config["openai_image_quality"] = quality
-    config["openai_sketch_image_quality"] = quality
     config["huimeng_image_quality"] = quality
     config["image_size"] = size
 

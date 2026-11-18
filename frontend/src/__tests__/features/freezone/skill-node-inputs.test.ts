@@ -7,10 +7,10 @@ import { nodeDataForOutput } from "@/features/freezone/context/skillNodeOutputs"
 import type { SkillDefinition } from "@/features/freezone/context/skillRoles";
 
 const beatContextSkill: SkillDefinition = {
-  id: "freezone.frame_from_context",
+  id: "freezone.scene_360",
   provider: "freezone_mainline",
-  display_name: "Frame from context",
-  description: "Frame from context",
+  display_name: "Scene 360",
+  description: "Scene 360",
   inputs: [
     {
       role: "beat_context",
@@ -23,15 +23,15 @@ const beatContextSkill: SkillDefinition = {
   outputs: [],
 };
 
-const sketchInputSkill: SkillDefinition = {
-  id: "freezone.frame_from_context",
+const frameInputSkill: SkillDefinition = {
+  id: "freezone.scene_360",
   provider: "freezone_mainline",
-  display_name: "Frame from context",
-  description: "Frame from context",
+  display_name: "Scene 360",
+  description: "Scene 360",
   inputs: [
     {
-      role: "sketch",
-      label: "Sketch",
+      role: "frame",
+      label: "Frame",
       accepts: { node_types: ["imageGenNode"], media_kinds: ["image"] },
       required: true,
       cardinality: "single",
@@ -41,10 +41,10 @@ const sketchInputSkill: SkillDefinition = {
 };
 
 const propInputSkill: SkillDefinition = {
-  id: "freezone.frame_from_context",
+  id: "freezone.scene_360",
   provider: "freezone_mainline",
-  display_name: "Frame from context",
-  description: "Frame from context",
+  display_name: "Scene 360",
+  description: "Scene 360",
   inputs: [
     {
       role: "prop",
@@ -58,10 +58,10 @@ const propInputSkill: SkillDefinition = {
 };
 
 const identityInputSkill: SkillDefinition = {
-  id: "freezone.frame_from_context",
+  id: "freezone.scene_360",
   provider: "freezone_mainline",
-  display_name: "Frame from context",
-  description: "Frame from context",
+  display_name: "Scene 360",
+  description: "Scene 360",
   inputs: [
     {
       role: "identity",
@@ -110,23 +110,23 @@ describe("resolveInputsForSkill", () => {
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
       identityInputSkill,
-      nodes.get("skill_frame")!,
+      nodes.get("skill_scene")!,
       [
         {
           id: "edge_identity_ref",
           source: "identity_ref",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "identity:陆辰_青年时期",
           data: {
             role: "identity",
@@ -136,7 +136,7 @@ describe("resolveInputsForSkill", () => {
         {
           id: "edge_portrait_ref",
           source: "portrait_ref",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "identity:陆辰_青年时期",
           data: {
             role: "identity",
@@ -166,23 +166,23 @@ describe("resolveInputsForSkill", () => {
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
       propInputSkill,
-      nodes.get("skill_frame")!,
+      nodes.get("skill_scene")!,
       [
         {
           id: "edge_no_prop_to_skill",
           source: "prop_image",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "prop:__NO_PROP__",
           data: {
             role: "prop",
@@ -222,23 +222,23 @@ describe("resolveInputsForSkill", () => {
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
       beatContextSkill,
-      nodes.get("skill_frame")!,
+      nodes.get("skill_scene")!,
       [
         {
           id: "edge_context_to_skill",
           source: "context_beat",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "beat_context",
           data: { role: "beat_context" },
         },
@@ -284,23 +284,23 @@ describe("resolveInputsForSkill", () => {
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
       beatContextSkill,
-      nodes.get("skill_frame")!,
+      nodes.get("skill_scene")!,
       [
         {
           id: "edge_context_to_skill",
           source: "context_beat",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "beat_context",
           data: { role: "beat_context" },
         },
@@ -375,7 +375,7 @@ describe("resolveInputsForSkill", () => {
         {
           id: "skill_mainline",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
       [
@@ -383,7 +383,7 @@ describe("resolveInputsForSkill", () => {
         {
           id: "skill_standalone",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
@@ -470,23 +470,23 @@ describe("resolveInputsForSkill", () => {
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
       beatContextSkill,
-      nodes.get("skill_frame")!,
+      nodes.get("skill_scene")!,
       [
         {
           id: "edge_context_to_skill",
           source: "context_beat",
-          target: "skill_frame",
+          target: "skill_scene",
           targetHandle: "beat_context",
           data: { role: "beat_context" },
         },
@@ -508,67 +508,67 @@ describe("resolveInputsForSkill", () => {
   });
 
   it("keeps mainline_context on skill output candidates as provenance", () => {
-    const mainlineContext = [{ kind: "sketch", episode: 1, beat: 4 }];
+    const mainlineContext = [{ kind: "frame", episode: 1, beat: 4 }];
 
     const data = nodeDataForOutput(
       {
-        role: "current_sketch_candidate",
+        role: "current_frame_candidate",
         media_type: "image",
         node_type: "imageGenNode",
         pushable: false,
-        image_url: "/static/sketch.png",
+        image_url: "/static/frame.png",
         mainline_context: mainlineContext,
       },
-      "freezone.sketch_from_context",
-      "skill_sketch",
+      "freezone.set_selected_background",
+      "skill_bg",
     );
 
     expect(data.mainline_context).toEqual(mainlineContext);
     expect(data.candidate_origin).toEqual({
-      skill_id: "freezone.sketch_from_context",
-      skill_node_id: "skill_sketch",
+      skill_id: "freezone.set_selected_background",
+      skill_node_id: "skill_bg",
     });
   });
 
   it("does not consume a normal candidate node mainline_context as skill input context", () => {
     const nodes = new Map([
       [
-        "sketch_candidate",
+        "frame_candidate",
         {
-          id: "sketch_candidate",
+          id: "frame_candidate",
           type: "imageGenNode",
           data: {
-            imageUrl: "/static/sketch.png",
+            imageUrl: "/static/frame.png",
             media_kind: "image",
-            mainline_context: [{ kind: "sketch", episode: 1, beat: 4 }],
-            slot_target: { kind: "sketch", episode: 1, beat: 4 },
+            mainline_context: [{ kind: "frame", episode: 1, beat: 4 }],
+            slot_target: { kind: "frame", episode: 1, beat: 4 },
             candidate_origin: {
-              skill_id: "freezone.sketch_from_context",
-              skill_node_id: "skill_sketch",
+              skill_id: "freezone.set_selected_background",
+              skill_node_id: "skill_bg",
             },
           },
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
-      sketchInputSkill,
-      nodes.get("skill_frame")!,
+      frameInputSkill,
+      nodes.get("skill_scene")!,
       [
         {
-          id: "edge_sketch_to_skill",
-          source: "sketch_candidate",
-          target: "skill_frame",
-          targetHandle: "sketch",
-          data: { role: "sketch" },
+          id: "edge_frame_to_skill",
+          source: "frame_candidate",
+          target: "skill_scene",
+          targetHandle: "frame",
+          data: { role: "frame" },
         },
       ],
       nodes,
@@ -576,51 +576,51 @@ describe("resolveInputsForSkill", () => {
 
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).not.toHaveProperty("mainline_context");
-    expect(inputs[0].slot_target).toEqual({ kind: "sketch", episode: 1, beat: 4 });
+    expect(inputs[0].slot_target).toEqual({ kind: "frame", episode: 1, beat: 4 });
     expect(inputs[0].candidate_origin).toEqual({
-      skill_id: "freezone.sketch_from_context",
-      skill_node_id: "skill_sketch",
+      skill_id: "freezone.set_selected_background",
+      skill_node_id: "skill_bg",
     });
   });
 
   it("can still infer slot_target from normal candidate provenance without consuming it as context", () => {
     const nodes = new Map([
       [
-        "legacy_sketch_candidate",
+        "legacy_frame_candidate",
         {
-          id: "legacy_sketch_candidate",
+          id: "legacy_frame_candidate",
           type: "imageGenNode",
           data: {
-            imageUrl: "/static/sketch.png",
+            imageUrl: "/static/frame.png",
             media_kind: "image",
-            mainline_context: [{ kind: "sketch", episode: 1, beat: 4 }],
+            mainline_context: [{ kind: "frame", episode: 1, beat: 4 }],
             candidate_origin: {
-              skill_id: "freezone.sketch_from_context",
-              skill_node_id: "skill_sketch",
+              skill_id: "freezone.set_selected_background",
+              skill_node_id: "skill_bg",
             },
           },
         },
       ],
       [
-        "skill_frame",
+        "skill_scene",
         {
-          id: "skill_frame",
+          id: "skill_scene",
           type: "skillNode",
-          data: { skill_id: "freezone.frame_from_context" },
+          data: { skill_id: "freezone.scene_360" },
         },
       ],
     ]);
 
     const inputs = resolveInputsForSkill(
-      sketchInputSkill,
-      nodes.get("skill_frame")!,
+      frameInputSkill,
+      nodes.get("skill_scene")!,
       [
         {
-          id: "edge_sketch_to_skill",
-          source: "legacy_sketch_candidate",
-          target: "skill_frame",
-          targetHandle: "sketch",
-          data: { role: "sketch" },
+          id: "edge_frame_to_skill",
+          source: "legacy_frame_candidate",
+          target: "skill_scene",
+          targetHandle: "frame",
+          data: { role: "frame" },
         },
       ],
       nodes,
@@ -628,6 +628,6 @@ describe("resolveInputsForSkill", () => {
 
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).not.toHaveProperty("mainline_context");
-    expect(inputs[0].slot_target).toEqual({ kind: "sketch", episode: 1, beat: 4 });
+    expect(inputs[0].slot_target).toEqual({ kind: "frame", episode: 1, beat: 4 });
   });
 });

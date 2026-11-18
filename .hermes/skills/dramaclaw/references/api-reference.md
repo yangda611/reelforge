@@ -76,19 +76,6 @@
 | `POST` | `/projects/{project}/episodes/{ep}/rewrite/generate` | 解说改写：原文 → 改写稿 `{"target_beats":18,"beat_chars_min":14,"beat_chars_max":20,"narration_style":"first_person"}` [ASYNC → content_rewriter] |
 | `POST` | `/projects/{project}/episodes/{ep}/script/generate` | 生成剧本 [ASYNC → script_writer]；当前后端没有 `literal-script/generate` 路由 |
 
-## 画面生成
-
-| 方法 | 路径 | 用途 |
-|------|------|------|
-| `POST` | `/projects/{project}/episodes/{ep}/sketches/generate` | 草图 `{"style":"...","model":"nanobanana","grid_index":0,"sketch_location_grouping":true}` [ASYNC]。后端按 beat 数自动拆成 N 张 grid（2x4 起步，按容量 8/6/4/2/1 降级；18 beat→`2x4+2x4+1x2` 共 3 张）。每次只启动一个 `grid_index`；首次调用的 SSE result 里返回 `total_grids`。如果还有后续 grid，等用户下一轮“继续”再启动下一个；不要同一轮循环所有 grid。详见 `step-api-reference.md` Step 12。 |
-| `POST` | `/projects/{project}/episodes/{ep}/grids/generate` | 九宫格 [ASYNC] |
-| `POST` | `/projects/{project}/episodes/{ep}/grids/{idx}/regenerate` | 重新生成单个网格 [ASYNC] |
-| `POST` | `/projects/{project}/episodes/{ep}/grids/{idx}/cut` | 切割入池 |
-| `GET` | `/projects/{project}/episodes/{ep}/grids` | 查看九宫格与图池（返回 `images[].stale` 布尔字段，true=旧版脚本生成） |
-| `POST` | `/projects/{project}/episodes/{ep}/beats/{beat}/pool-select` | 从图池选图 `{"pool_id":"...","force":false}` 旧批次需 `force:true` |
-| `POST` | `/projects/{project}/episodes/{ep}/sketches/assign-colors` | 草图配色（为身份分配唯一颜色）[SYNC] |
-| `POST` | `/projects/{project}/episodes/{ep}/sketches/detect-identities` | AI 身份检测（识别草图中出场角色）[SYNC] |
-
 ## TTS & 音频
 
 | 方法 | 路径 | 用途 |
@@ -103,7 +90,6 @@
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
-| `POST` | `/projects/{project}/episodes/{ep}/optimize/video-global` | 全局视频优化(SuperPower⚡️) `{"language":"en"}` en=英文(默认), zh=中文 [ASYNC] |
 | `POST` | `/projects/{project}/episodes/{ep}/beats/{beat}/video` | 单beat视频重做 [ASYNC: single_video]。默认 `{"video_backend": "huimeng_seedance-1.0-pro-fast"}`；只有用户明确指定 1.5 Pro / 有声 1.5 / Huimeng 1.5 时才传 `{"video_backend": "huimeng_seedance-1.5-pro"}`。同一用户请求里同一 beat 只 POST 一次；启动接口返回 `ok:false` 或 HTTP 错误时，必须直接反馈接口 `error`。POST 返回 2xx 且 `ok`/`generated: true` 后，查 `GET /projects/{project}/tasks/single_video/{ep}?beat_num={beat}`；若状态是 `failed` / `cancelled`，必须反馈 `task.error`/`error_code`，不要说已完成。不要因 `Task not found`、任务状态缺失或无 `result.video_path` 重复 POST。没有 `result.video_path` 时不要探测 `/files`，不要探测 `/api/v1/projects/{project}/files`，只能按已启动或当前状态收口；`generated: true` 不等于返回新视频路径，不要交付 beat 记录里的旧 `video_url`，不要拼接 host。**不要触发整集 compose/generate/optimize** |
 | `POST` | `/projects/{project}/episodes/{ep}/videos/compose` | 合成 `{"add_subtitles":true,"add_bgm":false}` [ASYNC] |
 
@@ -115,14 +101,6 @@
 | `GET` | `/projects/{project}/episodes/{ep}/export/srt` | 导出 SRT 字幕 |
 | `GET` | `/projects/{project}/episodes/{ep}/final` | 读取最终成片状态和可展示 `video_url` |
 | `GET` | `/projects/{project}/files/{path}` | 下载文件 |
-
-## 再生成
-
-| 方法 | 路径 | 用途 |
-|------|------|------|
-| `POST` | `/projects/{project}/episodes/{ep}/sketches/regenerate` | 重做指定草图 `{"beat_indices":[...],"style":"..."}` [ASYNC: sketch_regen] |
-| `POST` | `/projects/{project}/episodes/{ep}/beats/regenerate` | 重做指定首帧 `{"beat_indices":[...],"style":"..."}` [ASYNC: selected_regen] |
-| `POST` | `/projects/{project}/episodes/{ep}/grids/{idx}/regenerate` | 重做单个网格 `{"style":"...","model":"nanobanana"}` [ASYNC: grid_regenerate] |
 
 ## 场景与锚图
 

@@ -82,38 +82,4 @@ describe("buildChatTaskLabel", () => {
       ),
     ).toBe("苏糖「大学生」身份肖像");
   });
-
-  it("derives sketch grid labels from result metadata", () => {
-    expect(
-      buildChatTaskLabel(
-        task({
-          task_type: "sketch_generation",
-          episode: 1,
-          result: {
-            grid_index: 0,
-            total_grids: 2,
-            beat_numbers: [1, 2, 3, 4, 5],
-          },
-        }),
-        t,
-      ),
-    ).toBe("第 1 集草图网格 1/2（Beat 1-5）");
-  });
-
-  it("keeps non-contiguous sketch beat ranges readable", () => {
-    expect(
-      buildChatTaskLabel(
-        task({
-          task_type: "sketch_generation",
-          episode: 1,
-          result: {
-            grid_index: 1,
-            total_grids: 2,
-            beat_numbers: [26, 27, 29, 30, 37],
-          },
-        }),
-        t,
-      ),
-    ).toBe("第 1 集草图网格 2/2（Beat 26-27, 29-30, 37）");
-  });
 });

@@ -218,21 +218,6 @@ export function useFinalVideo(project: string, episode: number) {
   });
 }
 
-export function useGlobalOptimize(project: string, episode: number) {
-  return useMutation({
-    mutationFn: () =>
-      jsonWithBackendError<TaskResponse | ErrorResponse>(
-        api.post(
-          p`api/v1/projects/${project}/episodes/${episode}/optimize/video-global`,
-          {
-            json: {},
-            throwHttpErrors: false,
-          },
-        ),
-      ),
-  });
-}
-
 // Mirrors backend `VideoPoolEntry` (novelvideo/models.py) plus route-injected
 // `video_url` from `GET /video-pool`.
 export interface VideoPoolEntry {
@@ -340,46 +325,6 @@ export interface Seedance2PromptResult {
   prompt_source?: string;
 }
 
-export interface BeatVideoPromptResult {
-  beat: Beat;
-  field: "video_prompt" | "keyframe_prompt";
-  prompt: string;
-}
-
-export interface GlobalOptimizeBillingQuote {
-  beat_numbers: number[];
-  quantity: number;
-  unit_cost: number;
-  cost: number;
-  display: string;
-  original_cost?: number;
-  discount_amount?: number;
-  promotion?: import("@/lib/queries/generation-credit-cost").GenerationCreditCost["promotion"];
-}
-
-export function useGlobalOptimizeBillingQuote(
-  project: string,
-  episode: number,
-  assetRevision = "",
-) {
-  return useQuery({
-    queryKey: [
-      "global-optimize-billing-quote",
-      project,
-      episode,
-      assetRevision,
-    ] as const,
-    queryFn: ({ signal }) =>
-      jsonWithBackendError<OkResponse<GlobalOptimizeBillingQuote>>(
-        api.get(
-          p`api/v1/projects/${project}/episodes/${episode}/optimize/video-global/billing-quote`,
-          { signal, throwHttpErrors: false },
-        ),
-      ),
-    enabled: !!project && episode > 0,
-  });
-}
-
 export interface Seedance2BeatStatus {
   beat_number: number;
   audio_type: string;
@@ -454,7 +399,7 @@ export type VideoInputCropTarget =
 const seedance2BeatStatusProjectKey = (project: string) =>
   ["seedance2-beat-status", project] as const;
 
-export const seedance2BeatStatusKey = (
+const seedance2BeatStatusKey = (
   project: string,
   episode: number,
   beatNum: number,
@@ -692,39 +637,6 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
       ),
     onSuccess: (res, { beatNum }) => {
       if (!res.ok) return;
-      const patched = res.data.beat;
-      qc.setQueryData<OkResponse<Beat[]>>(
-        queryKeys.beats(project, episode),
-        (old) => {
-          if (!old?.data) return old;
-          return {
-            ...old,
-            data: old.data.map((b) =>
-              b.beat_number === beatNum ? { ...b, ...patched } : b,
-            ),
-          };
-        },
-      );
-    },
-  });
-}
-
-export function useGenerateBeatVideoPrompt(project: string, episode: number) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ beatNum }: { beatNum: number }) =>
-      jsonWithBackendError<OkResponse<BeatVideoPromptResult> | TaskResponse | ErrorResponse>(
-        api.post(
-          p`api/v1/projects/${project}/episodes/${episode}/beats/${beatNum}/video-prompt/generate`,
-          {
-            json: {},
-            throwHttpErrors: false,
-          },
-        ),
-      ),
-    onSuccess: (res, { beatNum }) => {
-      if (!res.ok) return;
-      if (!("data" in res)) return;
       const patched = res.data.beat;
       qc.setQueryData<OkResponse<Beat[]>>(
         queryKeys.beats(project, episode),

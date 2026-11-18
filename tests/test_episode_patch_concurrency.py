@@ -349,16 +349,3 @@ def test_planners_never_write_episodes_outside_their_branch_helper():
                         f"{sorted(allowed)} so legacy and structured each get "
                         "the write their track expects"
                     )
-
-
-
-
-def test_the_marker_colour_write_is_column_atomic():
-    """Guard the call itself, since the route is hard to drive end to end."""
-    import inspect
-
-    from novelvideo.api.routes import generation
-
-    source = inspect.getsource(generation.assign_sketch_colors)
-    assert "patch_episode(episode_num, prop_menu=" in source
-    assert "update_episode" not in source

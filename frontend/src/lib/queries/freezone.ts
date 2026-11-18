@@ -25,7 +25,7 @@ export type FreezonePresetCanvasRequest =
       scope: "beat";
       episode: number;
       beat: number;
-      primary_slot?: "sketch" | "frame" | "render" | string;
+      primary_slot?: "frame" | "render" | string;
     }
   | {
       scope: "asset";

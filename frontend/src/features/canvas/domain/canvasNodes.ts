@@ -481,7 +481,6 @@ export interface BeatContextNodeData extends NodeDisplayData {
     sketchColors?: Record<string, string>;
     propMarkerColors?: Record<string, string>;
     selectedBackgroundExists?: boolean;
-    currentSketchExists?: boolean;
     currentFrameExists?: boolean;
     [key: string]: unknown;
   };

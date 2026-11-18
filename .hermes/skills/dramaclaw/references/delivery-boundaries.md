@@ -18,8 +18,6 @@
 |---|---|---|
 | 人物肖像 | `dramaclaw_get_character_media(media_kind="portrait", name="角色名或别名片段")` | `name` 只匹配角色名/别名，不混入身份图 |
 | 身份图 | `dramaclaw_get_character_media(media_kind="identity", name="角色名或身份名片段")` | `name` 可匹配角色名、别名、身份名或身份 ID；仅按描述查找时用 `query` |
-| 当前草图 | `dramaclaw_get_sketches(episode=N, beat=M)` | 只展示正式 `sketch_url`，不回退到候选池或首帧 |
-| 草图候选 | `dramaclaw_get_sketch_candidates(episode=N, beat=M)` | 候选池与当前草图是不同产物 |
 | 首帧 | `dramaclaw_get_first_frames(episode=N, beat=M)` | 不使用任务结果里的本地图片路径 |
 | 场景图 | `dramaclaw_get_scene_images(name="场景名片段")` | 多关键词用 `names`，序号用 `index`/`scene_indices`，类型用 `scene_type` |
 | 视频片段 | `dramaclaw_get_episode_media(episode=N, media_type="video", beat=M)` | 内容检索用 `query`，多个 beat 用 `beat_indices` |

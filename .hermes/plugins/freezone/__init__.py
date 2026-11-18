@@ -11543,7 +11543,7 @@ _NODE_TYPE_SCHEMA = {
 }
 
 _MAINLINE_PROJECTION_SCOPE_VALUES = ["episode", "beat", "asset"]
-_MAINLINE_PRIMARY_SLOT_VALUES = ["sketch", "frame", "render"]
+_MAINLINE_PRIMARY_SLOT_VALUES = ["frame", "render"]
 _MAINLINE_ASSET_KIND_VALUES = [
     "character",
     "identity",
@@ -13493,7 +13493,7 @@ TOOLS = (
                 "primary_slot": {
                     "type": "string",
                     "enum": _MAINLINE_PRIMARY_SLOT_VALUES,
-                    "description": "For beat scope: sketch for 草图, frame for 分镜, render for default/render.",
+                    "description": "For beat scope: frame for 分镜, render for default/render.",
                 },
                 "asset_kind": {
                     "type": "string",

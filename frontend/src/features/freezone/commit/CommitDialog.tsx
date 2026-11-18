@@ -50,7 +50,6 @@ import type { TFn } from "@/lib/i18n-types";
 // 槽位顺序即下拉里的顺序，所以保留成数组而不是靠词条表的键序。
 const KIND_ORDER: PushTargetKind[] = [
   "frame",
-  "sketch",
   "director_render",
   "selected_background",
   "identity",
@@ -106,7 +105,6 @@ const GLOBAL_SLOT_KINDS = new Set<PushTargetKind>([
 
 const BEAT_SLOT_KINDS: PushTargetKind[] = [
   "frame",
-  "sketch",
   "director_render",
   "selected_background",
 ];
@@ -411,7 +409,6 @@ export function CommitDialog({
 
   const isBeatStyle =
     kind === "frame" ||
-    kind === "sketch" ||
     kind === "director_render" ||
     kind === "selected_background" ||
     kind === "video" ||
@@ -1117,7 +1114,6 @@ function buildTarget(
 ): PushTarget | null {
   if (
     kind === "frame" ||
-    kind === "sketch" ||
     kind === "director_render" ||
     kind === "selected_background" ||
     kind === "video" ||
@@ -1154,7 +1150,6 @@ function buildTarget(
 function renderTargetLabel(target: PushTarget, t: TFn): string {
   if (
     target.kind === "frame" ||
-    target.kind === "sketch" ||
     target.kind === "director_render" ||
     target.kind === "selected_background" ||
     target.kind === "video" ||

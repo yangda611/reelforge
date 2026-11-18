@@ -12,6 +12,14 @@ import re
 import pytest
 
 
+_REQUIRED_FIELDS = {
+    "voice_character": None,
+    "narrator_main_character": None,
+    "narration_style": "first_person",
+    "narrator_reference_audio": None,
+}
+
+
 def _normalize(key: str) -> str:
     """The envelope's own key normalization (``envelope.py:141``)."""
     return re.sub(r"[^a-z0-9]", "", key.casefold())
@@ -36,7 +44,7 @@ def test_blacklisted_field_name_raises_on_the_delivery_side(bad_name: str) -> No
 
     projection = {
         "projection_version": 1,
-        "task_type": "mainline_frame_from_context",
+        "task_type": "freezone_audio_speech",
         "fields": {bad_name: "x"},
     }
     with pytest.raises(ValueError, match="敏感字段名"):
@@ -49,7 +57,7 @@ def test_blacklist_check_reaches_nested_keys() -> None:
 
     projection = {
         "projection_version": 1,
-        "task_type": "mainline_frame_from_context",
+        "task_type": "freezone_audio_speech",
         "fields": {"characters": [{"name": "阿茶", "refresh_token": "x"}]},
     }
     with pytest.raises(ValueError, match="敏感字段名"):
@@ -62,7 +70,7 @@ def test_ordinary_projection_passes_the_blacklist() -> None:
     assert_projection_is_deliverable(
         {
             "projection_version": 1,
-            "task_type": "mainline_sketch_from_context",
+            "task_type": "freezone_audio_speech",
             "fields": {"scenes": [{"name": "皇宫·大殿", "aliases": []}]},
         }
     )
@@ -86,7 +94,7 @@ def test_oversized_projection_raises_on_the_delivery_side() -> None:
 
     projection = {
         "projection_version": 1,
-        "task_type": "mainline_sketch_from_context",
+        "task_type": "freezone_audio_speech",
         "fields": {"scenes": ["x" * (MAX_PROJECTION_BYTES + 1)]},
     }
     with pytest.raises(ValueError, match="超出体积上限"):
@@ -100,8 +108,8 @@ def test_read_projection_does_not_enforce_the_size_cap() -> None:
     payload = {
         "projection": {
             "projection_version": 1,
-            "task_type": "mainline_sketch_from_context",
-            "fields": {"scenes": ["x" * (MAX_PROJECTION_BYTES + 1)]},
+            "task_type": "freezone_audio_speech",
+            "fields": {**_REQUIRED_FIELDS, "padding": ["x" * (MAX_PROJECTION_BYTES + 1)]},
         }
     }
     assert read_projection(payload) is not None
@@ -132,8 +140,8 @@ def test_both_versions_in_the_window_are_accepted(version: int) -> None:
     payload = {
         "projection": {
             "projection_version": version,
-            "task_type": "mainline_sketch_from_context",
-            "fields": {"scenes": []},
+            "task_type": "freezone_audio_speech",
+            "fields": dict(_REQUIRED_FIELDS),
         }
     }
     proj = read_projection(payload)
@@ -148,7 +156,7 @@ def test_versions_outside_the_window_raise(version: object) -> None:
     payload = {
         "projection": {
             "projection_version": version,
-            "task_type": "mainline_sketch_from_context",
+            "task_type": "freezone_audio_speech",
             "fields": {"scenes": []},
         }
     }
@@ -163,8 +171,8 @@ def test_unknown_fields_are_kept_not_rejected() -> None:
     payload = {
         "projection": {
             "projection_version": 1,
-            "task_type": "mainline_sketch_from_context",
-            "fields": {"scenes": [], "a_field_from_a_newer_release": 1},
+            "task_type": "freezone_audio_speech",
+            "fields": {**_REQUIRED_FIELDS, "a_field_from_a_newer_release": 1},
         }
     }
     proj = read_projection(payload)

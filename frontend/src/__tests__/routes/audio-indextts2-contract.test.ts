@@ -23,27 +23,24 @@ describe("audio IndexTTS2 alignment contract", () => {
     const taskTypes = read("src/lib/task-types.ts");
     const stageRegistry = read("src/lib/episode-stage-registry.ts");
     const batchBar = read("src/components/episode/beat-workbench/batch-bar.tsx");
-    const batchPanel = read("src/components/episode/beat-workbench/batch-panel.tsx");
 
     expect(taskTypes).toContain(
       'AUDIO_GENERATION_INDEXTTS2: "audio_generation_indextts2"',
     );
     expect(stageRegistry).toContain("TASK_TYPES.AUDIO_GENERATION_INDEXTTS2");
     expect(batchBar).toContain("TASK_TYPES.AUDIO_GENERATION_INDEXTTS2");
-    expect(batchPanel).toContain("TASK_TYPES.AUDIO_GENERATION_INDEXTTS2");
   });
 
-  it("dispatches selected beat audio as one async task instead of patching audio_url synchronously", () => {
+  it("dispatches episode audio as one async task instead of patching audio_url synchronously", () => {
     const audioQueries = read("src/lib/queries/audio.ts");
-    const batchPanel = read("src/components/episode/beat-workbench/batch-panel.tsx");
-    const audioHandler = batchPanel.match(
-      /const handleBatchAudio = async \(\) => \{[\s\S]*?\n  \};/,
+    const batchBar = read("src/components/episode/beat-workbench/batch-bar.tsx");
+    const audioHandler = batchBar.match(
+      /const handleGenAllAudio = async \(\) => \{[\s\S]*?\n  \};/,
     )?.[0] ?? "";
 
     expect(audioQueries).not.toContain("audio_url");
-    expect(audioHandler).not.toContain("let ok = 0");
-    expect(audioHandler).not.toContain("for (const beatNum of beatList)");
-    expect(audioHandler).toContain("beatNumbers: beatList");
+    expect(audioHandler).not.toContain("for (const beatNum of");
+    expect(audioHandler).toContain("generateAudio.mutateAsync");
   });
 
   it("hands the backend task_id to the audio task controller", () => {
@@ -52,7 +49,6 @@ describe("audio IndexTTS2 alignment contract", () => {
     for (const path of [
       "src/components/episode/beat-workbench/audio-pane.tsx",
       "src/components/episode/beat-workbench/batch-bar.tsx",
-      "src/components/episode/beat-workbench/batch-panel.tsx",
     ]) {
       expect(read(path), path).toContain(
         "audioTask.start({ scope: res.scope, taskId: res.task_id })",

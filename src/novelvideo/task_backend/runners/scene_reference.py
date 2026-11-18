@@ -52,6 +52,7 @@ async def _run_scene_reference_asset(
     )
     from novelvideo.generators.scene_reference_images import generate_scene_reference_image
     from novelvideo.generators.nanobanana_grid import scene_reference_feature_billing
+    from novelvideo.services.style_service import StyleService
 
     payload = envelope.get("payload") or {}
     scene_name = str(payload["scene_name"])
@@ -105,6 +106,13 @@ async def _run_scene_reference_asset(
         avoid_instructions = str(preset.get("avoid_instructions", "") or "").strip()
         style_label = preset.get("label") or style_id
         style_name = f"{style_label} ({style_id})"
+        style_family, _ = StyleService.get_style_branch(
+            style_id,
+            username=ctx.owner_username,
+            project=ctx.project_name,
+            project_dir=str(output_dir),
+            state_dir=str(ctx.state_dir),
+        )
 
         update(0.40, f"调用图像模型生成 {kind}...")
         provider = None
@@ -126,6 +134,7 @@ async def _run_scene_reference_asset(
                 style_name=style_name,
                 style_prompt=style_prompt,
                 avoid_instructions=avoid_instructions,
+                style_family=style_family,
                 base_scene=base_scene,
                 egress_context=egress_context,
             )

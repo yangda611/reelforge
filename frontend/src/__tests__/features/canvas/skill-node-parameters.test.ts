@@ -9,9 +9,9 @@ import {
 import type { SkillDefinition } from '@/features/freezone/context/skillRoles';
 
 const skill: SkillDefinition = {
-  id: 'freezone.frame_from_context',
+  id: 'freezone.scene_360',
   provider: 'freezone_mainline',
-  display_name: 'Frame From Context',
+  display_name: 'Scene 360',
   description: '',
   capabilities: {},
   inputs: [],

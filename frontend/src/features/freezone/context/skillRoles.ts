@@ -5,7 +5,6 @@ export const SKILL_SCHEMA_VERSION = "skill.v1";
 
 export type SkillInputRole =
   | "beat_context"
-  | "sketch"
   | "background"
   | "identity"
   | "prop"
@@ -17,7 +16,6 @@ export type SkillInputRole =
   | "frame";
 
 export type SkillOutputRole =
-  | "current_sketch_candidate"
   | "current_frame_candidate"
   | "scene_360_candidate"
   | "selected_background"

@@ -70,7 +70,6 @@ Auth is cookie-backed. `AuthStore.login()` POSTs `/api/v1/auth/login` with `cred
   /projects/$project/episodes                             episode list + master-detail shell
     /episodes/$episode/overview                           brief / summary / identities
     /episodes/$episode/script                             beat editing, rhythm toggle
-    /episodes/$episode/sketches                           sketch pool picker
     /episodes/$episode/audio                              TTS + voice assignment
     /episodes/$episode/video                              per-beat video generation
     /episodes/$episode/compose                            final MP4 compose
@@ -80,7 +79,7 @@ All episode routes are code-split via `.lazy.tsx`.
 
 ## Async tasks (SSE)
 
-Long-running operations (ingest, script, sketch, video, compose) follow this pattern:
+Long-running operations (ingest, script, video, compose) follow this pattern:
 
 1. Mutation returns `TaskResponse { ok, task_type, message }`
 2. `useTaskStream` opens `EventSource` at `/api/v1/tasks/{type}/{project}/{episode}/stream?api_key=…`
@@ -152,7 +151,7 @@ To exercise the `multi-region` cluster mode end-to-end locally:
 
 - [ ] Log in to cn-1, edit a beat, open the task panel.
 - [ ] Click the region badge → pick us-1 → confirm. Page should hard-reload to `/login` with us-1 preselected.
-- [ ] DevTools → Application → Local Storage: `st.episode.*`, `supertale-auth`, `supertale-seen-pools` gone; `supertale-app` and `i18nextLng` still present.
+- [ ] DevTools → Application → Local Storage: `st.episode.*`, `supertale-auth` gone; `supertale-app` and `i18nextLng` still present.
 - [ ] DevTools → Application → Cookies: `server-region=us-1`; `st_api_key` issued by us-1 (not the stale cn-1 one).
 - [ ] Open a second tab logged into us-1; go back to the first tab; trigger any action. First tab should show lockdown banner and hard-reload.
 - [ ] Hit a stale `/api/*` with no `server-region` cookie: edge returns `400 no_region`; FE clears the region and redirects to `/login`.

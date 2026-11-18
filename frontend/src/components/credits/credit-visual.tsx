@@ -19,12 +19,6 @@ export function useCreditDisplayHidden(): boolean {
   return useContext(CreditDisplayHiddenContext);
 }
 
-export function formatCreditCost(value: number): string {
-  return Number.isInteger(value)
-    ? String(value)
-    : value.toFixed(2).replace(/\.?0+$/, "");
-}
-
 export type CreditPromotionDisplay = {
   name?: string;
   discount_basis_points?: number;

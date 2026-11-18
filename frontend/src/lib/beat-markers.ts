@@ -7,7 +7,3 @@
  */
 export const NO_CHARACTER_MARKER = "__NO_CHARACTER__";
 export const NO_PROP_MARKER = "__NO_PROP__";
-
-export function isNoReferenceMarker(id: string): boolean {
-  return id === NO_CHARACTER_MARKER || id === NO_PROP_MARKER;
-}

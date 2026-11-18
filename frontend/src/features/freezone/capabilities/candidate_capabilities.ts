@@ -12,14 +12,14 @@ function commonRefs(): CapabilityInputDefinition[] {
       key: "base_ref",
       labelKey: `${C}.inputs.base_ref.label`,
       required: false,
-      acceptKinds: ["generic", "scene", "identity", "portrait", "prop", "sketch", "render"],
+      acceptKinds: ["generic", "scene", "identity", "portrait", "prop", "render"],
       descriptionKey: `${C}.inputs.base_ref.description`,
     },
     {
       key: "extra_refs",
       labelKey: `${C}.inputs.extra_refs.label`,
       required: false,
-      acceptKinds: ["generic", "scene", "identity", "portrait", "prop", "sketch", "render"],
+      acceptKinds: ["generic", "scene", "identity", "portrait", "prop", "render"],
     },
   ];
 }

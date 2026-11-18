@@ -2,8 +2,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -28,9 +26,6 @@ def test_cinematic_skill_docs_and_hermes_references_complete() -> None:
     episode_playbook = (
         REPO_ROOT / ".hermes" / "skills" / "dramaclaw" / "playbooks" / "episode.md"
     ).read_text(encoding="utf-8")
-    director_skill = (
-        REPO_ROOT / ".hermes" / "skills" / "sketch-storyboard-director" / "SKILL.md"
-    ).read_text(encoding="utf-8")
 
     # 15 shot-scale combinations doc
     for scale in ("远景", "全景", "中景", "近景", "特写"):
@@ -40,7 +35,7 @@ def test_cinematic_skill_docs_and_hermes_references_complete() -> None:
     assert "忌连续 3 拍" in scale_doc
 
     # Azhe camera motion doc
-    for term in ("Dolly Zoom", "f/d", "机位与路径", "[LOCKED FIXED CAMERA]"):
+    for term in ("Dolly Zoom", "f/d", "机位与路径"):
         assert term in camera_doc
     for card_num in ("A01", "A11", "A26"):
         assert card_num in camera_doc
@@ -63,20 +58,10 @@ def test_cinematic_skill_docs_and_hermes_references_complete() -> None:
     ).read_text(encoding="utf-8")
     assert "$EP > 1" in hermes_ref
     assert "references/cinematic-storyboard-skills.md" in episode_playbook
-    assert "Mandatory Cinematic Storyboard Skills" in director_skill
 
 
 def test_prompts_actively_include_cinematic_skills_and_continuity() -> None:
     from novelvideo.agents.content_rewriter import REWRITE_PROMPT
-    from novelvideo.agents.global_video_optimizer import (
-        GLOBAL_VIDEO_OPTIMIZER_INSTRUCTIONS_EN,
-    )
-    from novelvideo.agents.keyframe_prompt_builder import (
-        KEYFRAME_PROMPT_BUILDER_INSTRUCTIONS_EN,
-    )
-    from novelvideo.agents.video_prompt_builder import (
-        VIDEO_PROMPT_BUILDER_INSTRUCTIONS_EN,
-    )
     from novelvideo.generators.prompt_builder import PromptComponents
     from novelvideo.seedance2_i2v.prompt import SEEDANCE2_COMPOSER_SYSTEM_PROMPT
     from novelvideo.workflows.literal_script_writing import LITERAL_SCRIPT_PROMPT
@@ -92,26 +77,12 @@ def test_prompts_actively_include_cinematic_skills_and_continuity() -> None:
     assert "Azhe 5-Variable Camera Choreography" in SEEDANCE2_COMPOSER_SYSTEM_PROMPT
     assert "cross_episode_transition" in SEEDANCE2_COMPOSER_SYSTEM_PROMPT
 
-    for prompt_text in (
-        GLOBAL_VIDEO_OPTIMIZER_INSTRUCTIONS_EN,
-        VIDEO_PROMPT_BUILDER_INSTRUCTIONS_EN,
-        KEYFRAME_PROMPT_BUILDER_INSTRUCTIONS_EN,
-    ):
-        assert "Azhe 5-Variable Camera Architecture" in prompt_text
-        assert "Dolly Zoom" in prompt_text
-        assert "15 Shot-Scale Progression" in prompt_text
-        assert "Cross-Episode Continuity" in prompt_text
-
     beats = [
         {"beat_number": 1, "scene_ref": {"scene_id": "conv_store"}},
         {"beat_number": 2, "scene_ref": {"scene_id": "conv_store"}},
     ]
     render_continuity = PromptComponents.build_scene_continuity(beats, total_panels=2)
-    sketch_continuity = PromptComponents.build_scene_continuity_for_sketch(
-        beats, total_panels=2
-    )
     assert "SHOT SCALE & TRANSITION DISCIPLINE" in render_continuity
-    assert "SHOT SCALE & TRANSITION DISCIPLINE" in sketch_continuity
 
 
 async def test_cross_episode_helpers_and_store_loading() -> None:
@@ -264,57 +235,6 @@ async def test_seedance2_panel_loads_prev_episode_last_beat_when_ep_gt_1(
     assert seen["prev_beat"]["beat_number"] == 12
 
 
-async def test_global_video_optimizer_includes_cross_episode_finale_bridge(
-    tmp_path,
-) -> None:
-    from PIL import Image
-
-    from novelvideo.agents.global_video_optimizer import GlobalVideoPromptOptimizer
-
-    sketch_path = tmp_path / "beat_01.jpg"
-    Image.new("RGB", (64, 64), color=(128, 128, 128)).save(sketch_path)
-
-    captured_tasks: list[str] = []
-
-    class FakeAgent:
-        async def run(self, user_prompt):
-            captured_tasks.append(user_prompt[0])
-            return SimpleNamespace(
-                output="Slow dolly in past the foreground doorframe as the clerk raises her eyes."
-            )
-
-    optimizer = GlobalVideoPromptOptimizer()
-    optimizer._get_agent = lambda _lang: FakeAgent()  # type: ignore[method-assign]
-
-    await optimizer.optimize_single_beat(
-        beat={
-            "beat_number": 1,
-            "scene_ref": {"scene_id": "conv_store"},
-            "visual_description": "{{林默}}抬眸直视门口来客。",
-        },
-        sketch_image_path=str(sketch_path),
-        character_color_map={"林默": {"color": "cyan", "appearance": "a woman in a black hoodie"}},
-        language="en",
-        prev_beat={
-            "beat_number": 18,
-            "scene_ref": {"scene_id": "conv_store"},
-            "visual_description": "门铃骤响，一只黑靴跨进便利店。",
-            "video_prompt": "Camera dollies sideways along the glass door as the boot steps over the threshold.",
-            "_from_previous_episode": 1,
-            "_prev_episode_cliffhanger": "神秘人踏入雨夜便利店。",
-        },
-        prev_prompt=None,
-        total_beats=10,
-    )
-
-    assert len(captured_tasks) == 1
-    task_text = captured_tasks[0]
-    assert "Previous Episode Ep1 Finale Beat" in task_text
-    assert "Cross-Episode Seamless Bridge Required" in task_text
-    assert "神秘人踏入雨夜便利店" in task_text
-    assert "Camera dollies sideways along the glass door" in task_text
-
-
 async def test_literal_script_workflow_injects_prev_episode_context_for_ep2(
     monkeypatch,
 ) -> None:
@@ -452,3 +372,57 @@ async def test_content_rewriter_appends_prev_episode_context(monkeypatch) -> Non
     assert "刹车声" in result
     assert "上一集（第 1 集）结尾状态" in captured["task"]
     assert "黑衣人逼问未完" in captured["task"]
+
+
+def test_seedance2_prompt_emits_no_fixed_camera_lock_text():
+    """The AI camera lock was removed: even a beat whose stored scene_ref still
+    carries the old lock fields must not produce a tripod/lock sentence."""
+    from novelvideo.seedance2_i2v.models import Seedance2I2VMode
+    from novelvideo.seedance2_i2v.prompt import (
+        SEEDANCE2_COMPOSER_SYSTEM_PROMPT,
+        build_seedance2_prompt_composer_task,
+        build_seedance2_prompt_draft,
+    )
+
+    prev_beat = {
+        "beat_number": 1,
+        "visual_description": "收银台前的便利店店员",
+        "scene_ref": {"scene_id": "store"},
+    }
+    beat = {
+        "beat_number": 2,
+        "visual_description": "店员伸手递过纸袋",
+        "scene_ref": {
+            "scene_id": "store",
+            "lock_camera_beat": 1,
+            "lock_spatial_mode": "upper_body",
+        },
+    }
+
+    for language in ("zh", "en"):
+        draft = build_seedance2_prompt_draft(
+            mode=Seedance2I2VMode.FIRST_FRAME,
+            beat=beat,
+            assets=None,
+            text_overlay=None,
+            language=language,
+        )
+        task = build_seedance2_prompt_composer_task(
+            mode=Seedance2I2VMode.FIRST_LAST_FRAME,
+            beat=beat,
+            assets=None,
+            text_overlay=None,
+            prompt_guidance="",
+            draft_prompt=draft,
+            prev_beat=prev_beat,
+            language=language,
+        )
+        for text in (draft, task):
+            assert "固定三脚架机位" not in text
+            assert "固定机位锁定" not in text
+            assert "locked tripod" not in text
+            assert "FIXED-CAMERA LOCK" not in text
+            assert "locked_with_prev" not in text
+            assert "locked_camera_beat" not in text
+
+    assert "Locked Fixed Camera" not in SEEDANCE2_COMPOSER_SYSTEM_PROMPT

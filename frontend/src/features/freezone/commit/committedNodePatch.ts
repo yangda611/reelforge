@@ -73,7 +73,6 @@ function mediaPatchForTarget(
 function targetScopeMeta(target: PushTarget): Record<string, unknown> {
   if (
     target.kind === "frame" ||
-    target.kind === "sketch" ||
     target.kind === "director_render" ||
     target.kind === "selected_background" ||
     target.kind === "video" ||
@@ -118,7 +117,6 @@ function targetLabel(target: PushTarget, t: TFn): string {
   if (!suffix) return target.kind;
   if (
     target.kind === "frame" ||
-    target.kind === "sketch" ||
     target.kind === "director_render" ||
     target.kind === "selected_background" ||
     target.kind === "video" ||
@@ -147,7 +145,6 @@ function contextForTarget(
   if (!projectId) return null;
   if (
     target.kind === "frame" ||
-    target.kind === "sketch" ||
     target.kind === "video" ||
     target.kind === "selected_background"
   ) {

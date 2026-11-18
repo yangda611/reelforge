@@ -28,7 +28,7 @@ const LOGOUT_TIMEOUT_MS = 2000;
  *  6. Attempt a logout against the CURRENT region cookie — it's still valid
  *     at this point. Race it against a 2s timeout so a hung BE can't stall
  *     the switch indefinitely; swallow errors/timeouts either way.
- *  7. Purge region-scoped client state (auth, save-status, seen-pool,
+ *  7. Purge region-scoped client state (auth, save-status,
  *     task-center, query cache, localStorage sweep).
  *  8. Write the new region cookie. This HAS to come after the purge so the
  *     next request can't race the stale state using the new routing.

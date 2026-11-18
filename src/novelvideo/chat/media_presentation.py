@@ -24,7 +24,7 @@ _MEDIA_EXTENSIONS = {
 }
 _URL_RE = re.compile(r"(https?://[^\s)>\"]+|/static/[^\s)>\"]+)")
 _REL_PATH_RE = re.compile(
-    r"(?P<path>(?:assets|videos|audio|images|frames|sketches|grids|uploads|scripts)/[^\s)>\"]+\.(?:png|jpg|jpeg|webp|gif|mp4|mov|webm|wav|mp3|m4a))"
+    r"(?P<path>(?:assets|videos|audio|images|frames|grids|uploads|scripts)/[^\s)>\"]+\.(?:png|jpg|jpeg|webp|gif|mp4|mov|webm|wav|mp3|m4a))"
 )
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 

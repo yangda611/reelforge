@@ -8,7 +8,7 @@
 
 读取响应：
 - `global` 段：全局准备是否完成（ingested, configured, characters, episodes, portraits_done）
-- `episode_status` 段：当前集各步骤（identity_plan, identity_images, script, sketches, coloring, global_optimize, first_frames, tts, video）
+- `episode_status` 段：当前集各步骤（identity_plan, identity_images, script, tts, video）
   - 辅助任务 type：`content_rewriter`（解说改写）、`script_writer`（剧本生成）。这些辅助步骤通过 `GET /projects/{P}/tasks/{task_type}/{N}` 主动查
   - 当前后端没有场景锚图 `anchor-image/*` 和 `scene_anchor` task
 - `next_step` + `next_step_name`：从断点继续
@@ -18,7 +18,7 @@
 一进入 Step 10 区段，先 `GET /projects/{project}/episodes/{ep}/script` 读取脚本。这里只允许 project-scoped script 端点，禁止省略项目名的 `/episodes/{ep}/script` 简写：
 
 - `data` 为空 → 剧本尚未生成，应继续 `rewrite` 或 `script/generate`
-- `data` 非空 → 剧本已就绪，可进入 Step 11（场景/道具上下文）或 Step 12 草图
+- `data` 非空 → 剧本已就绪，可进入 Step 11（场景/道具上下文）或 Step 12 音频
 - 当前后端没有 `literal-script/generate`，不要用 `script_mode == "literal_source"` 作为硬判定
 
 ## 进度展示
@@ -26,11 +26,10 @@
 **进度表必须包含全部步骤**，按两段列出：
 
 **项目准备**：摄入、配置、角色、分集、分级、肖像
-**逐集阶段**：身份规划、身份图、解说改写、剧本生成、场景/道具、草图、配色+检测、全局优化、首帧、音频、视频、合成、成片展示
+**逐集阶段**：身份规划、身份图、解说改写、剧本生成、场景/道具、音频、视频、合成、成片展示
 
 每步标记 ✅（完成）或 ❌（未完成）。直接从 `episode_status` 映射：
 - identity_plan → 身份规划, identity_images → 身份图
-- coloring → 配色+检测, global_optimize → 全局优化
 - 分级：API 不单独暴露。`portraits_done=true` 意味着分级已完成（肖像依赖分级）
 - 剧本：新主线下由“解说改写 + 逐行生成”两步取代旧展示口径，不再单列成公开主线步骤
 
@@ -102,18 +101,3 @@
   默认只启动**当前首个缺失步骤**对应的一个写任务；如果该步已有任务运行，只汇报运行中
 - 启动或发现运行中任务后立即停止继续探测、停止额外轮询，直接汇报当前状态
 - 只有用户明确要求“先看进度/先别执行/我来决定模式”时，才停在展示或询问
-
-## 草图图池查询规则
-
-用户问"草图"/"能用的图"/"图池"时触发。
-
-**数据获取**：**必须**用 `GET /grids` API，**禁止**扫描文件系统。
-
-**默认展示**：只报告当前批次（`stale=false`）的摘要统计：
-> "25 个 beat，当前批次共 68 张可用草图（每 beat 2-4 张）。"
-
-用户明确要求时才补充旧批次信息。
-
-**选用旧批次草图**：若目标图 `stale=true`，先警告再操作：
-> "这张草图来自旧批次，角色配色和当前批次不一致。选用后人物可能会错乱。确定要选用吗？"
-用户确认后才调 `pool-select` 并传 `force=true`。禁止 try→fail→force 模式。

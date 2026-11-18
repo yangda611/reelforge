@@ -5,8 +5,6 @@ export interface SceneRef {
   variant_id?: string;
   render_anchor_id?: string;
   render_anchor_source_id?: string;
-  lock_camera_beat?: number | null;
-  lock_spatial_mode?: "" | "full_body" | "upper_body";
 }
 
 export interface EpisodeSceneMenuItem {
@@ -164,13 +162,12 @@ export interface Beat {
   s9_segment_meta_json?: string;
   s9_subshots?: S9SubShot[];
   s9_segment_meta?: S9SegmentMeta | null;
-  /** Identity IDs detected on the sketch for this beat (color-bound). */
+  /** Identity IDs bound to this beat. */
   detected_identities?: string[];
-  /** Prop IDs detected on the sketch for this beat (color-bound). */
+  /** Prop IDs bound to this beat. */
   detected_props?: string[];
   /** True for user-inserted manual shots — only these can be deleted. */
   is_manual_shot?: boolean;
-  sketch_url?: string | null;
   frame_url?: string | null;
   video_url?: string | null;
   audio_url?: string | null;
@@ -181,7 +178,6 @@ export interface Beat {
 export interface PipelineEpisodeStatus {
   episode: number;
   script: boolean;
-  sketch: boolean;
   audio: boolean;
   video: boolean;
   compose: boolean;
@@ -199,10 +195,6 @@ export interface PipelineStepStatus {
   identity_plan?: boolean;
   identity_images?: boolean;
   script?: boolean;
-  sketches?: boolean;
-  coloring?: boolean;
-  global_optimize?: boolean;
-  first_frames?: boolean;
   tts?: boolean;
   video?: boolean;
 }

@@ -1,6 +1,6 @@
 ---
 name: dramaclaw
-description: "Use for explicit DramaClaw/虾导 production work: ingesting a screenplay; checking or resuming a bound pipeline; generating or displaying portraits, identity images, sketches, first frames, audio, beat videos or final episodes; and reading or updating project artifacts. Also use for identity questions. Generic project/status words trigger only in a bound DramaClaw production. Greetings and unrelated chat do not trigger it."
+description: "Use for explicit DramaClaw/虾导 production work: ingesting a screenplay; checking or resuming a bound pipeline; generating or displaying portraits, identity images, first frames, audio, beat videos or final episodes; and reading or updating project artifacts. Also use for identity questions. Generic project/status words trigger only in a bound DramaClaw production. Greetings and unrelated chat do not trigger it."
 metadata:
   compatibility: "Requires DRAMACLAW_API_URL, DRAMACLAW_AGENT_TOKEN, and DRAMACLAW_PROJECT_ID. These values are environment requirements, not auto-expanded URL templates."
   required-env: "DRAMACLAW_AGENT_TOKEN, DRAMACLAW_API_URL, DRAMACLAW_PROJECT_ID"
@@ -25,7 +25,7 @@ metadata:
 - 不从一句话建剧：无真实剧本文档附件且无 `[DRAMACLAW_INGEST_AUTOMATION]` 时，引导用户到“虾料”上传，不得创项目、写接口或代为扩写摄入。
 - 普通创意脑暴可以纯文本回答，但不能声称已经进入项目制作。
 - 只有当前消息带附件，或前端注入摄入上下文时，才进入摄入流程。历史上传文件不能自动触发摄入。
-- 已摄入项目的覆盖重建必须二次确认：第一次只问是否覆盖；用户明确回复“覆盖”后，第二次警告会清空角色、分集、脚本、草图、音频和视频等结果；只有再明确回复“确定”或“继续”才允许以 `rebuild=true` 启动。任何含糊、取消或转移话题都停止覆盖。
+- 已摄入项目的覆盖重建必须二次确认：第一次只问是否覆盖；用户明确回复“覆盖”后，第二次警告会清空角色、分集、脚本、音频和视频等结果；只有再明确回复“确定”或“继续”才允许以 `rebuild=true` 启动。任何含糊、取消或转移话题都停止覆盖。
 - 当前项目由前端创建并通过 `DRAMACLAW_PROJECT_ID` 绑定；虾导不得创建或切换项目。
 
 ## 单轮执行协议

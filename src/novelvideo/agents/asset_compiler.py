@@ -428,6 +428,14 @@ class AssetCompiler:
         self.store = getattr(cognee_store, "sqlite_store", cognee_store)
         self.spine_template = "drama"
 
+    def _is_live_action_style(self) -> bool:
+        from novelvideo.skills.realistic_asset_skills import is_live_action_project
+
+        state_dir = getattr(self.store, "state_dir", None) or getattr(
+            self.cognee_store, "state_dir", None
+        )
+        return is_live_action_project(state_dir=state_dir)
+
     async def _write_menus(
         self, episode_number: int, *, only_if_empty: bool = False, **menus: Any
     ) -> Any:
@@ -856,10 +864,14 @@ class AssetCompiler:
                 continue
             if source_text and not any(line in source_text for line in evidence_lines):
                 continue
+            live_action_kwargs = (
+                {"live_action": True} if self._is_live_action_style() else {}
+            )
             scene = await enrich_scene_environment_from_context(
                 scene_name=scene_name,
                 scene_type=decision.scene_type,
                 context_lines=evidence_lines,
+                **live_action_kwargs,
             )
             scene.aliases = list(
                 dict.fromkeys(
@@ -1077,6 +1089,9 @@ class AssetCompiler:
             if not context_lines:
                 context_lines = source_lines[:12]
             scene_type = self._normalize_scene_type(req.scene_type)
+            live_action_kwargs = (
+                {"live_action": True} if self._is_live_action_style() else {}
+            )
             enriched = await enrich_scene_environment_from_context(
                 scene_name=scene_name,
                 aliases=req.aliases,
@@ -1085,6 +1100,7 @@ class AssetCompiler:
                 episodes=[int(getattr(episode, "number", 1) or 1)],
                 context_lines=context_lines,
                 synopsis=str(getattr(episode, "content_summary", "") or ""),
+                **live_action_kwargs,
             )
             if not str(enriched.description or "").strip():
                 enriched.description = str(req.description or "").strip()
@@ -1155,6 +1171,9 @@ class AssetCompiler:
         if str(scene.environment_prompt or "").strip():
             return scene
 
+        live_action_kwargs = (
+            {"live_action": True} if self._is_live_action_style() else {}
+        )
         enriched = await enrich_scene_environment_from_context(
             scene_name=scene.name,
             aliases=scene.aliases,
@@ -1164,6 +1183,7 @@ class AssetCompiler:
             episodes=[int(getattr(episode, "number", 1) or 1)],
             characters=list(getattr(block, "characters", []) or []),
             context_lines=list(getattr(block, "lines", []) or []),
+            **live_action_kwargs,
         )
         scene.scene_type = enriched.scene_type or scene.scene_type
         scene.environment_prompt = enriched.environment_prompt

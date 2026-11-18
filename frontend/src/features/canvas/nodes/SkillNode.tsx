@@ -377,10 +377,6 @@ function beatContextListsFromNode(node: CanvasNode | undefined): {
   };
 }
 
-function referenceHandleId(role: 'identity' | 'prop', id: string): string {
-  return `${role}:${id}`;
-}
-
 function labelFromReferenceHandle(handleId: string): string {
   const separator = handleId.indexOf(':');
   return separator >= 0 ? handleId.slice(separator + 1).trim() : handleId;
@@ -723,25 +719,7 @@ export const SkillNode = memo(({ id, data, width, selected }: SkillNodeProps) =>
   const inputHandleIds = useMemo(() => {
     const roles = new Set<string>();
     for (const input of skill?.inputs ?? []) {
-      if (
-        data.skill_id === 'freezone.frame_from_context' &&
-        isReferenceInputRole(input.role) &&
-        (
-          (input.role === 'identity' && beatContextReferences.identities.length > 0) ||
-          (input.role === 'prop' && beatContextReferences.props.length > 0)
-        )
-      ) {
-        continue;
-      }
       roles.add(input.role);
-    }
-    if (data.skill_id === 'freezone.frame_from_context') {
-      for (const identityId of beatContextReferences.identities) {
-        roles.add(referenceHandleId('identity', identityId));
-      }
-      for (const propId of beatContextReferences.props) {
-        roles.add(referenceHandleId('prop', propId));
-      }
     }
     for (const edge of incomingEdges) {
       const handleId = nonEmptyHandleId(edge.targetHandle);
@@ -750,7 +728,7 @@ export const SkillNode = memo(({ id, data, width, selected }: SkillNodeProps) =>
       }
     }
     return Array.from(roles);
-  }, [beatContextReferences.identities, beatContextReferences.props, data.skill_id, incomingEdges, skill?.inputs]);
+  }, [incomingEdges, skill?.inputs]);
   const referenceInputHandlesByRole = useMemo(() => {
     const handles: Record<'identity' | 'prop', string[]> = { identity: [], prop: [] };
     const add = (role: 'identity' | 'prop', handleId: string) => {
@@ -758,14 +736,7 @@ export const SkillNode = memo(({ id, data, width, selected }: SkillNodeProps) =>
         handles[role].push(handleId);
       }
     };
-    if (data.skill_id === 'freezone.frame_from_context') {
-      for (const identityId of beatContextReferences.identities) {
-        add('identity', referenceHandleId('identity', identityId));
-      }
-      for (const propId of beatContextReferences.props) {
-        add('prop', referenceHandleId('prop', propId));
-      }
-    }
+
     for (const edge of incomingEdges) {
       const handleId = nonEmptyHandleId(edge.targetHandle);
       const role = roleFromEdge(edge);
@@ -784,7 +755,7 @@ export const SkillNode = memo(({ id, data, width, selected }: SkillNodeProps) =>
       }
     }
     return handles;
-  }, [beatContextReferences.identities, beatContextReferences.props, data.skill_id, incomingEdges]);
+  }, [incomingEdges]);
   const outputHandleIds = useMemo(() => {
     const roles = new Set<string>();
     for (const output of skill?.outputs ?? []) {

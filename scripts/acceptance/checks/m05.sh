@@ -1,4 +1,4 @@
-# M05 场景/草图/首帧 · curl 冒烟（被 run.sh source；可用 $MODE/$PORT/check/log）
+# M05 场景/首帧 · curl 冒烟（被 run.sh source；可用 $MODE/$PORT/check/log）
 # 对应 docs/oss-split/modules/M05 §1.5 的 M05 端点归属清单与 §4 API/落盘检查。
 
 M05_TMP="acceptance-logs/m05-${MODE}-$$"
@@ -11,7 +11,7 @@ M05_PROJECT_NAME="m05_accept_${MODE}_$$"
 M05_OPENAPI_JSON="${M05_TMP}-openapi.json"
 : > "$M05_COOKIE_JAR"
 
-check "OpenAPI 暴露 M05 §1.5 实测 60 个 method/path 操作" \
+check "OpenAPI 暴露 M05 §1.5 实测 38 个 method/path 操作" \
   bash -c "curl -sS 'localhost:$PORT/openapi.json' -o '$M05_OPENAPI_JSON' && uv run python - <<'PY'
 import json
 
@@ -42,20 +42,9 @@ expected = {
     ('POST', '/api/v1/projects/{project}/scenes/{name}/3gs/pano-ply/generate-async'),
     ('POST', '/api/v1/projects/{project}/scenes/{name}/pano/generate-async'),
     ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/scenes/plan'),
-    ('GET', '/api/v1/projects/{project}/sketch-settings'),
-    ('PATCH', '/api/v1/projects/{project}/sketch-settings'),
-    ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/sketch-regen-queue'),
-    ('PUT', '/api/v1/projects/{project}/episodes/{episode_num}/sketch-regen-queue'),
-    ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/sketch-image-usage'),
     ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/image-generation-guard'),
     ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/image-generation-guard/verify-password'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/sketches/generate'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/render/plan'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/render/execute'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/regenerate'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/sketches/regenerate'),
     ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/pano-background/manifest'),
-    ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch-candidates'),
     ('GET', '/api/v1/projects/{project}/director-stage/palette'),
     ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/director-stage/manifest'),
     ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/director-stage/overlay'),
@@ -66,18 +55,7 @@ expected = {
     ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/background-anchor/crop'),
     ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/background-anchor/upload'),
     ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/director-control-frame'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/director-control-to-sketch'),
-    ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/pose-editor'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/pose-editor'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/crop'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/sketches/generate-missing-manual'),
-    ('GET', '/api/v1/projects/{project}/episodes/{episode_num}/grids'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/grids/rebuild-pool'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/pool-select'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/sketch/upload'),
     ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/beats/{beat_num}/render/upload'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/grids/{grid_index}/sketch-preview'),
-    ('POST', '/api/v1/projects/{project}/episodes/{episode_num}/verify/sketch-edit-execute/start'),
 }
 actual = {
     (method.upper(), path)
@@ -86,7 +64,7 @@ actual = {
     if method.lower() in {'get', 'post', 'patch', 'put', 'delete'}
 }
 missing = sorted(expected - actual)
-assert len(expected) == 60, len(expected)
+assert len(expected) == 38, len(expected)
 assert not missing, missing
 print('M05 operations OK', len(expected))
 PY"
@@ -214,25 +192,6 @@ async def main():
         reverse_ply_path='reverse_sharp.ply',
         pano_ply_path='pano_depth.ply',
     )
-    labels_dir = project_dir / 'verify_reports' / 'ep001'
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    row = {
-        'project_dir': str(project_dir),
-        'episode_num': 1,
-        'beat_number': 1,
-        'execution_mode': 'polish',
-        'sketch_path': 'sketches/ep001/beat_01.png',
-        'beat': {'beat_number': 1},
-        'sketch_colors': [],
-        'result': {
-            'decision': 'revise',
-            'main_problem': 'composition_weak',
-            'reasoning': '需要强化构图。',
-            'edit_instruction': 'Tighten the courtyard composition.',
-            'confidence': 0.8,
-        },
-    }
-    (labels_dir / 'labels.jsonl').write_text(json.dumps(row, ensure_ascii=False) + '\\n', encoding='utf-8')
     fixture_dir = project_dir / '_acceptance_fixtures'
     png(fixture_dir / 'tiny.png')
     png(fixture_dir / 'render.png', color=(90, 30, 60))
@@ -291,32 +250,8 @@ wait_world_slot; curl -sS -X POST \"\$BASE/scenes/%E4%B8%AD%E5%BA%AD/pano/genera
 curl -sS -X POST \"\$BASE/scenes/%E4%B8%AD%E5%BA%AD/master/delete\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-master-delete.json';
 curl -sS -X POST \"\$BASE/scenes/%E4%B8%AD%E5%BA%AD/master/upload\" -b '$M05_COOKIE_JAR' -F \"file=@\$IMG;type=image/png\" -o '$M05_TMP-master-reupload.json';
 wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/scenes/plan\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-scenes-plan.json';
-curl -sS \"\$BASE/sketch-settings\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-sketch-settings-get.json';
-curl -sS -X PATCH \"\$BASE/sketch-settings\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{}' -o '$M05_TMP-sketch-settings-patch.json';
-curl -sS -X PUT \"\$BASE/episodes/1/sketch-regen-queue\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"items\":[{\"id\":\"q1\",\"modeKey\":\"1x1_2-3\",\"modeLabel\":\"1x1\",\"beatNumbers\":[1],\"sceneIds\":[\"中庭\"],\"createdAt\":\"2026-06-17T00:00:00Z\"}]}' -o '$M05_TMP-queue-put.json';
-curl -sS \"\$BASE/episodes/1/sketch-regen-queue\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-queue-get.json';
-curl -sS \"\$BASE/episodes/1/sketch-image-usage\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-sketch-usage.json';
-curl -sS \"\$BASE/episodes/1/image-generation-guard?task_type=sketch_grid&scope=grid_0\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-image-guard.json';
+curl -sS \"\$BASE/episodes/1/image-generation-guard?task_type=scene_reference_asset&scope=scene_0\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-image-guard.json';
 curl -sS -X POST \"\$BASE/episodes/1/image-generation-guard/verify-password\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"password\":\"\"}' -o '$M05_TMP-image-guard-password.json';
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/sketches/generate\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"grid_index\":0}' -o '$M05_TMP-sketch-generate.json';
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/sketches/regenerate\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"beat_indices\":[1]}' -o '$M05_TMP-sketch-regenerate.json';
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/sketches/generate-missing-manual\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-sketch-manual.json';
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/verify/sketch-edit-execute/start\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{}' -o '$M05_TMP-sketch-edit.json';
-curl -sS -X POST \"\$BASE/episodes/1/render/plan\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"beat_indices\":[1],\"strategy\":\"naive\",\"aspect_mode\":\"9:16\"}' -o '$M05_TMP-render-plan.json';
-uv run python - <<'PY'
-import json
-plan = json.load(open('$M05_TMP-render-plan.json', encoding='utf-8'))['data']
-body = {
-    'beat_indices': [1],
-    'strategy': 'naive',
-    'aspect_mode': '9:16',
-    'plan': plan['plan'],
-    'plan_hash': plan['plan_hash'],
-    'input_fingerprint': plan['input_fingerprint'],
-}
-open('$M05_TMP-render-execute-body.json', 'w', encoding='utf-8').write(json.dumps(body, ensure_ascii=False))
-PY
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/render/execute\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' --data-binary '@$M05_TMP-render-execute-body.json' -o '$M05_TMP-render-execute.json';
 curl -sS \"\$BASE/episodes/1/beats/1/pano-background/manifest\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-beat-pano.json';
 curl -sS \"\$BASE/director-stage/palette\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-palette.json';
 curl -sS \"\$BASE/episodes/1/beats/1/director-stage/manifest\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-beat-stage.json';
@@ -331,28 +266,11 @@ open('$M05_TMP-control-body.json', 'w', encoding='utf-8').write(json.dumps(body)
 PY
 curl -sS -X POST \"\$BASE/episodes/1/beats/1/director-stage/control-frame\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' --data-binary '@$M05_TMP-control-body.json' -o '$M05_TMP-control-post.json';
 curl -sS \"\$BASE/episodes/1/beats/1/director-control-frame\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-control-get.json';
-wait_default_slot; curl -sS -X POST \"\$BASE/episodes/1/beats/1/director-control-to-sketch\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-control-to-sketch.json';
 curl -sS \"\$BASE/episodes/1/beats/1/background-anchors\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-bg-get.json';
 curl -sS -X POST \"\$BASE/episodes/1/beats/1/background-anchor/upload\" -b '$M05_COOKIE_JAR' -F \"file=@\$IMG;type=image/png\" -o '$M05_TMP-bg-upload.json';
 curl -sS -X PATCH \"\$BASE/episodes/1/beats/1/background-anchor\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"anchor_id\":\"selected_background\"}' -o '$M05_TMP-bg-patch.json';
 curl -sS -X POST \"\$BASE/episodes/1/beats/1/background-anchor/crop\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"anchor_id\":\"reverse\",\"x\":0,\"y\":0,\"width\":1,\"height\":1}' -o '$M05_TMP-bg-crop.json';
-curl -sS \"\$BASE/episodes/1/grids\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-grids-get.json';
-curl -sS -X POST \"\$BASE/episodes/1/grids/rebuild-pool\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-grids-rebuild.json';
-curl -sS -X POST \"\$BASE/episodes/1/beats/1/sketch/upload\" -b '$M05_COOKIE_JAR' -F \"file=@\$IMG;type=image/png\" -o '$M05_TMP-sketch-upload.json';
 curl -sS -X POST \"\$BASE/episodes/1/beats/1/render/upload\" -b '$M05_COOKIE_JAR' -F \"file=@\$RENDER_IMG;type=image/png\" -o '$M05_TMP-render-upload.json';
-uv run python - <<'PY'
-import json
-sketch = json.load(open('$M05_TMP-sketch-upload.json', encoding='utf-8'))['data']['pool_id']
-render = json.load(open('$M05_TMP-render-upload.json', encoding='utf-8'))['data']['pool_id']
-open('$M05_TMP-pool-sketch.json', 'w', encoding='utf-8').write(json.dumps({'pool_id': sketch, 'force': True}))
-open('$M05_TMP-pool-render.json', 'w', encoding='utf-8').write(json.dumps({'pool_id': render}))
-PY
-curl -sS -X POST \"\$BASE/episodes/1/beats/1/pool-select\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' --data-binary '@$M05_TMP-pool-sketch.json' -o '$M05_TMP-pool-select-sketch.json';
-curl -sS -X POST \"\$BASE/episodes/1/beats/1/pool-select\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' --data-binary '@$M05_TMP-pool-render.json' -o '$M05_TMP-pool-select-render.json';
-curl -sS \"\$BASE/episodes/1/beats/1/sketch/pose-editor\" -b '$M05_COOKIE_JAR' -o '$M05_TMP-pose-get.json';
-curl -sS -X POST \"\$BASE/episodes/1/beats/1/sketch/pose-editor\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"strokes\":[]}' -o '$M05_TMP-pose-post.json';
-curl -sS -X POST \"\$BASE/episodes/1/beats/1/sketch/crop\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"x\":0,\"y\":0,\"width\":1,\"height\":1}' -o '$M05_TMP-sketch-crop.json';
-curl -sS -X POST \"\$BASE/episodes/1/grids/0/sketch-preview\" -b '$M05_COOKIE_JAR' -H 'Content-Type: application/json' -d '{\"rows\":1,\"cols\":1,\"beat_numbers\":[1]}' -o '$M05_TMP-sketch-preview.json';
 MODE='$MODE' PROJECT_DIR_FILE='$M05_PROJECT_DIR_FILE' uv run python - <<'PY'
 import json
 import os
@@ -386,13 +304,9 @@ for name in [
     'scenes-list', 'plate-preview', 'pano-manifest', 'pano-correction', 'stage-manifest',
     'scene-create', 'scene-patch', 'scene-delete', 'master-upload', 'master-delete',
     'master-reupload', 'pano-upload',
-    'custom-upload', 'sketch-settings-get', 'sketch-settings-patch', 'queue-put',
-    'queue-get', 'sketch-usage', 'image-guard', 'image-guard-password', 'render-plan',
-    'render-execute', 'beat-pano', 'palette', 'beat-stage', 'overlay-get', 'overlay-post',
-    'control-post', 'control-get', 'control-to-sketch', 'bg-get', 'bg-upload',
-    'bg-patch', 'bg-crop', 'sketch-upload', 'render-upload', 'grids-get',
-    'grids-rebuild', 'pool-select-sketch', 'pool-select-render', 'pose-get',
-    'pose-post', 'sketch-crop', 'sketch-preview',
+    'custom-upload', 'image-guard', 'image-guard-password', 'beat-pano', 'palette',
+    'beat-stage', 'overlay-get', 'overlay-post', 'control-post', 'control-get',
+    'bg-get', 'bg-upload', 'bg-patch', 'bg-crop', 'render-upload',
 ]:
     ok(name)
 
@@ -404,17 +318,8 @@ task('3gs-reverse', 'stage_asset')
 task('3gs-pano', 'stage_asset')
 task('pano-gen', 'stage_asset')
 task('scenes-plan', 'episode_scene_planner')
-task('sketch-generate', 'sketch_generation')
-task('sketch-regenerate', 'sketch_regen')
-task('sketch-edit', 'sketch_edit_execute')
-manual = ok('sketch-manual')
-assert manual['task_type'] == 'sketch_regen' and manual['data']['dispatched'] >= 1, manual
-plan = ok('render-plan')['data']
-assert {'plan', 'plan_hash', 'input_fingerprint'} <= set(plan), plan
-execute = ok('render-execute')['data']
-assert execute['task_type'] == 'render_plan' and execute['task_ids'], execute
-assert 'selected_regen' in json.dumps(execute, ensure_ascii=False) or execute['task_ids']
-assert (project_dir / 'sketches' / 'ep001' / 'beat_01.png').exists()
+render_upload = ok('render-upload')['data']
+assert render_upload['frame_url'] and 'pool_id' not in render_upload, render_upload
 assert (project_dir / 'frames' / 'ep001' / 'beat_01.png').exists()
 assert (project_dir / 'director_control_frames' / 'ep001' / 'beat_01' / 'selected_background.png').exists()
 assert (project_dir / 'director_control_frames' / 'ep001' / 'beat_01' / 'combined.png').exists()

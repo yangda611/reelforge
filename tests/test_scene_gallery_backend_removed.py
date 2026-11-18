@@ -15,16 +15,3 @@ def test_dead_grid_preview_backend_flow_is_removed() -> None:
     assert "GridGenerateRequest" not in schemas_source
     assert not Path("src/novelvideo/ray_tasks.py").exists()
     assert '"grid_preview"' not in task_identity_source
-
-
-def test_shared_grid_backend_remains_for_grid_galleries() -> None:
-    generation_source = Path("src/novelvideo/api/routes/generation.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert '"/projects/{project}/episodes/{episode_num}/grids"' in generation_source
-    assert '"/projects/{project}/episodes/{episode_num}/grids/{grid_index}/sketch-preview"' in (
-        generation_source
-    )
-    assert "async def list_grids" in generation_source
-    assert "async def sketch_grid_preview" in generation_source

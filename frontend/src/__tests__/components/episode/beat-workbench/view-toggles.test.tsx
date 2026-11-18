@@ -19,20 +19,12 @@ beforeAll(async () => {
       zh: {
         translation: {
           episode: {
-            beat: {
-              sectionSketch: "草图",
-              sectionRender: "渲染",
-            },
             workbench: {
               view: {
                 selectAll: "全选",
                 selectedCount: "已选 {{count}}",
                 clear: "清除",
                 totalShots: "共{{count}}个镜头",
-                activeBeat: "Beat {{n}}",
-                selectionHint: "选择beat可进行草图、渲染图重抽",
-                batchRegenSketch: "重抽草图",
-                batchRegenRender: "重抽渲染图",
               },
             },
           },
@@ -43,45 +35,29 @@ beforeAll(async () => {
 });
 
 describe("ViewToggles", () => {
-  it("shows select all for partial selection while keeping redraw and clear actions", async () => {
+  it("shows select all for partial selection together with the clear action", async () => {
     const user = userEvent.setup();
-    const onToggle = vi.fn();
     const onSelectAll = vi.fn();
     const onClearSelection = vi.fn();
-    const onBatchRegenSketch = vi.fn();
-    const onBatchRegenRender = vi.fn();
 
     render(
       <I18nextProvider i18n={i18n}>
         <ViewToggles
-          toggles={new Set(["sketch", "render"])}
-          onToggle={onToggle}
           selection={{ mode: "multi", checked: new Set([1]) }}
           totalBeats={3}
           onSelectAll={onSelectAll}
           onClearSelection={onClearSelection}
-          onBatchRegenSketch={onBatchRegenSketch}
-          onBatchRegenRender={onBatchRegenRender}
         />
       </I18nextProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
     expect(screen.getByText("已选 1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重抽草图" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重抽渲染图" })).toBeInTheDocument();
+    expect(screen.getByText("共3个镜头")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "全选" }));
     expect(onSelectAll).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("button", { name: "重抽草图" }));
-    await user.click(screen.getByRole("button", { name: "重抽渲染图" }));
-
-    expect(onBatchRegenSketch).toHaveBeenCalledTimes(1);
-    expect(onBatchRegenRender).toHaveBeenCalledTimes(1);
-
     await user.click(screen.getByRole("button", { name: "清除" }));
-
     expect(onClearSelection).toHaveBeenCalledTimes(1);
   });
 
@@ -89,14 +65,10 @@ describe("ViewToggles", () => {
     render(
       <I18nextProvider i18n={i18n}>
         <ViewToggles
-          toggles={new Set(["sketch", "render"])}
-          onToggle={vi.fn()}
           selection={{ mode: "multi", checked: new Set([1, 2, 3]) }}
           totalBeats={3}
           onSelectAll={vi.fn()}
           onClearSelection={vi.fn()}
-          onBatchRegenSketch={vi.fn()}
-          onBatchRegenRender={vi.fn()}
         />
       </I18nextProvider>,
     );
@@ -106,47 +78,38 @@ describe("ViewToggles", () => {
     expect(screen.getByRole("button", { name: "清除" })).toBeInTheDocument();
   });
 
-  it("shows select all and the selection hint when no beat is checked", async () => {
+  it("shows only select all when no beat is checked", async () => {
     const user = userEvent.setup();
     const onSelectAll = vi.fn();
     render(
       <I18nextProvider i18n={i18n}>
         <ViewToggles
-          toggles={new Set(["sketch", "render"])}
-          onToggle={vi.fn()}
           selection={{ mode: "none" }}
           totalBeats={3}
           onSelectAll={onSelectAll}
           onClearSelection={vi.fn()}
-          onBatchRegenSketch={vi.fn()}
-          onBatchRegenRender={vi.fn()}
         />
       </I18nextProvider>,
     );
 
     await user.click(screen.getByRole("button", { name: "全选" }));
     expect(onSelectAll).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("选择beat可进行草图、渲染图重抽")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重抽草图" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
   });
 
-  it("keeps redraw actions hidden for single-beat selection", () => {
+  it("shows neither selection action for single-beat selection", () => {
     render(
       <I18nextProvider i18n={i18n}>
         <ViewToggles
-          toggles={new Set(["sketch", "render"])}
-          onToggle={vi.fn()}
           selection={{ mode: "single", beatNum: 1 }}
           totalBeats={3}
+          onSelectAll={vi.fn()}
           onClearSelection={vi.fn()}
-          onBatchRegenSketch={vi.fn()}
-          onBatchRegenRender={vi.fn()}
         />
       </I18nextProvider>,
     );
 
-    expect(screen.getByText("选择beat可进行草图、渲染图重抽")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重抽草图" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重抽渲染图" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
   });
 });

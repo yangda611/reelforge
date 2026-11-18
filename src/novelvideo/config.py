@@ -1221,7 +1221,6 @@ OPENROUTER_NANOBANANA2_MODEL = os.environ.get(
 
 # 图像生成 Provider: "google" / "openrouter" / "openai" / "huimeng"
 # OpenRouter 价格: $0.002/图 (2K) vs Google 官方 $0.134/图 (2K)
-_NANOBANANA_PROVIDER_EXPLICIT = "NANOBANANA_PROVIDER" in os.environ
 NANOBANANA_PROVIDER = os.environ.get("NANOBANANA_PROVIDER", "openrouter")
 
 
@@ -1237,15 +1236,7 @@ SCENE_360_HUIMENG_MODEL = os.environ.get("SCENE_360_HUIMENG_MODEL", HUIMENG_IMAG
 SCENE_ASSET_PROVIDER = os.environ.get("SCENE_ASSET_PROVIDER") or NANOBANANA_PROVIDER
 SCENE_ASSET_MODEL = os.environ.get("SCENE_ASSET_MODEL", "")
 OPENAI_IMAGE_QUALITY = os.environ.get("OPENAI_IMAGE_QUALITY", "medium")
-OPENAI_SKETCH_IMAGE_QUALITY = os.environ.get("OPENAI_SKETCH_IMAGE_QUALITY", "low")
-_DEFAULT_SKETCH_SELECTION_EXPLICIT = "DEFAULT_SKETCH_IMAGE_SELECTION" in os.environ
-_DEFAULT_RENDER_SELECTION_EXPLICIT = "DEFAULT_RENDER_IMAGE_SELECTION" in os.environ
-DEFAULT_SKETCH_IMAGE_SELECTION = os.environ.get(
-    "DEFAULT_SKETCH_IMAGE_SELECTION", "newapi_gpt_image2"
-)
-DEFAULT_RENDER_IMAGE_SELECTION = os.environ.get(
-    "DEFAULT_RENDER_IMAGE_SELECTION", "newapi_gpt_image2"
-)
+DEFAULT_IMAGE_SELECTION = "newapi_gpt_image2"
 CHARACTER_IMAGE_SELECTION = os.environ.get(
     "CHARACTER_IMAGE_SELECTION"
 ) or os.environ.get("DEFAULT_CHARACTER_IMAGE_SELECTION")
@@ -1477,9 +1468,7 @@ def _default_image_generation_selection(
     )
     for candidate in (
         fallback,
-        DEFAULT_SKETCH_IMAGE_SELECTION,
-        DEFAULT_RENDER_IMAGE_SELECTION,
-        "newapi_gpt_image2",
+        DEFAULT_IMAGE_SELECTION,
         *opts.keys(),
         *VISIBLE_IMAGE_GENERATION_SELECTION_KEYS,
     ):
@@ -1550,7 +1539,7 @@ def resolve_image_generation_selection_entry(
         return IMAGE_GENERATION_SELECTIONS[normalized]
     if normalized in custom:
         return custom[normalized]
-    return IMAGE_GENERATION_SELECTIONS[DEFAULT_RENDER_IMAGE_SELECTION]
+    return IMAGE_GENERATION_SELECTIONS[DEFAULT_IMAGE_SELECTION]
 
 
 def image_generation_selection_label(
@@ -1583,10 +1572,7 @@ def get_character_image_selection() -> str:
     if legacy_selection:
         return legacy_selection
 
-    return normalize_image_generation_selection(
-        DEFAULT_RENDER_IMAGE_SELECTION,
-        fallback=DEFAULT_SKETCH_IMAGE_SELECTION,
-    )
+    return normalize_image_generation_selection(DEFAULT_IMAGE_SELECTION)
 
 
 def normalize_character_image_selection(value: str | None) -> str:
@@ -1627,7 +1613,7 @@ def infer_image_generation_selection(
     if provider_norm == "huimeng" and model_norm == "image-2-official":
         return "huimeng_image2_official"
     return normalize_image_generation_selection(
-        fallback, fallback=DEFAULT_SKETCH_IMAGE_SELECTION
+        fallback, fallback=DEFAULT_IMAGE_SELECTION
     )
 
 
@@ -1784,15 +1770,7 @@ def get_grid_generation_config(
     - HUIMENGI_API_KEY: HuiMeng API Key
     - OPENAI_IMAGE_MODEL: OpenAI Image API 模型，默认 gpt-image-2
     - HUIMENG_IMAGE_MODEL: HuiMeng 图片模型，默认 image-2
-    - DEFAULT_SKETCH_IMAGE_SELECTION / DEFAULT_RENDER_IMAGE_SELECTION: UI 默认图片源
     """
-    if (
-        selection_override is None
-        and provider_override is None
-        and _DEFAULT_RENDER_SELECTION_EXPLICIT
-    ):
-        selection_override = DEFAULT_RENDER_IMAGE_SELECTION
-
     provider_config = _image_provider_config(
         provider_override or NANOBANANA_PROVIDER,
         model_override=model_override,
@@ -1805,7 +1783,6 @@ def get_grid_generation_config(
         "model": provider_config["model"],
         "base_url": provider_config.get("base_url", ""),
         "openai_image_quality": OPENAI_IMAGE_QUALITY,
-        "openai_sketch_image_quality": OPENAI_SKETCH_IMAGE_QUALITY,
         "huimeng_image_quality": os.environ.get("HUIMENG_IMAGE_QUALITY", "medium"),
         "image_size": image_size_override or "1K",
         "mode": GRID_MODE,
@@ -1814,115 +1791,6 @@ def get_grid_generation_config(
         "batch_size": GRID_BATCH_SIZE,
         "total_panels": GRID_TOTAL_PANELS,
     }
-
-
-def get_sketch_generation_config(
-    selection_override: str | None = None,
-    model_override: str | None = None,
-) -> dict:
-    """获取草图工作台网格生成配置。
-
-    优先级:
-    1. 显式 DEFAULT_SKETCH_IMAGE_SELECTION（新选择表）
-    2. 显式 NANOBANANA_PROVIDER / NANOBANANA_MODEL（旧环境变量兼容）
-    3. 通用 get_grid_generation_config()
-    """
-    selection = selection_override
-    if selection is None:
-        selection = (
-            DEFAULT_SKETCH_IMAGE_SELECTION
-            if (_DEFAULT_SKETCH_SELECTION_EXPLICIT or not _NANOBANANA_PROVIDER_EXPLICIT)
-            else None
-        )
-    provider_override = None if selection else NANOBANANA_PROVIDER
-    config = get_grid_generation_config(
-        selection_override=selection,
-        provider_override=provider_override,
-        model_override=model_override,
-    )
-    config["openai_image_quality"] = OPENAI_SKETCH_IMAGE_QUALITY
-    config["huimeng_image_quality"] = "low"
-    config["image_size"] = "1K"
-    return config
-
-
-def get_render_generation_config(
-    selection_override: str | None = None,
-    model_override: str | None = None,
-) -> dict:
-    """获取首帧渲染图像配置。"""
-    selection = selection_override
-    if selection is None:
-        selection = (
-            DEFAULT_RENDER_IMAGE_SELECTION
-            if (_DEFAULT_RENDER_SELECTION_EXPLICIT or not _NANOBANANA_PROVIDER_EXPLICIT)
-            else None
-        )
-    provider_override = None if selection else NANOBANANA_PROVIDER
-    return get_grid_generation_config(
-        selection_override=selection,
-        provider_override=provider_override,
-        model_override=model_override,
-    )
-
-
-# =============================================================================
-# 草图（Sketch）路径管理
-# =============================================================================
-
-
-def get_sketch_dir(project_name: str, episode: int) -> str:
-    """获取整集草图存放目录。
-
-    Args:
-        project_name: 项目名称（如 admin/test1）
-        episode: 集数
-
-    Returns:
-        草图目录路径，如 output/admin/test1/grids/ep001/sketch
-    """
-    base_dir = os.path.abspath(os.path.join(OUTPUT_DIR, project_name))
-    return os.path.join(base_dir, "grids", f"ep{episode:03d}", "sketch")
-
-
-def get_sketch_path(project_name: str, episode: int, sketch_index: int = 1) -> str:
-    """获取整集草图路径（已弃用，保留向后兼容）。
-
-    新模式下草图文件名为 sketch_b{start}-{end}_{rows}x{cols}.jpg，
-    建议使用 list_sketch_files() 遍历草图目录。
-
-    Args:
-        project_name: 项目名称（如 admin/test1）
-        episode: 集数
-        sketch_index: 草图索引（1-based），默认为 1
-
-    Returns:
-        草图目录路径（新模式下返回目录而非具体文件）
-    """
-    return get_sketch_dir(project_name, episode)
-
-
-def list_sketch_files(project_name: str, episode: int) -> list[str]:
-    """列出指定集的所有草图文件。
-
-    支持新命名约定: sketch_b{start}-{end}_{rows}x{cols}.jpg
-
-    Args:
-        project_name: 项目名称
-        episode: 集数
-
-    Returns:
-        草图文件路径列表（按文件名排序）
-    """
-    sketch_dir = get_sketch_dir(project_name, episode)
-    if not os.path.exists(sketch_dir):
-        return []
-
-    import glob
-
-    pattern = os.path.join(sketch_dir, "sketch_b*_*x*.jpg")
-    files = glob.glob(pattern)
-    return sorted(files)
 
 
 # =============================================================================
@@ -1991,10 +1859,6 @@ def ensure_project_dirs_at_paths(
         "runtime": os.path.abspath(os.fspath(runtime_dir)),
         "logs": os.path.join(os.path.abspath(os.fspath(runtime_dir)), "logs"),
         "staging": os.path.join(os.path.abspath(os.fspath(runtime_dir)), "staging"),
-        "temp_sketch_panels": os.path.join(
-            os.path.abspath(os.fspath(runtime_dir)),
-            "temp_sketch_panels",
-        ),
     }
 
     for path in dirs.values():

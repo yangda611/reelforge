@@ -53,7 +53,6 @@ import {
 } from "@/features/freezone/canvasSyncRuntime";
 import { extractMainlineContextsFromNode } from "@/features/freezone/context/mainlineContext";
 import { buildBeatContextNodeRefreshPatch } from "@/features/freezone/context/beatContextSnapshot";
-import { syncBeatContextMainlineEdges } from "@/features/freezone/context/beatContextProjection";
 import { parseBeatContextVisualMarkers } from "@/features/freezone/context/currentBeatContext";
 import { openPresetProjectionInMyCanvas } from "@/features/freezone/openPresetProjection";
 import { useEpisodeBeats, useEpisodeDetail } from "@/lib/queries/episodes";
@@ -295,24 +294,6 @@ function standaloneBeatContextPatchFromCurrentData(
     syncStatus: "fresh",
     errorMessage: "",
   };
-}
-
-function syncBeatContextMainlineLinks(
-  beatContextNodeId: string,
-  identities: string[],
-  props: string[],
-): void {
-  const store = useCanvasStore.getState();
-  const nextEdges = syncBeatContextMainlineEdges(
-    beatContextNodeId,
-    identities,
-    props,
-    store.nodes,
-    store.edges,
-  );
-  if (nextEdges !== store.edges) {
-    store.replaceEdges(nextEdges);
-  }
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -865,11 +846,6 @@ export const BeatContextNode = memo(
           latestData,
         );
         updateNodeData(id, refreshPatch);
-        syncBeatContextMainlineLinks(
-          id,
-          stringList(refreshPatch.snapshot?.detectedIdentities),
-          stringList(refreshPatch.snapshot?.detectedProps),
-        );
         await restoreCurrentMainlinePresetCanvas(projectId, t);
         setEditVersion((v) => v + 1);
       } catch (error) {
@@ -899,11 +875,6 @@ export const BeatContextNode = memo(
         }
         const localPatch = localBeatPatchFromCurrentData(data, patch);
         updateNodeData(id, localPatch);
-        syncBeatContextMainlineLinks(
-          id,
-          stringList(localPatch.snapshot?.detectedIdentities),
-          stringList(localPatch.snapshot?.detectedProps),
-        );
       },
       [beat, data, episode, id, projectId, updateNodeData],
     );
@@ -1400,9 +1371,6 @@ export const BeatContextNode = memo(
             <section className="flex flex-wrap gap-1.5 text-[10px] text-amber-100/80">
               <span className="rounded-full bg-white/10 px-2 py-1">
                 {t("node.beatContextNode.assets.background")} {snapshot.selectedBackgroundExists ? t("node.beatContextNode.assets.selected") : t("node.beatContextNode.assets.unselected")}
-              </span>
-              <span className="rounded-full bg-white/10 px-2 py-1">
-                {t("node.beatContextNode.assets.sketch")} {snapshot.currentSketchExists ? t("node.beatContextNode.assets.exists") : t("node.beatContextNode.assets.missing")}
               </span>
               <span className="rounded-full bg-white/10 px-2 py-1">
                 {t("node.beatContextNode.assets.frame")} {snapshot.currentFrameExists ? t("node.beatContextNode.assets.exists") : t("node.beatContextNode.assets.missing")}

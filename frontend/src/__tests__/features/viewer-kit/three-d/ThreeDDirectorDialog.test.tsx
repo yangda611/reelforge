@@ -253,11 +253,6 @@ vi.mock("@/api/viewerManifests", () => ({
       frame_meta: "/static/projects/demo/director_control_frames/ep001/beat_03/frame_meta.json",
     },
   })),
-  startDirectorControlToSketch: vi.fn(async () => ({
-    task_type: "sketch_generation",
-    scope: "director_control_to_sketch:ep001:beat_03",
-    message: "started",
-  })),
 }));
 
 const manifest: DirectorStageManifest = {

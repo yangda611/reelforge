@@ -84,17 +84,6 @@ MAX_PROJECTION_BYTES: int = 256 * 1024
 #: nothing from project state" -- that is a claim worth recording, not an
 #: omission.  A task type absent from this mapping is not projected at all.
 PROJECTION_REQUIREMENTS: dict[str, frozenset[str]] = {
-    # director_world/control_frame_to_sketch.py:454 (beats), :469 (sketch_colors),
-    # :479 -> :37 (characters), :478 and :500 (the two project-config scalars).
-    "mainline_director_control_sketch": frozenset(
-        {
-            "beats",
-            "sketch_colors",
-            "characters",
-            "visual_style",
-            "sketch_image_selection",
-        }
-    ),
     # freezone/audio_node.py:434 (narration style), :443 (narrator reference audio
     # descriptor), :329 and :445 (the one or two character rows actually consulted --
     # the whole character table is never needed here).
@@ -106,13 +95,6 @@ PROJECTION_REQUIREMENTS: dict[str, frozenset[str]] = {
             "narrator_reference_audio",
         }
     ),
-    # task_backend/runners/sketch.py:144, reached through :405.  Projected
-    # unconditionally: whether the scene rows get used is derived on the worker
-    # side across four branches (:340-403), and re-deriving that on the enqueue
-    # side would be a second copy of the same logic, free to drift.
-    "mainline_sketch_from_context": frozenset({"scenes"}),
-    # task_backend/runners/render.py reads no project state at all.
-    "mainline_frame_from_context": frozenset(),
 }
 
 
@@ -191,7 +173,7 @@ def assert_projection_is_deliverable(projection: Mapping[str, Any]) -> None:
 def _character_to_dict(character: Any) -> dict[str, Any]:
     """Project a character row.
 
-    Same shape as ``director_world/control_frame_to_sketch.py:35-45`` minus
+    ``model_dump`` plus identities, without
     ``portrait_path``: that one is derived from the project directory, which is
     under ``OUTPUT_DIR`` and therefore reachable by path on any machine.
     """
@@ -205,28 +187,6 @@ def _find_named_character(characters: list[Any], name: str) -> Any | None:
         (item for item in characters if str(getattr(item, "name", "") or "") == name),
         None,
     )
-
-
-async def _build_director_control_sketch_fields(
-    store: Any, config: Mapping[str, Any]
-) -> dict[str, Any]:
-    from novelvideo.project_config import load_project_config_file
-
-    episode = int(config["episode"])
-    script = await store.get_script_as_dict(episode) or {}
-    # One read serves four fields; ``scene_menu`` / ``prop_menu`` are consumed at
-    # control_frame_to_sketch.py:495-496 and cost nothing extra to carry.
-    sketch_colors = dict(script.get("sketch_colors") or store.get_sketch_colors(episode) or {})
-    project_config = load_project_config_file(config["username"], config["project_name"])
-    return {
-        "beats": list(script.get("beats") or []),
-        "scene_menu": list(script.get("scene_menu") or []),
-        "prop_menu": list(script.get("prop_menu") or []),
-        "sketch_colors": sketch_colors,
-        "characters": [_character_to_dict(item) for item in store.get_all_characters()],
-        "visual_style": project_config.get("visual_style", "chinese_period_drama"),
-        "sketch_image_selection": project_config.get("sketch_image_selection"),
-    }
 
 
 async def _build_audio_speech_fields(store: Any, config: Mapping[str, Any]) -> dict[str, Any]:
@@ -262,17 +222,8 @@ async def _build_audio_speech_fields(store: Any, config: Mapping[str, Any]) -> d
     }
 
 
-async def _build_sketch_from_context_fields(
-    store: Any, config: Mapping[str, Any]
-) -> dict[str, Any]:
-    return {"scenes": [scene.model_dump() for scene in await store.list_scenes()]}
-
-
 _FIELD_BUILDERS = {
-    "mainline_director_control_sketch": _build_director_control_sketch_fields,
     "freezone_audio_speech": _build_audio_speech_fields,
-    "mainline_sketch_from_context": _build_sketch_from_context_fields,
-    "mainline_frame_from_context": None,
 }
 
 

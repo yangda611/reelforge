@@ -1097,8 +1097,8 @@ describe("canvas chat commands", () => {
       CANVAS_NODE_TYPES.skill,
       { x: 0, y: 0 },
       {
-        displayName: "根据当前背景生成草图",
-        skill_id: "freezone.sketch_from_context",
+        displayName: "设为当前背景",
+        skill_id: "freezone.set_selected_background",
       },
     );
     store.addEdgeWithData(
@@ -1110,8 +1110,8 @@ describe("canvas chat commands", () => {
     store.addEdgeWithData(
       backgroundId,
       skillId,
-      { role: "background" },
-      { targetHandle: "background" },
+      { role: "source_image" },
+      { targetHandle: "source_image" },
     );
     const attachment = buildCanvasNodeReferenceAttachment(
       "project-a",
@@ -1125,7 +1125,7 @@ describe("canvas chat commands", () => {
 
     expect(referenceContext).toContain('"action":"run_skill"');
     expect(referenceContext).toContain('"command_type":"run_node_action"');
-    expect(referenceContext).toContain('"skill_id":"freezone.sketch_from_context"');
+    expect(referenceContext).toContain('"skill_id":"freezone.set_selected_background"');
 
     const events: Array<{ nodeId: string; action: string }> = [];
     const unsubscribe = canvasEventBus.subscribe(

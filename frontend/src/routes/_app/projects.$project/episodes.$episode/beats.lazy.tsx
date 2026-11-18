@@ -11,61 +11,37 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Brush, Clapperboard, Loader2, Play, RefreshCw } from "lucide-react";
+import { Brush, Clapperboard, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 
 import { useEpisodeBeats, useEpisodeDetail } from "@/lib/queries/episodes";
 import { useBeatStates } from "@/hooks/use-beat-states";
 import { useBeatsWorkbenchParam } from "@/hooks/use-beats-workbench-param";
-import { useEpisodeImageTaskInvalidation } from "@/hooks/use-episode-image-task-invalidation";
 import { useSelection } from "@/hooks/use-selection";
-import { useViewToggles } from "@/hooks/use-view-toggles";
 import { useGenerateScript } from "@/lib/queries/scripts";
-import {
-  useSketchSettings,
-  type SketchAspectRatio,
-} from "@/lib/queries/sketch-settings";
-import {
-  useRebuildPoolIndex,
-  useRegenerateSketches,
-} from "@/lib/queries/sketches";
 import { useProject, useUpdateProject } from "@/lib/queries/projects";
 import { useProjectAspectRatio } from "@/stores/aspect-ratio-store";
 import {
   aspectRatioForOrientation,
   orientationForAspectRatio,
+  type ProjectAspectRatio,
 } from "@/lib/aspect-ratio";
 import { DEFAULT_VIDEO_BACKEND, useVideoBackends } from "@/lib/queries/video";
 import { openPresetProjectionInMyCanvas } from "@/features/freezone/openPresetProjection";
 import { useTaskController } from "@/hooks/use-task-controller";
-import { useScopedTaskBatchInvalidation } from "@/hooks/use-scoped-task-batch-invalidation";
 import { queryKeys } from "@/lib/query-keys";
-import { TASK_TYPES } from "@/lib/task-types";
-import { useTasks } from "@/lib/queries/tasks";
 import { GLASS_ALERT_DIALOG_CONTENT_CLASS } from "@/lib/dialog-styles";
 import { cn } from "@/lib/utils";
 
 import { BatchBar } from "@/components/episode/beat-workbench/batch-bar";
-import {
-  createSketchRegenPlanItems,
-  getLockedSketchRegenItemIds,
-  sketchPlanGridLabel,
-} from "@/components/episode/beat-workbench/batch-panel";
 import {
   useEpisodeActionsSlot,
   useRegisterEpisodeActionsSlot,
 } from "@/components/episode/episode-actions-slot";
 import { BeatCardGrid } from "@/components/episode/beat-workbench/beat-card-grid";
 import { EpisodeEmptyState } from "@/components/episode/episode-empty-state";
-import { SketchGridGallery } from "@/components/episode/beat-workbench/sketch-grid-gallery";
-import {
-  SketchColorLegend,
-  SketchStudioActions,
-} from "@/components/episode/beat-workbench/sketch-studio-actions";
-import { RenderGridGallery } from "@/components/episode/beat-workbench/render-grid-gallery";
 import { ViewToggles } from "@/components/episode/beat-workbench/view-toggles";
 import { ActionPanel } from "@/components/episode/beat-workbench/action-panel";
-import { RenderPlanDialog } from "@/components/episode/beat-workbench/render-plan-dialog";
 import { useHideHeaderOnScroll } from "@/components/episode/header-collapse";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,7 +52,6 @@ import {
 } from "@/components/ui/select";
 import { EMPTY_STATE_ACTION_BUTTON_CLASS } from "@/components/ui/empty-state-styles";
 import { CreditCostInline } from "@/components/credit-cost-inline";
-import { formatCreditCost } from "@/components/credits/credit-visual";
 import {
   backendErrorToastMessage,
   BillingRuleNotConfiguredError,
@@ -91,16 +66,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  useGenerationCreditCost,
-  useGenerationCreditCostPlan,
-} from "@/lib/queries/generation-credit-cost";
+import { useGenerationCreditCost } from "@/lib/queries/generation-credit-cost";
 
 const SHOW_EPISODE_FREEZONE_ENTRY = false;
 
@@ -111,10 +77,7 @@ const SHOW_EPISODE_FREEZONE_ENTRY = false;
  *   ├─ BatchBar         (episode-level batch actions, always visible)
  *   └─ fixed two-column workbench
  *       ├─ left pane: ViewToggles + BeatCardGrid
- *       └─ right pane: sketch studio actions + ActionPanel
- *
- * NiceGUI sketch grid features are exposed from the toolbar as dialogs
- * so the default shell stays aligned with the FE main branch split layout.
+ *       └─ right pane: ActionPanel
  */
 // 导出只为页面级网络合同测试（``episode-beats-scope-contract.test.tsx``）：那条断言
 // 要的是"进这一集一共发了哪些 beats 请求"，hook 单测覆盖不到组合层顺手把别集也拉
@@ -127,12 +90,10 @@ export function BeatsTabContent() {
   const epNum = parseInt(episode, 10);
   const navigate = useNavigate();
   const actionsSlot = useEpisodeActionsSlot();
-  useEpisodeImageTaskInvalidation(project, epNum);
 
   // Data
   const { data: beatsRes, isLoading } = useEpisodeBeats(project, epNum);
   const { data: episodeRes } = useEpisodeDetail(project, epNum);
-  const { data: sketchSettingsRes } = useSketchSettings(project);
   const projectConfigRes = useProject(project);
   const videoBackendsRes = useVideoBackends(project);
   const updateProject = useUpdateProject(project);
@@ -163,9 +124,6 @@ export function BeatsTabContent() {
     selectAll,
     clearSelection,
   } = useSelection({ project, episode: epNum });
-
-  // View toggles (localStorage persisted)
-  const { toggles, toggle: toggleView } = useViewToggles(project, epNum);
 
   // Project-level prefs mirrored from NiceGUI video_studio_page.video_settings.
   const [videoBackend, setVideoBackendState] = useState(DEFAULT_VIDEO_BACKEND);
@@ -210,22 +168,22 @@ export function BeatsTabContent() {
   );
 
   // 画幅 (aspect ratio) — single global per-project source of truth. Drives
-  // sketch generation params, beat-card display, and render/video downstream.
+  // beat-card display and first-frame/video downstream.
   const { orientation, spec: aspectSpecValue, setOrientation } =
     useProjectAspectRatio(project);
-  const sketchAspectRatio: SketchAspectRatio = aspectSpecValue.sketchAspect;
+  const projectAspectRatio: ProjectAspectRatio = aspectSpecValue.renderAspect;
   // Switching画幅 never re-stretches already-generated assets — it only changes
   // the ratio future generations use. Warn before flipping if this episode
-  // already has sketches/renders/videos so the user can re-generate knowingly.
-  const [pendingAspect, setPendingAspect] = useState<SketchAspectRatio | null>(
+  // already has first frames/videos so the user can re-generate knowingly.
+  const [pendingAspect, setPendingAspect] = useState<ProjectAspectRatio | null>(
     null,
   );
   const hasGeneratedAssets = useMemo(
-    () => beats.some((b) => b.sketch_url || b.frame_url || b.video_url),
+    () => beats.some((b) => b.frame_url || b.video_url),
     [beats],
   );
   const applyAspect = useCallback(
-    (next: SketchAspectRatio) => {
+    (next: ProjectAspectRatio) => {
       const nextOrientation = next === "16:9" ? "landscape" : "portrait";
       setOrientation(nextOrientation);
       void updateProject
@@ -234,8 +192,8 @@ export function BeatsTabContent() {
     },
     [setOrientation, t, updateProject],
   );
-  const setSketchAspectRatio = useCallback(
-    (next: SketchAspectRatio) => {
+  const setProjectAspectRatio = useCallback(
+    (next: ProjectAspectRatio) => {
       const nextOrientation = next === "16:9" ? "landscape" : "portrait";
       if (nextOrientation === orientation) return;
       if (hasGeneratedAssets) {
@@ -269,184 +227,13 @@ export function BeatsTabContent() {
     },
     [t, updateProject],
   );
-  const sketchImageGenerationSelection =
-    sketchSettingsRes?.data?.sketch_image_selection;
   const isSeedance2Backend =
     videoBackendsRes.data?.data.find((backend) => backend.value === videoBackend)
       ?.is_seedance2 === true;
 
-  const aspectRatio: "portrait" | "landscape" = orientation;
-
-  const regenSketches = useRegenerateSketches(project, epNum);
-  const rebuildPoolIndex = useRebuildPoolIndex(project, epNum);
-  const tasks = useTasks({ project, episode: epNum });
-  // A batch dispatches one `sketch_regen` task per grid (each with its own
-  // server-assigned scope). A single `useTaskController` can only follow one
-  // scope at a time, so track the whole set by scope membership instead — every
-  // grid's completion then refreshes the page, not just the last one.
-  const { track: trackSketchRegen } = useScopedTaskBatchInvalidation({
-    project,
-    taskType: TASK_TYPES.SKETCH_REGEN,
-    invalidateKeys: [
-      queryKeys.grids(project, epNum),
-      queryKeys.beats(project, epNum),
-      queryKeys.pipelineStatus(project),
-    ],
-  });
-  // One render `execute` fans out into N `selected_regen` grid tasks (and only
-  // returns a non-matching umbrella `location__…` scope), so a single
-  // controller can't follow them all. Track every grid task by its id instead.
-  const { track: trackRenderTask } = useScopedTaskBatchInvalidation({
-    project,
-    taskType: TASK_TYPES.SELECTED_REGEN,
-    matchBy: "task_id",
-    invalidateKeys: [
-      queryKeys.grids(project, epNum),
-      queryKeys.beats(project, epNum),
-      queryKeys.sketchImageUsage(project, epNum),
-      queryKeys.pipelineStatus(project),
-    ],
-  });
-  const checkedBeatNums = useMemo(
-    () =>
-      selection.mode === "multi"
-        ? [...selection.checked].sort((a, b) => a - b)
-        : [],
-    [selection],
-  );
-  const [sketchPlanOpen, setSketchPlanOpen] = useState(false);
-  const [renderPlanOpen, setRenderPlanOpen] = useState(false);
-  const sketchPlanItems = useMemo(
-    () => createSketchRegenPlanItems(beats, checkedBeatNums, sketchAspectRatio),
-    [beats, checkedBeatNums, sketchAspectRatio],
-  );
-  const sketchPlanCost = useGenerationCreditCostPlan(
-    "feature",
-    "mainline.sketch_regen",
-    sketchPlanItems,
-    {
-      surface: "supertale",
-      imageRole: "sketch",
-      params: sketchImageGenerationSelection
-        ? { image_selection: sketchImageGenerationSelection }
-        : null,
-    },
-  );
-  const lockedSketchItemIds = useMemo(
-    () => getLockedSketchRegenItemIds(tasks.data?.data, sketchPlanItems),
-    [sketchPlanItems, tasks.data?.data],
-  );
-  const sketchPlanUnlockedCount = sketchPlanItems.filter(
-    (item) => !lockedSketchItemIds.has(item.id),
-  ).length;
-  const sketchPlanCostDisplay = useMemo(() => {
-    if (typeof sketchPlanCost.cost !== "number") return null;
-    if (
-      typeof sketchPlanCost.originalCost === "number"
-      && sketchPlanCost.originalCost > sketchPlanCost.cost
-    ) {
-      return `${formatCreditCost(sketchPlanCost.originalCost)}→${formatCreditCost(
-        sketchPlanCost.cost,
-      )}`;
-    }
-    return formatCreditCost(sketchPlanCost.cost);
-  }, [sketchPlanCost.cost, sketchPlanCost.originalCost]);
-
   const handleSelectAll = useCallback(() => {
     selectAll(beats.map((beat) => beat.beat_number));
   }, [beats, selectAll]);
-
-  const openSketchPlan = useCallback(() => {
-    if (checkedBeatNums.length === 0) return;
-    setSketchPlanOpen(true);
-  }, [checkedBeatNums.length]);
-
-  const openRenderPlan = useCallback(() => {
-    if (checkedBeatNums.length === 0) return;
-    setRenderPlanOpen(true);
-  }, [checkedBeatNums.length]);
-
-  const dispatchSketchPlanItems = useCallback(async () => {
-    const dispatchableItems = sketchPlanItems.filter(
-      (item) => !lockedSketchItemIds.has(item.id),
-    );
-    if (dispatchableItems.length === 0) {
-      toast.warning(
-        t("episode.workbench.batch.sketchGroupRunning"),
-      );
-      return;
-    }
-
-    let okBeats = 0;
-    let okGrids = 0;
-    let fail = 0;
-    let firstError = "";
-
-    for (const item of dispatchableItems) {
-      try {
-        const res = await regenSketches.mutateAsync({
-          beatIndices: item.beatNumbers,
-          modeKey: item.modeKey,
-        });
-        if (res.ok === false) {
-          fail++;
-          firstError ||= res.error || t("episode.workbench.batch.dispatchFailed");
-          continue;
-        }
-        okGrids++;
-        okBeats += item.beatNumbers.length;
-        trackSketchRegen(res.scope);
-      } catch {
-        fail++;
-        firstError ||= t("episode.workbench.batch.dispatchFailed");
-      }
-    }
-
-    if (okGrids > 0) {
-      clearSelection();
-      toast.success(
-        t("episode.workbench.batch.dispatched", {
-          count: okBeats,
-          mode: okGrids === 1 ? dispatchableItems[0].modeLabel : `${okGrids} grids`,
-        }),
-      );
-    }
-
-    if (fail > 0 && okGrids === 0 && firstError) {
-      toast.error(firstError);
-    } else if (fail > 0) {
-      toast.warning(
-        `${t("episode.workbench.batch.videoPartial", { ok: okGrids, fail })}${
-          firstError ? `: ${firstError}` : ""
-        }`,
-      );
-    }
-  }, [
-    clearSelection,
-    lockedSketchItemIds,
-    regenSketches,
-    sketchPlanItems,
-    trackSketchRegen,
-    t,
-  ]);
-
-  const handleConfirmSketchPlan = useCallback(() => {
-    setSketchPlanOpen(false);
-    void dispatchSketchPlanItems();
-  }, [dispatchSketchPlanItems]);
-
-  const handleRebuildPoolIndex = useCallback(async () => {
-    try {
-      const res = await rebuildPoolIndex.mutateAsync();
-      toast.success(
-        t("episode.workbench.pool.rebuildSuccess", {
-          count: res.data.image_count,
-        }),
-      );
-    } catch {
-      toast.error(t("episode.workbench.pool.rebuildFailed"));
-    }
-  }, [rebuildPoolIndex, t]);
 
   const firstBeatNumber = beats[0]?.beat_number ?? null;
 
@@ -588,8 +375,6 @@ export function BeatsTabContent() {
       params: { project, episode: String(epNum) },
     });
   };
-  const [gridGalleryOpen, setGridGalleryOpen] = useState(false);
-  const [renderGridGalleryOpen, setRenderGridGalleryOpen] = useState(false);
 
   // Loading state
   if (isLoading) {
@@ -747,8 +532,8 @@ export function BeatsTabContent() {
             beats={beats}
             videoBackend={videoBackend}
             spineTemplate={isNarratedProject ? "narrated" : "drama"}
-            sketchAspectRatio={sketchAspectRatio}
-            onSketchAspectRatioChange={setSketchAspectRatio}
+            aspectRatio={projectAspectRatio}
+            onAspectRatioChange={setProjectAspectRatio}
           />,
           actionsSlot,
         )}
@@ -764,23 +549,14 @@ export function BeatsTabContent() {
           >
             <div className="flex h-full min-h-0 flex-col">
               <ViewToggles
-                toggles={toggles}
-                onToggle={toggleView}
                 selection={selection}
                 totalBeats={beats.length}
                 onSelectAll={handleSelectAll}
                 onClearSelection={clearSelection}
-                onBatchRegenSketch={openSketchPlan}
-                onBatchRegenRender={openRenderPlan}
-                legendSlot={
-                  <SketchColorLegend project={project} episode={epNum} />
-                }
               />
               <BeatCardGrid
                 beats={beats}
-                toggles={toggles}
                 selection={selection}
-                aspectRatio={aspectRatio}
                 project={project}
                 episode={epNum}
                 spineTemplate={isNarratedProject ? "narrated" : "drama"}
@@ -813,22 +589,6 @@ export function BeatsTabContent() {
                   <span aria-hidden className="min-w-0" />
                 )}
                 <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 gap-1 rounded-[5px] bg-transparent px-1.5 text-[11px] font-medium text-foreground/75 shadow-none hover:bg-white/[0.04] hover:text-foreground dark:bg-transparent"
-                    onClick={() => void handleRebuildPoolIndex()}
-                    disabled={rebuildPoolIndex.isPending}
-                    title={t("episode.workbench.pool.rebuildIndex")}
-                  >
-                    {rebuildPoolIndex.isPending ? (
-                      <Loader2 className="size-3 animate-spin" />
-                    ) : (
-                      <RefreshCw className="size-3" />
-                    )}
-                    {t("episode.workbench.pool.rebuildIndex")}
-                  </Button>
                   {SHOW_EPISODE_FREEZONE_ENTRY && (
                     <Button
                       type="button"
@@ -847,18 +607,6 @@ export function BeatsTabContent() {
                       {t("episode.workbench.actionPanel.episodeFreezone")}
                     </Button>
                   )}
-                  <SketchStudioActions
-                    project={project}
-                    episode={epNum}
-                    onOpenGridGallery={() => setGridGalleryOpen(true)}
-                    onOpenRenderGridGallery={
-                      isNarratedProject
-                        ? () => setRenderGridGalleryOpen(true)
-                        : undefined
-                    }
-                    showLegend={false}
-                    showDetectionSummary={false}
-                  />
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
@@ -880,127 +628,6 @@ export function BeatsTabContent() {
           </section>
         </div>
       </div>
-      <Dialog open={gridGalleryOpen} onOpenChange={setGridGalleryOpen}>
-        <DialogContent
-          closeButtonClassName="top-0 -right-9 z-50 bg-transparent text-white/45 hover:bg-transparent hover:text-white/72 focus-visible:bg-transparent"
-          overlayClassName="bg-black/8 supports-backdrop-filter:backdrop-blur-sm"
-          className="h-[min(calc(100vh-3rem),760px)] w-[min(calc(100vw-1rem),1440px)] max-w-none sm:max-w-none overflow-visible rounded-2xl border border-white/10 bg-black/35 bg-[linear-gradient(135deg,rgba(255,255,255,0.045),rgba(255,255,255,0.012))] p-0 shadow-none backdrop-blur-2xl"
-        >
-          <DialogHeader className="sr-only">
-            <DialogTitle>{t("episode.workbench.sketchGrid.title")}</DialogTitle>
-          </DialogHeader>
-          <div className="h-full overflow-hidden rounded-2xl">
-            <SketchGridGallery
-              project={project}
-              episode={epNum}
-              beats={beats}
-              aspectRatio={sketchAspectRatio}
-              imageGenerationSelection={sketchImageGenerationSelection}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={renderGridGalleryOpen} onOpenChange={setRenderGridGalleryOpen}>
-        <DialogContent
-          closeButtonClassName="top-0 -right-9 z-50 bg-transparent text-white/45 hover:bg-transparent hover:text-white/72 focus-visible:bg-transparent"
-          overlayClassName="bg-black/8 supports-backdrop-filter:backdrop-blur-sm"
-          className="h-[min(calc(100vh-3rem),760px)] w-[min(calc(100vw-1rem),1440px)] max-w-none sm:max-w-none overflow-visible rounded-2xl border border-white/10 bg-black/35 bg-[linear-gradient(135deg,rgba(255,255,255,0.045),rgba(255,255,255,0.012))] p-0 shadow-none backdrop-blur-2xl"
-        >
-          <DialogHeader className="sr-only">
-            <DialogTitle>{t("episode.workbench.renderGrid.title")}</DialogTitle>
-          </DialogHeader>
-          <div className="h-full overflow-hidden rounded-2xl">
-            <RenderGridGallery project={project} episode={epNum} beats={beats} />
-          </div>
-        </DialogContent>
-      </Dialog>
-      <AlertDialog open={sketchPlanOpen} onOpenChange={setSketchPlanOpen}>
-        <AlertDialogContent className={cn("max-w-3xl", GLASS_ALERT_DIALOG_CONTENT_CLASS)}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t("episode.sketchPlan.title", {
-                beats: checkedBeatNums.length,
-                grids: sketchPlanItems.length,
-              })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("episode.sketchPlan.subtitle")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <div className="mt-4 max-h-[45vh] overflow-y-auto">
-            <div className="flex flex-wrap gap-2">
-              {sketchPlanItems.map((item) => (
-                <div
-                  key={item.id}
-                  className={`flex w-[170px] shrink-0 flex-col gap-1 rounded-[6px] border bg-white/[0.05] p-2 text-xs backdrop-blur-sm ${
-                    lockedSketchItemIds.has(item.id)
-                      ? "border-white/10 opacity-50"
-                      : "border-white/10"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {sketchPlanGridLabel(item.modeKey)}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {item.beatNumbers.length > 1
-                        ? `B${item.beatNumbers[0]}-${
-                            item.beatNumbers[item.beatNumbers.length - 1]
-                          }`
-                        : `B${item.beatNumbers[0]}`}
-                    </span>
-                  </div>
-                  <div
-                    className="truncate text-emerald-400"
-                    title={item.sceneIds.join(" / ")}
-                  >
-                    {item.sceneIds.join(" / ") ||
-                      t("episode.renderPlan.unknownLocation")}
-                  </div>
-                  <div className="truncate text-[10px] text-muted-foreground">
-                    {lockedSketchItemIds.has(item.id)
-                      ? t("episode.workbench.batch.sketchGroupRunning")
-                      : item.modeLabel}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <AlertDialogFooter className="px-4">
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="outline"
-              disabled={sketchPlanItems.length === 0 || sketchPlanUnlockedCount === 0}
-              onClick={handleConfirmSketchPlan}
-              className="relative pr-11 transition-transform active:scale-95"
-            >
-              {t("episode.sketchPlan.confirm", {
-                grids: sketchPlanItems.length,
-              })}
-              <CreditCostInline
-                display={sketchPlanCostDisplay}
-                promotion={sketchPlanCost.promotion}
-              />
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <RenderPlanDialog
-        open={renderPlanOpen}
-        onOpenChange={setRenderPlanOpen}
-        project={project}
-        episode={epNum}
-        beatIndices={checkedBeatNums}
-        aspectMode={aspectSpecValue.renderAspect}
-        defaultForceOneByOne={false}
-        onDispatched={(taskIds) => {
-          taskIds.forEach((id) => trackRenderTask(id));
-          toast.success(t("episode.renderPlan.dispatched"));
-          clearSelection();
-        }}
-      />
       <AlertDialog
         open={pendingAspect !== null}
         onOpenChange={(open) => {

@@ -98,9 +98,9 @@ export function useCancelTask() {
       type: string;
       project: string;
       episode: number;
-      /** Required for scoped tasks (`single_video`, `grid_regenerate`, etc.) — without it cancel lands on the wrong actor or finds nothing. */
+      /** Required for scoped tasks (`single_video`, etc.) — without it cancel lands on the wrong actor or finds nothing. */
       beatNum?: number;
-      /** Required for character/identity/sketch-regen scoped tasks. */
+      /** Required for character/identity scoped tasks. */
       scope?: string;
       /** The caller already displayed its own confirmation dialog. */
       confirmed?: boolean;

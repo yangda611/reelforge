@@ -375,7 +375,6 @@ function synthesizeSlotTargetFromContext(
       episode &&
       beat &&
       (
-        kind === "sketch" ||
         kind === "frame" ||
         kind === "selected_background" ||
         kind === "director_combined"
@@ -439,7 +438,7 @@ function resolveInputSnapshot(
   const provenanceContexts = objectList(data.mainline_context);
   // `mainline_context` may live on candidate/image nodes as provenance. Treat it
   // as executable Beat context only when the graph explicitly wires a
-  // beat_context input; normal image/sketch/frame inputs must not silently carry
+  // beat_context input; normal image/frame inputs must not silently carry
   // an old Beat into a later skill.
   const mainlineContexts = role === "beat_context" ? provenanceContexts : [];
   if (mainlineContexts.length > 0) {

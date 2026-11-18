@@ -40,7 +40,7 @@ _MODEL_CALL_INSTRUMENTATION_ACTIVE: contextvars.ContextVar[bool] = contextvars.C
 _AGENT_CREDIT_RESERVATION_ACTIVE = _MODEL_CALL_INSTRUMENTATION_ACTIVE
 
 _ALLOWED_RESOURCE_KINDS = frozenset(
-    {"portrait", "sketch", "render", "video", "tts", "script", "ingest"}
+    {"portrait", "render", "video", "tts", "script", "ingest"}
 )
 _PROVIDER_REQUEST_ID_HEADER_NAMES = (
     "x-request-id",
@@ -325,8 +325,6 @@ def _normalize_recorded_model_name(model: str) -> str:
         "LITERAL_BEAT_META_MODEL",
         "SCENE_BUILD_MODEL",
         "NARRATED_SCENE_ASSET_MODEL",
-        "GLOBAL_VIDEO_IDENTITY_DETECTOR_MODEL",
-        "GLOBAL_VIDEO_OPTIMIZER_MODEL",
         "SEEDANCE2_PROMPT_COMPOSER_MODEL",
         "NEWAPI_IMAGE_MODEL",
         "NEWAPI_NANOBANANA2_MODEL",

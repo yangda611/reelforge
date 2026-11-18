@@ -172,7 +172,6 @@ interface LibraryAsset {
 const SCENE_DIRECTOR_WORLD_ROLE = "scene_director_world";
 
 const BEAT_SCOPED_LIBRARY_ASSET_ROLES = new Set([
-  "current_sketch",
   "current_frame",
   "current_video",
   "current_audio",
@@ -315,7 +314,6 @@ function MiniThumb({
 const A = "freezone.assetPanel";
 
 const ROLE_LABEL_KEYS: Record<string, string> = {
-  current_sketch: `${A}.roles.current_sketch`,
   current_frame: `${A}.roles.current_frame`,
   current_video: `${A}.roles.current_video`,
   current_audio: `${A}.roles.current_audio`,
@@ -324,7 +322,6 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 };
 
 const ROLE_ORDER = [
-  "current_sketch",
   "current_frame",
   "current_video",
   "director_combined",
@@ -1604,7 +1601,6 @@ function isBeatOutputRole(role: string | undefined): boolean {
   return (
     role === "director_combined" ||
     role === "selected_background" ||
-    role === "current_sketch" ||
     role === "current_frame" ||
     role === "current_video" ||
     role === "current_audio"
@@ -1655,7 +1651,6 @@ function isMainlinePresetReference(ref: PresetReference): boolean {
     return isDirectorControlRef(role, relPath);
   }
   return (
-    role === "current_sketch" ||
     role === "current_frame" ||
     role === "current_video" ||
     role === "current_audio"
@@ -1818,7 +1813,6 @@ function normalizeMediaType(
   if (k.includes("audio")) return "audio";
   if (
     k.includes("frame") ||
-    k.includes("sketch") ||
     k.includes("render") ||
     k.includes("portrait") ||
     k.includes("identity") ||
@@ -1883,7 +1877,6 @@ function aspectForRef(ref: PresetReference): string {
   if (
     role.includes("combined") ||
     role.includes("env") ||
-    role.includes("sketch") ||
     role.includes("render") ||
     role.includes("frame")
   ) {
@@ -1913,12 +1906,10 @@ function beatGroupForAsset(asset: LibraryAsset): string {
   const role = asset.role;
   if (
     kind === "frame" ||
-    kind === "sketch" ||
     kind === "director_render" ||
     kind === "video" ||
     kind === "audio" ||
     role.includes("frame") ||
-    role.includes("sketch") ||
     role.includes("render") ||
     role.includes("video") ||
     role.includes("audio")

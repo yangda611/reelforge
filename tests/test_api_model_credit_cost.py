@@ -216,7 +216,7 @@ async def test_canvas_quote_passes_freezone_product_surface():
     result = await model_credits.get_generation_credit_cost(
         kind="feature",
         surface="canvas",
-        value="mainline.sketch_regen",
+        value="mainline.build_episodes",
         user={"user_id": "usr_1"},
     )
 
@@ -856,38 +856,6 @@ def test_scene_pano_feature_quote_resolves_runtime_model_and_params(monkeypatch)
     assert params["pricing_model"] == "gpt-image-2"
     assert params["pricing_params"] == {"size": "2k", "quality": "medium"}
     assert params["provider"] == "newapi"
-
-
-@pytest.mark.asyncio
-async def test_generation_credit_cost_route_adds_image_mode_params(monkeypatch):
-    from novelvideo import config
-    from novelvideo.api.routes import model_credits
-
-    monkeypatch.setattr(config, "OPENAI_IMAGE_QUALITY", "medium")
-    monkeypatch.setattr(
-        model_credits,
-        "_image_selection_cost_model",
-        lambda selection: "gpt-image-2",
-    )
-    patch_quote_expect(
-        monkeypatch,
-        model_credits,
-        expected_kind="image",
-        expected_model="gpt-image-2",
-        expected_params={"size": "2K", "quality": "medium"},
-        expected_quantity=1,
-        cost=11,
-    )
-
-    result = await model_credits.get_generation_credit_cost(
-        kind="image_selection",
-        value="newapi_gpt_image2",
-        mode_key="2x2_1-1",
-        image_role="render",
-        user={"user_id": "usr_1"},
-    )
-
-    assert result == {"ok": True, "data": {"cost": 11, "display": "11"}}
 
 
 @pytest.mark.asyncio

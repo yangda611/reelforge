@@ -6,7 +6,6 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
-from novelvideo.utils.path_resolver import PathResolver
 from novelvideo.director_world.paths import fs_url
 
 from .paths import (
@@ -167,8 +166,6 @@ class DirectorWorldService:
             "regen_world_fs": fs_url(world),
             "blockings_dir_fs": fs_url(blockings),
             "control_frames_dir_fs": fs_url(control_frames_dir),
-            "sketch_mode_key": "1x1_2-3_sketch",
-            "sketch_aspect_ratio": "2:3",
             "shape_hint_registry_fs": fs_url(shape_hint_registry_path()),
             "shape_hints_dir_fs": fs_url(shape_hints_dir()),
             "actor_state_registry_fs": fs_url(actor_state_registry_path()),
@@ -246,8 +243,6 @@ class DirectorWorldService:
             "blockings_dir_fs": fs_url(blockings),
             # 控制图保存目标（Sprint C 用，PlayCanvas 拼具体 .png 文件名）
             "control_frames_dir_fs": fs_url(control_frames_dir),
-            "sketch_mode_key": "1x1_2-3_sketch",
-            "sketch_aspect_ratio": "2:3",
             # 给 stage 用：shape_hint / actor_state registry 沿用 voxel stage 的位置
             "shape_hint_registry_fs": fs_url(shape_hint_registry_path()),
             "shape_hints_dir_fs": fs_url(shape_hints_dir()),
@@ -260,10 +255,6 @@ class DirectorWorldService:
         if slate_beat is not None:
             params["slate_beat"] = str(int(slate_beat))
             params["beat"] = str(int(slate_beat))  # 兼容 PlayCanvas 已有 beat 参数
-            sketch_ref = PathResolver(str(self.project_dir), int(episode)).sketch(int(slate_beat))
-            if sketch_ref.exists():
-                params["beat_sketch_ref_fs"] = fs_url(sketch_ref)
-                params["beat_sketch_ref_label"] = f"Beat {int(slate_beat)} 自由草图"
         beats = _scene_beat_numbers(user, project, episode, scene_id)
         if beats:
             params["slate_beats"] = ",".join(str(b) for b in beats)

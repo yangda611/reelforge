@@ -274,7 +274,6 @@ function StatusBadge({ state, t }: { state: RowState; t: TFn }) {
 function renderTargetLabel(t: PushTarget): string {
   if (
     t.kind === "frame" ||
-    t.kind === "sketch" ||
     t.kind === "director_render" ||
     t.kind === "selected_background" ||
     t.kind === "video"

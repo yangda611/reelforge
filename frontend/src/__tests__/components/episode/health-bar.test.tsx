@@ -36,8 +36,7 @@ describe("EpisodeHealthSummary", () => {
       loading: false,
       counts: {
         script: { ready: 2, total: 3, active: 1, failed: 0 },
-        sketch: { ready: 1, total: 3, active: 1, failed: 0 },
-        audio: { ready: 2, total: 3, active: 0, failed: 0 },
+            audio: { ready: 2, total: 3, active: 0, failed: 0 },
         video: { ready: 1, total: 3, active: 0, failed: 1 },
         compose: {
           ready: false,
@@ -56,8 +55,8 @@ describe("EpisodeHealthSummary", () => {
     expect(within(script).queryByText("1 blocked")).not.toBeInTheDocument();
 
     const beats = screen.getByTestId("episode-health-beats-status");
-    expect(within(beats).getByText("4/9")).toBeInTheDocument();
-    expect(within(beats).queryByText("5 blocked")).not.toBeInTheDocument();
+    expect(within(beats).getByText("3/6")).toBeInTheDocument();
+    expect(within(beats).queryByText("3 blocked")).not.toBeInTheDocument();
 
     const compose = screen.getByTestId("episode-health-compose-status");
     expect(within(compose).getByText("Missing 2")).toBeInTheDocument();

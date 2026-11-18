@@ -113,7 +113,7 @@ export const api = ky.create({
             // Full purge: auth store, cross-domain Zustand stores, query
             // cache, localStorage region sweep, region store, and cookie.
             // Without the resetRegionState branch we leave episode-scoped
-            // caches, seen-pools, and task-center data behind — which can
+            // caches and task-center data behind — which can
             // bleed into the next region's session after re-login.
             await useAuthStore.getState().logout().catch(() => undefined);
             if (_queryClient) {

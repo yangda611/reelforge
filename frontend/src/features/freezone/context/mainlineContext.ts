@@ -15,7 +15,6 @@ export type MainlineContextKind =
   | "scene"
   | "prop"
   | "beat"
-  | "sketch"
   | "frame"
   | "video"
   | "audio"
@@ -78,10 +77,8 @@ export type MainlineEdgeKind =
 
 export type CandidateBindingRole =
   | "background_candidate"
-  | "sketch_candidate"
   | "frame_candidate"
   | "selected_background"
-  | "current_sketch"
   | "current_frame";
 
 export interface CandidateBinding {
@@ -108,16 +105,13 @@ export interface CandidateBindingRoleValidationResult {
 
 const CANDIDATE_BINDING_ROLES = new Set<CandidateBindingRole>([
   "background_candidate",
-  "sketch_candidate",
   "frame_candidate",
   "selected_background",
-  "current_sketch",
   "current_frame",
 ]);
 
 const CANONICAL_BEAT_BINDING_ROLES = new Set<CandidateBindingRole>([
   "selected_background",
-  "current_sketch",
   "current_frame",
 ]);
 
@@ -131,7 +125,6 @@ const MAINLINE_CONTEXT_KINDS = new Set<MainlineContextKind>([
   "scene",
   "prop",
   "beat",
-  "sketch",
   "frame",
   "video",
   "audio",

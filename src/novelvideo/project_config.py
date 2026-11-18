@@ -155,8 +155,6 @@ def ensure_cognee_embedding_model_in_state_dir(state_dir: str | Path) -> str:
 
 def _default_project_config() -> dict:
     from novelvideo.config import (
-        DEFAULT_RENDER_IMAGE_SELECTION,
-        DEFAULT_SKETCH_IMAGE_SELECTION,
         VIDEO_BACKEND,
         VIDEO_RESOLUTION,
     )
@@ -171,8 +169,6 @@ def _default_project_config() -> dict:
         "video_backend": VIDEO_BACKEND,
         "video_resolution": VIDEO_RESOLUTION,
         "use_director_render": False,
-        "sketch_image_selection": DEFAULT_SKETCH_IMAGE_SELECTION,
-        "render_image_selection": DEFAULT_RENDER_IMAGE_SELECTION,
         "current_episode": 1,
         "user_grid_plan": {},
         "regen_file_map": {},

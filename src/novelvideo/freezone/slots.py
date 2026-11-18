@@ -38,12 +38,6 @@ class FrameTarget(BaseModel):
     beat: int
 
 
-class SketchTarget(BaseModel):
-    kind: Literal["sketch"] = "sketch"
-    episode: int
-    beat: int
-
-
 class DirectorRenderTarget(BaseModel):
     kind: Literal["director_render"] = "director_render"
     episode: int
@@ -156,7 +150,6 @@ class BeatAudioTarget(BaseModel):
 
 SlotTarget = Union[
     FrameTarget,
-    SketchTarget,
     DirectorRenderTarget,
     SelectedBackgroundTarget,
     IdentityTarget,
@@ -206,7 +199,6 @@ GLOBAL_ASSET_KINDS = {
 }
 BEAT_SCOPED_KINDS = {
     "frame",
-    "sketch",
     "director_render",
     "selected_background",
     "video",
@@ -241,8 +233,6 @@ def slot_target_path(project_dir: Path, target: SlotTarget) -> Path:
     """Return the canonical filesystem path for a slot target."""
     if target.kind == "frame":
         return PathResolver(str(project_dir), target.episode).frame(target.beat)
-    if target.kind == "sketch":
-        return PathResolver(str(project_dir), target.episode).sketch(target.beat)
     if target.kind == "director_render":
         return PathResolver(str(project_dir), target.episode).director_render(target.beat)
     if target.kind == "selected_background":

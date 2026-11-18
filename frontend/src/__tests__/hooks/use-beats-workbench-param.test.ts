@@ -16,8 +16,8 @@ describe("beats workbench URL params", () => {
   });
 
   it("accepts only supported sub section params", () => {
-    expect(parseBeatsSubParam("sketch")).toBe("sketch");
-    expect(parseBeatsSubParam("render")).toBe("render");
+    expect(parseBeatsSubParam("sketch")).toBeNull();
+    expect(parseBeatsSubParam("render")).toBeNull();
     expect(parseBeatsSubParam("audio")).toBe("audio");
     expect(parseBeatsSubParam("video")).toBe("video");
     expect(parseBeatsSubParam("text")).toBeNull();

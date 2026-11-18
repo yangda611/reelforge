@@ -5,7 +5,6 @@ import { useAspectRatioStore } from "@/stores/aspect-ratio-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useEpisodeWorkbenchStore } from "@/stores/episode-workbench-store";
 import { useSaveStatusStore } from "@/stores/save-status-store";
-import { useSeenPoolStore } from "@/stores/seen-pool-store";
 import { useTaskCenterStore } from "@/task-center/store";
 import { useRewardEventsStore } from "@/features/rewards/reward-events-store";
 
@@ -37,7 +36,6 @@ function resetSessionScopedState(
 ): void {
   useAuthStore.getState().reset();
   useSaveStatusStore.getState().reset();
-  useSeenPoolStore.getState().reset();
   useEpisodeWorkbenchStore.getState().reset();
   useTaskCenterStore.getState().reset();
   useAspectRatioStore.getState().reset();

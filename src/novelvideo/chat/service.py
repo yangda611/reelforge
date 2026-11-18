@@ -53,7 +53,6 @@ from novelvideo.chat.display_fallback import (
     _decode_tool_args as _decode_tool_args,
     _extract_display_tool_call as _extract_display_tool_call,
     _display_tool_call_key as _display_tool_call_key,
-    _infer_display_tool_call_from_text as _infer_display_tool_call_from_text,
     _DISPLAY_TOOL_NAMES as _DISPLAY_TOOL_NAMES,
 )
 from novelvideo.chat.execution_context import AgentExecutionContext
@@ -109,8 +108,6 @@ from novelvideo.chat.presentation_mapping import (
     _suppress_freezone_tool_lifecycle_error as _suppress_freezone_tool_lifecycle_error,
     _strip_freezone_tool_lifecycle_failure_text as _strip_freezone_tool_lifecycle_failure_text,
     _visible_tool_chat_error_for_mode as _visible_tool_chat_error_for_mode,
-    _prompt_wants_sketch_only as _prompt_wants_sketch_only,
-    _is_frame_image_element as _is_frame_image_element,
     _filter_tool_ui_specs_for_prompt as _filter_tool_ui_specs_for_prompt,
     _prompt_continues_video_generation_without_display as _prompt_continues_video_generation_without_display,
     _is_beat_video_ui_spec as _is_beat_video_ui_spec,
@@ -625,8 +622,7 @@ The user explicitly authorizes continuing the bound mainline project from its cu
 Read the episode pipeline status at most once and read active tasks at most once. If an active task
 exists, report it and stop. If no task is active, use next_step to start exactly one matching write
 task in this same turn, then stop. Do not reread identical status, ask the user to repeat "继续",
-or reopen run-mode selection. For next_step=selected_regen, call dramaclaw_render_first_frames once
-without beat_indices so it selects the next missing batch.
+or reopen run-mode selection.
 [/DRAMACLAW_CONTINUATION]"""
 _DRAMACLAW_SCRIPT_UPLOAD_MODEL_REPLY_INSTRUCTIONS = """[DRAMACLAW_SCRIPT_UPLOAD_GUIDANCE]
 用户正在请求创建、生成或编写剧本/短剧，但当前消息没有上传剧本文档。
@@ -645,7 +641,7 @@ _JSON_RENDER_CHAT_INSTRUCTIONS = """[RENDERING_CONTRACT]
 这是硬性输出合同，优先级高于普通叙述习惯。违反时必须自我修正后再回复。
 
 触发条件：
-- 只有在回复需要展示图片、肖像、身份图、草图、首帧、视频、音频等可视/可播放媒体时，才需要调用对应的 DramaClaw 展示工具。
+- 只有在回复需要展示图片、肖像、身份图、首帧、视频、音频等可视/可播放媒体时，才需要调用对应的 DramaClaw 展示工具。
 - 角色列表、剧集规划、项目进度、任务状态、脚本/beat 摘要、表格、长篇正文、普通结构化说明默认使用 markdown；如果没有图片/视频/音频媒体，不要使用媒体展示工具。
 - 用户说“继续生成视频”“恢复”“接着做”“下一步”时，只推进未完成任务并汇报本轮状态。
 - 除非用户同时明确要求展示、查看、播放或预览，否则不要读取或展示此前已经生成的 beat 视频。
@@ -654,25 +650,25 @@ _JSON_RENDER_CHAT_INSTRUCTIONS = """[RENDERING_CONTRACT]
 禁止事项：
 - 不要向用户解释内部渲染格式、渲染机制、工具调用过程或工具名；只给业务结果和必要的下一步提示。
 - 不要为纯文本、进度、脚本、表格、角色/剧集清单调用媒体展示工具；这些内容使用 markdown。
-- 用户要求查看图片、肖像、身份图、草图、首帧、视频、音频时，不要用文字列表、文件名列表、Beat 名称列表或 URL 列表替代媒体展示；必须调用对应展示工具。若没有工具返回的可展示媒体，只说明当前暂无可展示媒体。
+- 用户要求查看图片、肖像、身份图、首帧、视频、音频时，不要用文字列表、文件名列表、Beat 名称列表或 URL 列表替代媒体展示；必须调用对应展示工具。若没有工具返回的可展示媒体，只说明当前暂无可展示媒体。
 - 一旦本轮调用了媒体展示工具，最终自然语言回复只能是简短说明，绝对禁止输出 markdown 图片语法（例如 ![标题](url)）、纯文本媒体 URL、任何 http/https 链接、/static 路径、HTML <img>/<video>/<audio> 标签或聊天附件 media_json。
 - 不要猜测、拼接或改写静态资源路径，尤其禁止自行编造 /static/projects/{project_id}/...、/static/admin/{slug}/...、localhost URL 或下载地址。
 
 资源 URL 规则：
-- 展示工具会读取 API 返回的可访问 URL 字段（portrait_url、image_url、sketch_url、frame_url、video_url、audio_url、url）并准备可展示媒体。
+- 展示工具会读取 API 返回的可访问 URL 字段（portrait_url、image_url、frame_url、video_url、audio_url、url）并准备可展示媒体。
 - 如果工具/API 只返回本地文件路径或你不确定 URL 是否可访问，必须先调用相应 DramaClaw 展示工具；不能自己按经验拼 /static 路径。
 - 如果没有正式结果 URL、URL 为空、或资源尚未生成，只说明当前状态，不要伪造媒体展示。
 - 如果工具/API 返回多个候选字段，优先使用明确的 *_url 字段；不要使用 *_path 作为 src，除非 API 明确说明该 path 已是浏览器可访问 URL。
 
 展示工具选择：
 - 角色肖像/身份图：调用 dramaclaw_get_character_media。
-- 当前草图：调用 dramaclaw_get_sketches，只展示正式 sketch_url。草图候选池：调用 dramaclaw_get_sketch_candidates，只展示 grids/epNNN/sketch/beat_XX_t* 候选。首帧：调用 dramaclaw_get_first_frames，只展示首帧。
+- 首帧：调用 dramaclaw_get_first_frames，只展示首帧。
 - 场景图：调用 dramaclaw_get_scene_images。
 - 视频预览、beat 视频、最终成片：调用 dramaclaw_get_episode_media(media_type="video") 或对应最终视频读取工具。
 - 配音/TTS/音乐：调用 dramaclaw_get_episode_media(media_type="audio") 或对应音频读取工具。
 - 指定人物肖像：调用 dramaclaw_get_character_media(media_kind="portrait", name="角色名或名称片段")；name 只匹配角色名/别名，不要混入身份图。
 - 指定身份图：调用 dramaclaw_get_character_media(media_kind="identity", name="角色名或身份名片段")；不要混入角色肖像。name 匹配角色名/别名/身份名/身份 ID；只有用户明确按描述内容查找时才用 query="..."。
-- 指定当前草图：调用 dramaclaw_get_sketches(episode=N, beat=M)；该工具只展示正式 sketch_url/current sketch，不展示 grids/epNNN/sketch/beat_XX_t* 草图池候选。不要用草图池或首帧替代当前草图。指定草图候选/图池/备选草图：调用 dramaclaw_get_sketch_candidates(episode=N, beat=M)。指定首帧：调用 dramaclaw_get_first_frames(episode=N, beat=M)。多个正式草图用 beat_indices=[...]；分页用 offset + limit。
+- 指定首帧：调用 dramaclaw_get_first_frames(episode=N, beat=M)；多个 beat 用 beat_indices=[...]；分页用 offset + limit。
 - 指定场景图：调用 dramaclaw_get_scene_images(name="场景名或名称片段")；名称按包含关系模糊匹配；多个关键词用 names=[...]；按第几个场景用 index=N 或 scene_indices=[...]；按类型筛选用 scene_type="..."；分页用 offset + limit。
 - 指定视频：调用 dramaclaw_get_episode_media(episode=N, media_type="video", beat=M)；按内容片段查视频用 query="..."，匹配 beat 标题、画面描述、解说/对白、说话人、角色、场景；多个 beat 用 beat_indices=[...]；分页用 offset + limit。
 - 指定音频/配音/TTS：调用 dramaclaw_get_episode_media(episode=N, media_type="audio", beat=M)；按内容片段查音频用 query="..."，匹配 beat 标题、解说/对白、说话人、角色、场景；多个 beat 用 beat_indices=[...]；分页用 offset + limit。
@@ -4621,7 +4617,7 @@ def _frontend_context_reply(prompt: str) -> str | None:
         body = confirmation.group(1)
         if re.search(r"(?m)^\s*stage:\s*confirm_clear\s*$", body):
             return (
-                "覆盖会清空/重建当前项目已有角色、分集、脚本、草图、音频、视频等"
+                "覆盖会清空/重建当前项目已有角色、分集、脚本、音频、视频等"
                 "流水线结果。是否继续？\n\n请回复 `确定` 或 `继续` 后才会开始覆盖。"
             )
         return (
@@ -5411,34 +5407,6 @@ async def _stream_assistant_reply_hermes(
         )
         if not assistant_text.strip():
             assistant_text = "这轮操作没有收到虾导的有效回复，请稍后重试。"
-        if (
-            _allows_mainline_media_ui_specs(tool_mode)
-            and not tool_ui_specs
-            and not fallback_tool_ui_specs
-        ):
-            inferred_display_call = _infer_display_tool_call_from_text(
-                prompt,
-                assistant_text,
-                previous_assistant,
-            )
-            if inferred_display_call is not None:
-                tool_name, tool_args = inferred_display_call
-                if fallback_token is None:
-                    fallback_token = await _create_page_agent_session_token(
-                        username,
-                        project,
-                        agent_kind="hermes-display-fallback",
-                    )
-                fallback_tool_ui_specs.extend(
-                    await _fallback_display_tool_ui_specs(
-                        username,
-                        project,
-                        tool_name,
-                        tool_args,
-                        token=fallback_token,
-                        project_dir=project_dir,
-                    )
-                )
         result_message = await persist_partial_reply()
         if result_message is None:
             if store_scope is not None:

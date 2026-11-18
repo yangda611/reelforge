@@ -302,7 +302,10 @@ def _fixed_image_billing_params(value: str, *, model: str) -> dict:
             model=model, image_size=image_size, quality=quality
         )
     if clean_value in {"scene_master", "scene_reverse_master"}:
-        return _image_billing_params(model=model, image_size="1K", quality="medium")
+        from novelvideo.generators.image_resolution import resolve_highest_image_resolution
+
+        resolved_size = resolve_highest_image_resolution("newapi", model)
+        return _image_billing_params(model=model, image_size=resolved_size, quality="medium")
     if clean_value == "prop_reference":
         from novelvideo.generators.nanobanana_grid import normalize_image_size
         from novelvideo.generators.nanobanana_prop import PROP_REF_IMAGE_SIZE
@@ -337,23 +340,14 @@ def _image_selection_billing_params(
         )
 
     clean_role = image_role.strip().lower()
-    if clean_role == "sketch":
-        from novelvideo.config import OPENAI_SKETCH_IMAGE_QUALITY
-
-        params.update(
-            _image_billing_params(
-                model=model,
-                image_size="",
-                quality=OPENAI_SKETCH_IMAGE_QUALITY,
-            )
-        )
-    elif clean_role in {"render", "character", "identity"}:
+    if clean_role in {"character", "identity"}:
         from novelvideo.config import OPENAI_IMAGE_QUALITY
+        from novelvideo.generators.image_resolution import resolve_highest_image_resolution
 
         params.update(
             _image_billing_params(
                 model=model,
-                image_size="1K" if clean_role in {"character", "identity"} else "",
+                image_size=resolve_highest_image_resolution("newapi", model),
                 quality=OPENAI_IMAGE_QUALITY,
             )
         )
@@ -800,9 +794,6 @@ def _feature_billing_params(value: str, params: dict, *, mode_key: str = "") -> 
         "mainline.character_portrait": "character",
         "mainline.identity_image": "identity",
         "mainline.prop_reference_image": "prop",
-        "mainline.sketch_regen": "sketch",
-        "mainline.director_control_to_sketch": "sketch",
-        "mainline.render_regen": "render",
     }.get(feature_key)
     if not feature_image_role:
         return params
@@ -821,7 +812,7 @@ def _feature_billing_params(value: str, params: dict, *, mode_key: str = "") -> 
 
     selection = (
         normalize_image_generation_selection(image_selection)
-        if feature_image_role in {"sketch", "render", "prop"}
+        if feature_image_role == "prop"
         else normalize_character_image_selection(image_selection)
     )
     model_cfg = resolve_image_generation_selection_entry(selection)

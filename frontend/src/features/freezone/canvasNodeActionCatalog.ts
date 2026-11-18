@@ -274,9 +274,6 @@ function uploadPickerAcceptForNode(node: CanvasNode): string {
 // ReelForge/src/novelvideo/freezone/skill_registry.py.
 // The action catalog is synchronous, so it cannot await GET freezone/skills here.
 const KNOWN_SKILL_OUTPUT_NODE_TYPES: Record<string, CanvasNodeType[]> = {
-  "freezone.sketch_from_context": [CANVAS_NODE_TYPES.imageGen],
-  "freezone.sketch_from_director_combined": [CANVAS_NODE_TYPES.imageGen],
-  "freezone.frame_from_context": [CANVAS_NODE_TYPES.imageGen],
   "freezone.set_selected_background": [CANVAS_NODE_TYPES.imageGen],
   "freezone.set_director_combined": [CANVAS_NODE_TYPES.imageGen],
   "freezone.scene_360": [CANVAS_NODE_TYPES.imageGen],
@@ -296,36 +293,6 @@ function minimalInput(role: SkillInputRole, required: boolean): SkillDefinition[
 // Mirrors the backend Freezone skill registry required-input contract:
 // ReelForge/src/novelvideo/freezone/skill_registry.py.
 const KNOWN_SKILL_DEFINITIONS: Record<string, SkillDefinition> = {
-  "freezone.sketch_from_context": {
-    id: "freezone.sketch_from_context",
-    provider: "freezone_mainline",
-    display_name: "根据当前背景生成草图",
-    description: "根据 Beat 上下文和当前背景生成主线草图候选。",
-    inputs: [minimalInput("beat_context", true), minimalInput("background", true)],
-    outputs: [],
-  },
-  "freezone.sketch_from_director_combined": {
-    id: "freezone.sketch_from_director_combined",
-    provider: "freezone_mainline",
-    display_name: "从导演合成图生成草图",
-    description: "从 Beat 上下文和导演合成图生成主线草图候选。",
-    inputs: [minimalInput("beat_context", true), minimalInput("director_combined", true)],
-    outputs: [],
-  },
-  "freezone.frame_from_context": {
-    id: "freezone.frame_from_context",
-    provider: "freezone_mainline",
-    display_name: "从镜头上下文生成分镜",
-    description: "根据 Beat 上下文、草图和参考素材生成主线分镜候选。",
-    inputs: [
-      minimalInput("beat_context", true),
-      minimalInput("sketch", true),
-      minimalInput("background", false),
-      minimalInput("identity", false),
-      minimalInput("prop", false),
-    ],
-    outputs: [],
-  },
   "freezone.set_selected_background": {
     id: "freezone.set_selected_background",
     provider: "freezone_mainline",
@@ -377,7 +344,6 @@ const IMAGE_LIKE_SKILL_INPUT_ROLES = new Set<SkillInputRole>([
   "scene",
   "scene_master",
   "scene_reverse_master",
-  "sketch",
   "source_image",
 ]);
 
@@ -388,7 +354,6 @@ const SKILL_INPUT_ROLE_LABELS: Partial<Record<SkillInputRole, string>> = {
   scene: "场景",
   scene_master: "场景主图",
   scene_reverse_master: "场景反打图",
-  sketch: "草图",
   source_image: "源图片",
 };
 

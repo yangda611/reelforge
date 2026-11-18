@@ -37,7 +37,7 @@ const AMBIGUOUS_HANDLES = new Set(["", "target", "source"]);
  * 源资产的 role / slot kind 词表 → 技能输入口 role。
  * token 来自源节点的 `__freezone_source.role` 或 `slot_target.kind`，
  * 这两套词表与输入口 role 命名并不完全一致（如 `selected_background` → `background`、
- * `current_sketch` → `sketch`），所以需要一张显式映射表。
+ * `current_frame` → `frame`），所以需要一张显式映射表。
  */
 const SOURCE_TOKEN_TO_INPUT_ROLE: Record<string, SkillInputRole> = {
   scene_master: "scene_master",
@@ -45,10 +45,6 @@ const SOURCE_TOKEN_TO_INPUT_ROLE: Record<string, SkillInputRole> = {
   selected_background: "background",
   background: "background",
   background_candidate: "background",
-  current_sketch: "sketch",
-  sketch: "sketch",
-  current_sketch_candidate: "sketch",
-  sketch_candidate: "sketch",
   current_frame: "frame",
   frame: "frame",
   character_identity: "identity",

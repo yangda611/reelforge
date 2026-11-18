@@ -69,8 +69,7 @@ const SELECT_ITEM_CLASS = "py-1.5";
 const EMPTY_MANUAL_SHOT_VISUAL_DESCRIPTION = "\u200B";
 
 /**
- * Manual-shot insertion dialog. Mirrors the NiceGUI form at
- * sketch_studio.py:_open_insert_manual_shot_dialog — the BE wrapper
+ * Manual-shot insertion dialog. The BE wrapper
  * is `POST /beats/insert-manual` (see novelvideo.manual_shots.insert_manual_shot).
  *
  * Layout: visual description is the primary full-width input. Read-only

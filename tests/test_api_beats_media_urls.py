@@ -56,15 +56,10 @@ def _client(monkeypatch, tmp_path):
     return TestClient(app)
 
 
-def test_get_beats_exposes_canonical_sketch_url_separately_from_frame_url(
-    monkeypatch, tmp_path
-):
+def test_get_beats_exposes_frame_url_and_no_sketch_url(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    sketch_path = tmp_path / "sketches" / "ep002" / "beat_03.png"
     frame_path = tmp_path / "frames" / "ep002" / "beat_03.png"
-    sketch_path.parent.mkdir(parents=True, exist_ok=True)
     frame_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (8, 8), "white").save(sketch_path, format="PNG")
     Image.new("RGB", (8, 8), "blue").save(frame_path, format="PNG")
 
     response = client.get("/api/v1/projects/demo/episodes/2/beats")
@@ -73,17 +68,16 @@ def test_get_beats_exposes_canonical_sketch_url_separately_from_frame_url(
     body = response.json()
     assert body["ok"] is True
     beat = body["data"][0]
-    assert beat["sketch_url"].endswith("/alice/demo/sketches/ep002/beat_03.png")
     assert beat["frame_url"].endswith("/alice/demo/frames/ep002/beat_03.png")
+    assert "sketch_url" not in beat
 
 
-def test_get_beats_returns_empty_sketch_url_when_canonical_sketch_is_missing(
-    monkeypatch, tmp_path
-):
+def test_get_beats_returns_empty_frame_url_when_frame_is_missing(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
 
     response = client.get("/api/v1/projects/demo/episodes/2/beats")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["data"][0]["sketch_url"] == ""
+    assert body["data"][0]["frame_url"] == ""
+    assert "sketch_url" not in body["data"][0]

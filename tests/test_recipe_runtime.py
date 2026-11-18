@@ -33,6 +33,24 @@ def test_builtin_text_recipes_produce_final_deliverables():
     assert "ecommerce-text-plan" in text_recipe_ids
 
 
+def test_prop_extraction_recipe_has_explicit_selection_criteria():
+    recipe_path = (
+        Path(__file__).resolve().parents[1]
+        / "src/novelvideo/freezone/agent_catalog/builtins/recipes"
+        / "drama-prop-extraction.json"
+    )
+    validated = validate_agent_recipe_config(
+        json.loads(recipe_path.read_text(encoding="utf-8"))
+    )
+
+    prompt = validated["system_prompt"]
+    assert "【入选标准】" in prompt
+    assert "【排除标准】" in prompt
+    assert "【道具清单】" in validated["must_have_items"]
+    # Everyday handled items (keyboard / banknote / drink / cigarettes) must be in scope.
+    assert "键盘" in prompt and "钞票" in prompt
+
+
 @pytest.mark.parametrize(
     "recipe_id",
     ["sci-fi-survival-shot-video", "anthropomorphic-kungfu-shot-video"],

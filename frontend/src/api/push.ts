@@ -4,7 +4,6 @@ import { apiCall } from "./client";
 
 export type PushTargetKind =
   | "frame"
-  | "sketch"
   | "director_render"
   | "selected_background"
   | "identity"
@@ -29,11 +28,6 @@ export type PushTargetKind =
 
 export interface PushTargetFrame {
   kind: "frame";
-  episode: number;
-  beat: number;
-}
-export interface PushTargetSketch {
-  kind: "sketch";
   episode: number;
   beat: number;
 }
@@ -130,7 +124,6 @@ export interface PushTargetBeatAudio {
 }
 export type PushTarget =
   | PushTargetFrame
-  | PushTargetSketch
   | PushTargetDirectorRender
   | PushTargetSelectedBackground
   | PushTargetIdentity

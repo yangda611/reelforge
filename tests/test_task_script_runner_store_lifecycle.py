@@ -56,37 +56,6 @@ def _ctx(tmp_path: Path) -> ProjectContext:
 
 
 @pytest.mark.asyncio
-async def test_beat_video_prompt_runner_closes_sqlite_store(monkeypatch, tmp_path):
-    from novelvideo.api import deps
-    from novelvideo.api.routes import scripts
-    from novelvideo.task_backend.runners import script as runner
-
-    store = _ClosableStore()
-
-    async def fake_make_sqlite_store_for_context(ctx):
-        return store
-
-    async def fake_generate_and_save_beat_video_prompt(**kwargs):
-        return {"field": "video_prompt", "prompt": "camera move"}
-
-    monkeypatch.setattr(runner, "get_task_manager", lambda: _Manager())
-    monkeypatch.setattr(deps, "make_sqlite_store_for_context", fake_make_sqlite_store_for_context)
-    monkeypatch.setattr(
-        scripts,
-        "_generate_and_save_beat_video_prompt",
-        fake_generate_and_save_beat_video_prompt,
-    )
-
-    result = await runner._run_beat_video_prompt(
-        {"episode": 1, "beat_num": 2, "payload": {"output_dir": str(tmp_path)}},
-        _ctx(tmp_path),
-    )
-
-    assert result["prompt"] == "camera move"
-    assert store.closed is True
-
-
-@pytest.mark.asyncio
 async def test_script_writer_reads_effective_scoped_config_and_closes_store(monkeypatch, tmp_path):
     import novelvideo.cognee as cognee
     from novelvideo import project_config

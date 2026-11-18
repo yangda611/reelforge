@@ -90,8 +90,8 @@ describe("displayLabel", () => {
   const t = zhT as unknown as (k: string, opts?: Record<string, unknown>) => string;
 
   it("localizes base task type", () => {
-    expect(displayLabel(sampleTask({ task_type: "sketch_regen", episode: 3 }), t)).toBe(
-      "草图重生成 · ep3",
+    expect(displayLabel(sampleTask({ task_type: "single_video", episode: 3 }), t)).toBe(
+      "单镜视频 · ep3",
     );
   });
   it("rebuilds the label when the backend display name is just the type + episode", () => {
@@ -119,20 +119,20 @@ describe("displayLabel", () => {
       ),
     ).toBe("雨夜巷口 · 第二版");
   });
-  // review #447: 后端 freezone/scripts 传的 display_name 是写死中文（"生成草图 · EP1 / Beat 3"），
+  // review #447: 后端 freezone/scripts 传的 display_name 是写死中文（"生成视频 · EP1 / Beat 3"），
   // 一度被当成业务内容标了 localizable=false，英文界面照样漏中文。这两条钉住重拼路径。
   it("rebuilds freezone display names that are hardcoded Chinese on the backend", () => {
     expect(
       displayLabel(
         sampleTask({
-          task_type: "sketch_regen",
+          task_type: "single_video",
           episode: 1,
           beat_num: 3,
-          display_name: "生成草图 · EP1 / Beat 3",
+          display_name: "生成视频 · EP1 / Beat 3",
         }),
         t,
       ),
-    ).toBe("草图重生成 · ep1 · beat 3");
+    ).toBe("单镜视频 · ep1 · beat 3");
   });
   it("keeps scene_name when rebuilding a scene-scoped label", () => {
     expect(
@@ -178,8 +178,8 @@ describe("displayLabel", () => {
     );
   });
   it("appends scope when present", () => {
-    expect(displayLabel(sampleTask({ task_type: "sketch_regen", episode: 3, scope: "regen__abc" }), t)).toBe(
-      "草图重生成 · ep3 · regen__abc",
+    expect(displayLabel(sampleTask({ task_type: "single_video", episode: 3, scope: "regen__abc" }), t)).toBe(
+      "单镜视频 · ep3 · regen__abc",
     );
   });
   it("hides internal episode asset planner run scopes", () => {
@@ -312,10 +312,10 @@ describe("taskLogLinesOf", () => {
 });
 
 describe("originDeepLink", () => {
-  it("returns route info for sketch-family tasks", () => {
-    const link = originDeepLink(sampleTask({ task_type: "sketch_regen", project: "demo", episode: 3 }));
+  it("returns route info for stage-owned tasks", () => {
+    const link = originDeepLink(sampleTask({ task_type: "single_video", project: "demo", episode: 3 }));
     expect(link).toEqual({
-      to: "/projects/$project/episodes/$episode/sketches",
+      to: "/projects/$project/episodes/$episode/video",
       params: { project: "demo", episode: "3" },
     });
   });

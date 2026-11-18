@@ -400,49 +400,6 @@ describe("TaskCenterProvider", () => {
     });
   });
 
-  it("invalidates beats when a beat video prompt task completes", async () => {
-    server.use(
-      http.get("*/api/v1/projects/demo/tasks", () =>
-        HttpResponse.json({
-          ok: true,
-          data: [
-            sampleTask({
-              task_id: "prompt-run-1",
-              task_key: "task:beat_video_prompt:project:demo:1:beat:3",
-              task_type: "beat_video_prompt",
-              episode: 1,
-              beat_num: 3,
-              status: "running",
-            }),
-          ],
-        }),
-      ),
-    );
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-    render(<Harness queryClient={queryClient} />);
-    await vi.waitFor(() => expect(MockEventSource.instances.length).toBe(1));
-
-    act(() => {
-      MockEventSource.instances[0].dispatch(
-        "task_updated",
-        sampleTask({
-          task_id: "prompt-run-1",
-          task_key: "task:beat_video_prompt:project:demo:1:beat:3",
-          task_type: "beat_video_prompt",
-          episode: 1,
-          beat_num: 3,
-          status: "completed",
-          completed_at: new Date().toISOString(),
-        }),
-      );
-    });
-
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.beats("demo", 1) });
-  });
-
   it.each(["script_writer", "literal_script_writer"])(
     "invalidates script data when a %s task completes",
     async (taskType) => {

@@ -5,7 +5,7 @@
 // 默认开启推理（高），支持全局与逐功能配置思考等级；设为「关闭」时请求不携带 reasoning_effort。
 
 export interface FeatureModelDef {
-  /** 稳定 id，对应后端 *_MODEL 环境变量前缀，如 GLOBAL_VIDEO_OPTIMIZER。 */
+  /** 稳定 id，对应后端 *_MODEL 环境变量前缀，如 SEEDANCE2_PROMPT_COMPOSER。 */
   id: string;
   /** 后端默认模型名，用作下拉「默认」项的展示与初始可用模型池。 */
   defaultModel: string;
@@ -27,22 +27,7 @@ export const FEATURE_MODEL_GROUPS: readonly FeatureModelGroup[] = [
   {
     key: "shot",
     features: [
-      {
-        id: "GLOBAL_VIDEO_OPTIMIZER",
-        defaultModel: "DC-video-prompt-optimizer-LLM",
-        requiresVision: true,
-      },
       { id: "SEEDANCE2_PROMPT_COMPOSER", defaultModel: "DC-seedance2-prompt-composer-LLM" },
-    ],
-  },
-  {
-    key: "sketch",
-    features: [
-      {
-        id: "GLOBAL_VIDEO_IDENTITY_DETECTOR",
-        defaultModel: "DC-video-identity-detector-LLM",
-        requiresVision: true,
-      },
     ],
   },
   {
@@ -153,9 +138,7 @@ export const FEATURE_MODEL_PRODUCT_GROUPS: readonly FeatureModelGroup[] = [
   {
     key: "xiajing",
     features: [
-      productFeature("GLOBAL_VIDEO_OPTIMIZER"),
       productFeature("SEEDANCE2_PROMPT_COMPOSER"),
-      productFeature("GLOBAL_VIDEO_IDENTITY_DETECTOR"),
       productFeature("IDENTITY_PLANNER_CAST"),
       productFeature("IDENTITY_PLANNER_ANALYSIS"),
       productFeature("IDENTITY_PLANNER_APPEARANCE"),

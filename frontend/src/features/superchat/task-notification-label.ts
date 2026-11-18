@@ -29,34 +29,6 @@ function parseTaskScope(scope: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
-function numberArray(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0);
-}
-
-function beatRangeLabel(beats: number[], t: TFn): string {
-  if (beats.length === 0) return "";
-  const sorted = [...new Set(beats)].sort((a, b) => a - b);
-  const ranges: string[] = [];
-  let start = sorted[0];
-  let previous = sorted[0];
-
-  for (const beat of sorted.slice(1)) {
-    if (beat === previous + 1) {
-      previous = beat;
-      continue;
-    }
-    ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
-    start = beat;
-    previous = beat;
-  }
-
-  ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
-  return t("tasks.chatLabel.beatRange", { ranges: ranges.join(", ") });
-}
-
 export function buildChatTaskLabel(task: Pick<
   TaskState,
   | "task_type"
@@ -71,25 +43,6 @@ export function buildChatTaskLabel(task: Pick<
 >, t: TFn): string {
   const result = stringRecord(task.result);
   const scopeParts = parseTaskScope(task.scope);
-
-  if (task.task_type === "sketch_generation") {
-    const gridIndex = Number(result.grid_index);
-    const totalGrids = Number(result.total_grids);
-    const hasGridNumber =
-      Number.isInteger(gridIndex)
-      && gridIndex >= 0
-      && Number.isInteger(totalGrids)
-      && totalGrids > 0;
-    const gridLabel = hasGridNumber
-      ? t("tasks.chatLabel.sketchGrid", { index: gridIndex + 1, total: totalGrids })
-      : t("tasks.chatLabel.sketch");
-    const label =
-      task.episode > 0
-        ? t("tasks.chatLabel.episodePrefixed", { episode: task.episode, label: gridLabel })
-        : gridLabel;
-    const beatLabel = beatRangeLabel(numberArray(result.beat_numbers), t);
-    return beatLabel ? t("tasks.chatLabel.withBeats", { label, beats: beatLabel }) : label;
-  }
 
   if (task.task_type === "scene_reference_asset") {
     const sceneName = stringValue(result.scene_name) || scopeParts[1] || "";

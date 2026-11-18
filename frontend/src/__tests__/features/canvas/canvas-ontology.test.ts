@@ -117,7 +117,7 @@ describe("canvas ontology", () => {
         imageUrl: "/static/candidate.png",
         user_spawned: true,
         slot_target: { kind: "frame", episode: 1, beat: 2 },
-        candidate_origin: { skill_id: "freezone.frame_from_context" },
+        candidate_origin: { skill_id: "freezone.scene_360" },
       },
     });
     const action = node({
@@ -125,8 +125,8 @@ describe("canvas ontology", () => {
       type: CANVAS_NODE_TYPES.skill,
       position: { x: 720, y: 0 },
       data: {
-        displayName: "从镜头上下文生成分镜",
-        skill_id: "freezone.frame_from_context",
+        displayName: "生成场景 360 全景",
+        skill_id: "freezone.scene_360",
       },
     });
     const edge = {
@@ -175,7 +175,7 @@ describe("canvas ontology", () => {
     expect(deriveCanvasOntologyObject(action)).toMatchObject({
       node_id: "skill-node",
       object_kind: "action",
-      action_id: "freezone.frame_from_context",
+      action_id: "freezone.scene_360",
     });
     expect(deriveCanvasOntologyLink(edge)).toEqual({
       id: "edge-1",
@@ -293,10 +293,10 @@ describe("canvas ontology", () => {
     expect(summary.action_nodes).toEqual([
       {
         node_id: "skill-node",
-        skill_id: "freezone.frame_from_context",
+        skill_id: "freezone.scene_360",
         action: "run_skill",
         command_type: "run_node_action",
-        label: "从镜头上下文生成分镜",
+        label: "生成场景 360 全景",
         execution_state: null,
       },
     ]);

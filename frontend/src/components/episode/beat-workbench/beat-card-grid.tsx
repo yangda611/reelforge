@@ -8,9 +8,7 @@ import { toast } from "sonner";
 import { openPresetProjectionInMyCanvas } from "@/features/freezone/openPresetProjection";
 import { useResponsiveColumns } from "@/hooks/use-responsive-columns";
 import { useDeleteManualShot } from "@/lib/queries/episodes";
-import { useGridsByBeat, type PoolImage } from "@/lib/queries/sketches";
 import type { Beat } from "@/types/episode";
-import type { ViewToggleId } from "@/hooks/use-view-toggles";
 import type { SelectionState } from "@/hooks/use-selection";
 import {
   AlertDialog,
@@ -25,13 +23,9 @@ import {
 import { BeatCard } from "./beat-card";
 import { InsertManualShotDialog } from "./insert-manual-shot-dialog";
 
-const EMPTY_IMAGES: PoolImage[] = [];
-
 interface BeatCardGridProps {
   beats: Beat[];
-  toggles: Set<ViewToggleId>;
   selection: SelectionState;
-  aspectRatio: "portrait" | "landscape";
   project: string;
   episode: number;
   spineTemplate?: "drama" | "narrated";
@@ -42,14 +36,12 @@ interface BeatCardGridProps {
 /**
  * Beat card grid — CSS grid layout with responsive columns.
  * No virtualization needed for typical 18-50 beat episodes.
- * Cards self-size based on content (images + text), all equal height
+ * Cards self-size based on content (beat text), all equal height
  * within a row via CSS grid's implicit row stretching.
  */
 export function BeatCardGrid({
   beats,
-  toggles,
   selection,
-  aspectRatio,
   project,
   episode,
   spineTemplate = "drama",
@@ -59,11 +51,8 @@ export function BeatCardGrid({
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const columns = useResponsiveColumns(scrollRef);
-  const { byBeat, assignments } = useGridsByBeat(project, episode);
   const deleteManual = useDeleteManualShot(project, episode);
 
-  const showSketch = toggles.has("sketch");
-  const showRender = toggles.has("render");
   const selectedBeat = selection.mode === "single" ? selection.beatNum : null;
   const checkedSet = selection.mode === "multi" ? selection.checked : null;
 
@@ -103,7 +92,7 @@ export function BeatCardGrid({
     setInsertOpen(true);
   }, []);
   const handleOpenFreezone = useCallback(
-    async (beatNum: number, primarySlot: "sketch" | "frame") => {
+    async (beatNum: number) => {
       if (freezonePendingBeat !== null) return;
       setFreezonePendingBeat(beatNum);
       try {
@@ -111,7 +100,7 @@ export function BeatCardGrid({
           scope: "beat",
           episode,
           beat: beatNum,
-          primary_slot: primarySlot,
+          primary_slot: "frame",
         });
       } catch {
         toast.error(t("episode.beat.openFreezoneFailed"));
@@ -152,11 +141,6 @@ export function BeatCardGrid({
             key={beat.beat_number}
             beat={beat}
             displayNumber={index + 1}
-            showSketch={showSketch}
-            showRender={showRender}
-            images={byBeat.get(beat.beat_number) ?? EMPTY_IMAGES}
-            assignments={assignments}
-            aspectRatio={aspectRatio}
             isSelected={selectedBeat === beat.beat_number}
             isChecked={checkedSet?.has(beat.beat_number) ?? false}
             onCardClick={onCardClick}

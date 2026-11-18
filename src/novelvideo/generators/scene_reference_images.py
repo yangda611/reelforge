@@ -34,7 +34,11 @@ from novelvideo.generators.nanobanana_grid import (
 )
 from novelvideo.egress_context import TrustedEgressContext
 from novelvideo.director_world.paths import safe_name
+from novelvideo.generators.image_resolution import resolve_image_model_profile
 from novelvideo.models import NovelScene, build_scene_effective_prompt
+from novelvideo.skills.realistic_asset_skills import (
+    get_realist_scene_master_skill_directives,
+)
 
 SceneReferenceKind = Literal["master", "spatial_layout", "reverse_master"]
 
@@ -174,6 +178,33 @@ def _style_context(
     return "\n".join(parts)
 
 
+def _resolve_scene_style_family(style_family: str = "", style_name: str = "") -> str:
+    explicit = str(style_family or "").strip().lower()
+    if explicit:
+        return explicit
+    raw_name = str(style_name or "").strip()
+    if not raw_name:
+        return ""
+    candidate_id = raw_name
+    if raw_name.endswith(")") and "(" in raw_name:
+        candidate_id = raw_name.rsplit("(", 1)[-1].rstrip(")").strip()
+    try:
+        from novelvideo.services.style_service import StyleService
+
+        preset = StyleService.get_preset(candidate_id)
+        if preset is not None:
+            return str(preset.style_family or "live_action").strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _realist_scene_skill_block(style_family: str = "", style_name: str = "") -> str:
+    if _resolve_scene_style_family(style_family, style_name) != "live_action":
+        return ""
+    return get_realist_scene_master_skill_directives()
+
+
 def _master_prompt(
     scene: NovelScene,
     *,
@@ -181,6 +212,7 @@ def _master_prompt(
     style_prompt: str = "",
     avoid_instructions: str = "",
     base_scene: NovelScene | None = None,
+    style_family: str = "",
 ) -> str:
     style_block = _style_context(
         style_name=style_name,
@@ -228,6 +260,9 @@ def _master_prompt(
   - The text labels "左侧" / "右侧" describe side walls/zones visible as partial left/right coverage.
 {time_instruction}"""
 
+    skill_block = _realist_scene_skill_block(style_family, style_name)
+    skill_section = f"\n\n{skill_block}" if skill_block else ""
+
     return f"""Generate ONE master reference image for this scene.
 
 {scene_block}
@@ -250,7 +285,7 @@ HARD REQUIREMENTS:
   architectural trim, exterior fixtures.
 - Do not add readable text, subtitles, labels, UI, watermarks, panel titles, or diagrams.
 - Do not make a collage, floor plan, blueprint, fisheye image, or VR image.
-- Output one finished scene reference image only.
+- Output one finished scene reference image only.{skill_section}
 """.strip()
 
 
@@ -358,6 +393,7 @@ def _reverse_master_prompt(
     avoid_instructions: str = "",
     has_master_reference: bool = False,
     base_scene: NovelScene | None = None,
+    style_family: str = "",
 ) -> str:
     # 有 master 参考图时不注入 PROJECT STYLE PRESET 文本：master 已经按项目风格生成，
     # reverse 直接 match master 的实际像素（STRICT STYLE LOCK 段）。两个风格通道
@@ -377,6 +413,9 @@ def _reverse_master_prompt(
             style_prompt=style_prompt,
             avoid_instructions=avoid_instructions,
         )
+        skill_block = _realist_scene_skill_block(style_family, style_name)
+        if skill_block:
+            style_block = (f"{style_block}\n\n{skill_block}").strip()
     scene_block = _scene_context(scene, base_scene)
 
     scene_type = (getattr(scene, "scene_type", "") or "").strip().lower()
@@ -497,6 +536,7 @@ def build_scene_reference_prompt(
     avoid_instructions: str = "",
     has_master_reference: bool = False,
     base_scene: NovelScene | None = None,
+    style_family: str = "",
 ) -> str:
     if kind == "master":
         return _master_prompt(
@@ -505,6 +545,7 @@ def build_scene_reference_prompt(
             style_prompt=style_prompt,
             avoid_instructions=avoid_instructions,
             base_scene=base_scene,
+            style_family=style_family,
         )
     if kind == "spatial_layout":
         return _spatial_layout_prompt(
@@ -520,6 +561,7 @@ def build_scene_reference_prompt(
             avoid_instructions=avoid_instructions,
             has_master_reference=has_master_reference,
             base_scene=base_scene,
+            style_family=style_family,
         )
     raise ValueError(f"Unsupported scene reference kind: {kind}")
 
@@ -586,18 +628,36 @@ def resolve_scene_reference_image_model(
     return _scene_image_model(kind, selected_provider, model)
 
 
-def _scene_image_config(model: str) -> dict[str, str]:
-    image_config = {
+def _scene_image_config(
+    model: str,
+    *,
+    provider: str = "newapi",
+    image_size: str | None = None,
+    request_schema: dict | None = None,
+) -> dict:
+    resolved_profile = resolve_image_model_profile(provider, model)
+    resolved_size = image_size or resolved_profile.max_image_size
+    resolved_schema = (
+        request_schema if request_schema is not None else resolved_profile.request_schema
+    )
+    image_config: dict = {
         "aspect_ratio": "16:9",
-        "image_size": "1K",
+        "image_size": resolved_size,
         "output_format": "png",
     }
-    if str(model or "").strip().lower() in {
-        "lingshan-g2",
-        "gpt-image-2",
-        "image-2",
-        "image-2-official",
-    }:
+    if resolved_schema:
+        image_config["request_schema"] = resolved_schema
+    lowered_model = str(model or "").strip().lower()
+    if (
+        lowered_model in {
+            "lingshan-g2",
+            "gpt-image-2",
+            "image-2",
+            "image-2-official",
+        }
+        or "gpt-image" in lowered_model
+        or resolved_schema.get("includeQuality")
+    ):
         image_config["quality"] = "medium"
     return image_config
 
@@ -612,6 +672,7 @@ async def generate_scene_reference_image(
     style_name: str = "",
     style_prompt: str = "",
     avoid_instructions: str = "",
+    style_family: str = "",
     base_scene: NovelScene | None = None,
     egress_context: TrustedEgressContext | None = None,
 ) -> Path:
@@ -658,9 +719,17 @@ async def generate_scene_reference_image(
         avoid_instructions=avoid_instructions,
         has_master_reference=has_master_reference,
         base_scene=base_scene,
+        style_family=style_family,
     )
     provider = _scene_image_provider(kind, provider)
     selected_model = _scene_image_model(kind, provider, model)
+    image_profile = resolve_image_model_profile(provider, selected_model)
+    scene_image_cfg = _scene_image_config(
+        selected_model,
+        provider=provider,
+        image_size=image_profile.max_image_size,
+        request_schema=image_profile.request_schema,
+    )
     organization_egress = await _prepare_organization_image_egress(
         egress_context=egress_context,
         provider="newapi" if provider == "newapi" else provider,
@@ -683,7 +752,7 @@ async def generate_scene_reference_image(
             model=selected_model,
             prompt=prompt,
             reference_images=references or None,
-            image_config=_scene_image_config(selected_model),
+            image_config=scene_image_cfg,
         )
     elif provider == "newapi":
         request_model = selected_model
@@ -712,7 +781,7 @@ async def generate_scene_reference_image(
             model=request_model,
             prompt=prompt,
             reference_images=references or None,
-            image_config=_scene_image_config(selected_model),
+            image_config=scene_image_cfg,
             base_url=base_url,
             trace=trace,
             delivery_path=output_path,
@@ -729,7 +798,7 @@ async def generate_scene_reference_image(
             reference_images=references or None,
             image_config={
                 "aspect_ratio": "16:9",
-                "image_size": "1K",
+                "image_size": image_profile.max_image_size,
                 "quality": "medium",
                 "huimeng_image_quality": "medium",
             },
@@ -743,7 +812,7 @@ async def generate_scene_reference_image(
             reference_images=[item[1] for item in references] or None,
             image_config={
                 "aspect_ratio": "16:9",
-                "image_size": "1K",
+                "image_size": image_profile.max_image_size,
                 "quality": "medium",
             },
         )

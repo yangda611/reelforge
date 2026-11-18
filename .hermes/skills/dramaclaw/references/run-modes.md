@@ -71,10 +71,7 @@ pipeline 步骤顺序与专用工具，只是「是否每步解释并确认」�
 | 场景规划 | `dramaclaw_get(path="/projects/{project}/scenes")` 展示场景列表 |
 | 道具规划 | `dramaclaw_get(path="/projects/{project}/props")` 展示道具列表 |
 | 场景参考图 | `dramaclaw_get_scene_images()` 展示场景图 |
-| 草图生成 | `dramaclaw_get_sketches(episode=N)` 展示草图 |
-| AI 检测 | `dramaclaw_get_episode_script(episode=N)` 或 beats 接口汇总每个 beat 检测到的身份/道具；不要重复调用检测 |
-| 全局视频优化 | `dramaclaw_get_episode_script(episode=N)` 或 beats 接口汇总 video_mode / video_prompt 就绪情况 |
-| 首帧生成 | `dramaclaw_get_first_frames(episode=N)` 展示首帧 |
+| 首帧（用户上传） | `dramaclaw_get_first_frames(episode=N)` 展示首帧 |
 | 音频生成 | `dramaclaw_get_episode_media(episode=N, media_type="audio")` 展示音频 |
 | 单 beat 视频 | `dramaclaw_get_episode_media(episode=N, media_type="video")` 展示视频片段 |
 | 合成导出 | `dramaclaw_get_final_video(episode=N)` 展示最终成片 |

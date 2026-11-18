@@ -34,7 +34,6 @@ export interface StageCount {
 
 export interface EpisodeCounts {
   script: StageCount;
-  sketch: StageCount;
   audio: StageCount;
   video: StageCount;
   compose: {

@@ -77,13 +77,13 @@ def classify_path(path: str) -> str:
         or domain.startswith("character-image-")
     ):
         return "M04"
-    if domain in {"scenes", "sketch-settings", "director-stage"}:
+    if domain in {"scenes", "director-stage"}:
         return "M05"
     if domain in {"ingest", "freezone"}:
         return "M06"
     if domain in {"tasks", "pipeline"}:
         return "M07"
-    if domain in {"media", "render-settings", "video-backends", "assets"}:
+    if domain in {"media", "video-backends", "assets"}:
         return "M09"
     return "未分类"
 

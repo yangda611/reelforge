@@ -16,7 +16,7 @@ function makeBeat(overrides: Partial<Beat>): Beat {
 
 function makeTask(overrides: Partial<Task>): Task {
   return {
-    task_type: "sketch_generation",
+    task_type: "audio_generation_indextts2",
     project: "p",
     episode: 1,
     status: "running",
@@ -26,28 +26,29 @@ function makeTask(overrides: Partial<Task>): Task {
 }
 
 describe("deriveBeatStates", () => {
-  it("marks sketch ready when the canonical sketch URL is present", () => {
+  it("marks audio ready when the audio URL is present", () => {
     const result = deriveBeatStates(
-      [makeBeat({ beat_number: 1, sketch_url: "/sketch.png", frame_url: null })],
+      [makeBeat({ beat_number: 1, audio_url: "/a.mp3" })],
       [],
     );
-    expect(result[1].sketch).toBe("ready");
+    expect(result[1].audio).toBe("ready");
   });
 
-  it("does not mark sketch ready from a render frame URL", () => {
+  it("does not mark video ready from a first-frame URL", () => {
     const result = deriveBeatStates(
-      [makeBeat({ beat_number: 1, sketch_url: null, frame_url: "/frame.png" })],
+      [makeBeat({ beat_number: 1, video_url: null, frame_url: "/frame.png" })],
       [],
     );
-    expect(result[1].sketch).toBe("missing");
+    expect(result[1].video).toBe("missing");
   });
 
   it("marks missing when no asset and no task", () => {
     const result = deriveBeatStates(
-      [makeBeat({ beat_number: 1, frame_url: null })],
+      [makeBeat({ beat_number: 1, audio_url: null, video_url: null })],
       [],
     );
-    expect(result[1].sketch).toBe("missing");
+    expect(result[1].audio).toBe("missing");
+    expect(result[1].video).toBe("missing");
   });
 
   it("marks generating when a scoped task matches beat_num", () => {
@@ -69,15 +70,15 @@ describe("deriveBeatStates", () => {
   it("marks ALL missing beats as generating when a batch task is active", () => {
     const result = deriveBeatStates(
       [
-        makeBeat({ beat_number: 1, frame_url: null }),
-        makeBeat({ beat_number: 2, sketch_url: "/sketch.png", frame_url: null }),
-        makeBeat({ beat_number: 3, frame_url: null }),
+        makeBeat({ beat_number: 1, audio_url: null }),
+        makeBeat({ beat_number: 2, audio_url: "/a.mp3" }),
+        makeBeat({ beat_number: 3, audio_url: null }),
       ],
-      [makeTask({ task_type: "batch_sketch", status: "running" })],
+      [makeTask({ task_type: "audio_generation_indextts2", status: "running" })],
     );
-    expect(result[1].sketch).toBe("generating");
-    expect(result[2].sketch).toBe("ready");
-    expect(result[3].sketch).toBe("generating");
+    expect(result[1].audio).toBe("generating");
+    expect(result[2].audio).toBe("ready");
+    expect(result[3].audio).toBe("generating");
   });
 
   it("attributes failure to a specific beat when task.beat_num matches", () => {
@@ -91,13 +92,13 @@ describe("deriveBeatStates", () => {
   it("does NOT inherit batch failures to individual beats", () => {
     const result = deriveBeatStates(
       [
-        makeBeat({ beat_number: 1, frame_url: null }),
-        makeBeat({ beat_number: 2, frame_url: null }),
+        makeBeat({ beat_number: 1, audio_url: null }),
+        makeBeat({ beat_number: 2, audio_url: null }),
       ],
-      [makeTask({ task_type: "batch_sketch", status: "failed" })],
+      [makeTask({ task_type: "audio_generation_indextts2", status: "failed" })],
     );
-    expect(result[1].sketch).toBe("missing");
-    expect(result[2].sketch).toBe("missing");
+    expect(result[1].audio).toBe("missing");
+    expect(result[2].audio).toBe("missing");
   });
 
   it("evaluates ready before failed — existing asset never masked by old failure", () => {
@@ -138,42 +139,33 @@ describe("deriveBeatStates", () => {
 
   it("ignores completed tasks (not active)", () => {
     const result = deriveBeatStates(
-      [makeBeat({ beat_number: 1, frame_url: null })],
-      [makeTask({ task_type: "batch_sketch", status: "completed" })],
+      [makeBeat({ beat_number: 1, audio_url: null })],
+      [makeTask({ task_type: "audio_generation_indextts2", status: "completed" })],
     );
-    expect(result[1].sketch).toBe("missing");
+    expect(result[1].audio).toBe("missing");
   });
 
-  it("marks only the targeted beat as generating for sketch_regen", () => {
+  it("marks only the targeted beat as generating for single_video", () => {
     const result = deriveBeatStates(
       [
-        makeBeat({ beat_number: 1, frame_url: null }),
-        makeBeat({ beat_number: 2, frame_url: null }),
+        makeBeat({ beat_number: 1, video_url: null }),
+        makeBeat({ beat_number: 2, video_url: null }),
       ],
-      [makeTask({ task_type: "sketch_regen", beat_num: 2, status: "running" })],
+      [makeTask({ task_type: "single_video", beat_num: 2, status: "running" })],
     );
-    expect(result[1].sketch).toBe("missing");
-    expect(result[2].sketch).toBe("generating");
+    expect(result[1].video).toBe("missing");
+    expect(result[2].video).toBe("generating");
   });
-
-  it("surfaces selected_regen in video stage", () => {
-    const result = deriveBeatStates(
-      [makeBeat({ beat_number: 3, video_url: null })],
-      [makeTask({ task_type: "selected_regen", beat_num: 3, status: "running" })],
-    );
-    expect(result[3].video).toBe("generating");
-  });
-
   it("handles many beats and tasks without regression", () => {
     const beats = Array.from({ length: 50 }, (_, i) =>
-      makeBeat({ beat_number: i + 1, frame_url: null, video_url: null }),
+      makeBeat({ beat_number: i + 1, audio_url: null, video_url: null }),
     );
     const tasks = Array.from({ length: 20 }, (_, i) =>
-      makeTask({ task_type: "sketch_generation", status: i < 5 ? "running" : "completed" }),
+      makeTask({ task_type: "audio_generation_indextts2", status: i < 5 ? "running" : "completed" }),
     );
     const result = deriveBeatStates(beats, tasks);
-    expect(result[1].sketch).toBe("generating");
-    expect(result[50].sketch).toBe("generating");
+    expect(result[1].audio).toBe("generating");
+    expect(result[50].audio).toBe("generating");
     expect(result[1].script).toBe("ready");
   });
 });

@@ -826,21 +826,21 @@ describe("canvas action catalog", () => {
 
   it("describes skill nodes without exposing run_skill until required inputs are connected", () => {
     const skill = node({
-      id: "skill-sketch-a",
+      id: "skill-bg-a",
       type: CANVAS_NODE_TYPES.skill,
       data: {
-        displayName: "根据当前背景生成草图",
-        skill_id: "freezone.sketch_from_context",
-        parameters: { style: "rough" },
+        displayName: "设为当前背景",
+        skill_id: "freezone.set_selected_background",
+        parameters: {},
       },
     });
 
     const catalog = buildCanvasNodeActionCatalog(skill);
 
     expect(catalog).toMatchObject({
-      node_id: "skill-sketch-a",
+      node_id: "skill-bg-a",
       node_type: CANVAS_NODE_TYPES.skill,
-      skill_id: "freezone.sketch_from_context",
+      skill_id: "freezone.set_selected_background",
     });
     expect(catalog.downstream_spawn_types).toEqual([CANVAS_NODE_TYPES.imageGen]);
     expect(catalog.actions).not.toContainEqual(
@@ -857,25 +857,25 @@ describe("canvas action catalog", () => {
         beat_context: { episode: 1, beat: 2 },
       },
     });
-    const background = node({
-      id: "background-a",
+    const source = node({
+      id: "source-a",
       type: CANVAS_NODE_TYPES.imageGen,
       data: {
-        displayName: "背景",
-        imageUrl: "/static/background.png",
+        displayName: "源图片",
+        imageUrl: "/static/source.png",
       },
     });
     const skill = node({
-      id: "skill-sketch-a",
+      id: "skill-bg-a",
       type: CANVAS_NODE_TYPES.skill,
       data: {
-        displayName: "根据当前背景生成草图",
-        skill_id: "freezone.sketch_from_context",
+        displayName: "设为当前背景",
+        skill_id: "freezone.set_selected_background",
       },
     });
 
     const catalog = buildCanvasNodeActionCatalog(skill, {
-      nodes: [beat, background, skill],
+      nodes: [beat, source, skill],
       edges: [
         {
           id: "edge-beat",
@@ -885,11 +885,11 @@ describe("canvas action catalog", () => {
           data: { role: "beat_context" },
         },
         {
-          id: "edge-background",
-          source: background.id,
+          id: "edge-source",
+          source: source.id,
           target: skill.id,
-          targetHandle: "background",
-          data: { role: "background" },
+          targetHandle: "source_image",
+          data: { role: "source_image" },
         },
       ],
     });
@@ -903,15 +903,15 @@ describe("canvas action catalog", () => {
         blocked_reasons: [],
         description: expect.stringContaining("Run this skill node"),
         parameters: {
-          node_id: "skill-sketch-a",
-          skill_id: "freezone.sketch_from_context",
+          node_id: "skill-bg-a",
+          skill_id: "freezone.set_selected_background",
           result_policy: "spawn_outputs",
         },
       }),
     );
   });
 
-  it("marks run_skill blocked when connected sketch inputs have not produced imageUrl", () => {
+  it("marks run_skill blocked when connected source images have not produced imageUrl", () => {
     const beat = node({
       id: "beat-a",
       type: CANVAS_NODE_TYPES.beatContext,
@@ -920,24 +920,24 @@ describe("canvas action catalog", () => {
         beat_context: { episode: 1, beat: 2 },
       },
     });
-    const pendingSketch = node({
-      id: "sketch-a",
+    const pendingSource = node({
+      id: "source-a",
       type: CANVAS_NODE_TYPES.imageGen,
       data: {
-        displayName: "正在生成的草图",
+        displayName: "正在生成的源图",
       },
     });
     const skill = node({
-      id: "skill-frame-a",
+      id: "skill-bg-b",
       type: CANVAS_NODE_TYPES.skill,
       data: {
-        displayName: "根据草图生成分镜",
-        skill_id: "freezone.frame_from_context",
+        displayName: "设为当前背景",
+        skill_id: "freezone.set_selected_background",
       },
     });
 
     const catalog = buildCanvasNodeActionCatalog(skill, {
-      nodes: [beat, pendingSketch, skill],
+      nodes: [beat, pendingSource, skill],
       edges: [
         {
           id: "edge-beat",
@@ -947,11 +947,11 @@ describe("canvas action catalog", () => {
           data: { role: "beat_context" },
         },
         {
-          id: "edge-sketch",
-          source: pendingSketch.id,
+          id: "edge-source",
+          source: pendingSource.id,
           target: skill.id,
-          targetHandle: "sketch",
-          data: { role: "sketch" },
+          targetHandle: "source_image",
+          data: { role: "source_image" },
         },
       ],
     });
@@ -961,13 +961,13 @@ describe("canvas action catalog", () => {
         action: "run_skill",
         command_type: "run_node_action",
         can_run_now: false,
-        blocked_reasons: ["sketch 输入尚未就绪：上游草图节点缺少 imageUrl。"],
+        blocked_reasons: ["source_image 输入尚未就绪：上游源图片节点缺少 imageUrl。"],
         instruction: expect.stringContaining("不要 emit run_node_action"),
         preconditions: [
           expect.objectContaining({
             type: "required_upstream_output",
-            role: "sketch",
-            node_ids: ["sketch-a"],
+            role: "source_image",
+            node_ids: ["source-a"],
             required_field: "imageUrl",
             status: "missing",
           }),

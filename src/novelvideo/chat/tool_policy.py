@@ -75,15 +75,12 @@ DRAMACLAW_WRITE_TOOLS: frozenset[str] = frozenset(
         "dramaclaw_create_interactive_story",
         "dramaclaw_delete",
         "dramaclaw_delete_freezone_canvas",
-        "dramaclaw_detect_sketch_identities",
         "dramaclaw_generate_audio",
         "dramaclaw_generate_identity_image",
         "dramaclaw_generate_portrait",
         "dramaclaw_generate_scene_master",
         "dramaclaw_generate_scene_reverse",
         "dramaclaw_generate_script",
-        "dramaclaw_generate_sketches",
-        "dramaclaw_optimize_video_global",
         "dramaclaw_patch",
         "dramaclaw_patch_interactive_story",
         "dramaclaw_plan_episodes",
@@ -92,7 +89,6 @@ DRAMACLAW_WRITE_TOOLS: frozenset[str] = frozenset(
         "dramaclaw_plan_scenes",
         "dramaclaw_post",
         "dramaclaw_prepare_system_voices",
-        "dramaclaw_render_first_frames",
         "dramaclaw_run_freezone_skill",
         "dramaclaw_save_interactive_story_outline",
         "dramaclaw_confirm_interactive_story_outline",
@@ -195,8 +191,6 @@ DISPLAY_TOOL_NAMES: frozenset[str] = frozenset(
         "dramaclaw_get_final_video",
         "dramaclaw_get_first_frames",
         "dramaclaw_get_scene_images",
-        "dramaclaw_get_sketch_candidates",
-        "dramaclaw_get_sketches",
     }
 )
 """Mainline media display tools whose UI cards may be rebuilt from the authoritative API."""

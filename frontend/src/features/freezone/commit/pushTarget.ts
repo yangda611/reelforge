@@ -48,7 +48,6 @@ export function inferDefaultTarget(
   const role = typeof source.role === "string" ? source.role : "";
   if (
     kind === "frame" ||
-    kind === "sketch" ||
     kind === "director_render" ||
     kind === "selected_background" ||
     kind === "video"
@@ -170,7 +169,6 @@ export function completeTarget(
   if (!partial) return null;
   if (
     partial.kind === "frame" ||
-    partial.kind === "sketch" ||
     partial.kind === "director_render" ||
     partial.kind === "selected_background" ||
     partial.kind === "video" ||

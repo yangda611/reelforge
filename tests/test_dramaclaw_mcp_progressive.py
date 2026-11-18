@@ -627,20 +627,11 @@ async def test_real_episode_image_handlers_preserve_project_scope_in_mcp_contrac
     monkeypatch.setenv("DRAMACLAW_PROJECT_ID", "project-a")
 
     def fake_request(_method, path, **_kwargs):
-        if path.endswith("/sketch-candidates"):
-            return {
-                "ok": True,
-                "data": {
-                    "candidate_count": 1,
-                    "candidates": [{"url": "/static/candidate.png", "stale": False}],
-                },
-            }
         return {
             "ok": True,
             "data": [
                 {
                     "beat_number": 1,
-                    "sketch_url": "/static/sketch.png",
                     "frame_url": "/static/frame.png",
                 }
             ],
@@ -648,9 +639,7 @@ async def test_real_episode_image_handlers_preserve_project_scope_in_mcp_contrac
 
     monkeypatch.setattr(dramaclaw_mcp._plugin("dramaclaw"), "_request", fake_request)
     cases = [
-        ("dramaclaw_get_sketches", {"episode": 1}, "sketches"),
         ("dramaclaw_get_first_frames", {"episode": 1}, "frames"),
-        ("dramaclaw_get_sketch_candidates", {"episode": 1, "beat": 1}, "candidates"),
     ]
     for tool_name, arguments, collection_field in cases:
         result = await dramaclaw_mcp.call_tool(tool_name, arguments)
@@ -1234,7 +1223,7 @@ async def test_freezone_scope_rejects_direct_mainline_write_call(monkeypatch):
 
     with pytest.raises(ValueError, match="unknown DramaClaw tool"):
         await dramaclaw_mcp.call_tool(
-            "dramaclaw_render_first_frames",
+            "dramaclaw_generate_script",
             {"episode": 1},
         )
 
@@ -1256,11 +1245,11 @@ async def test_tool_call_validates_and_dispatches_existing_handler(monkeypatch):
     monkeypatch.setenv("DRAMACLAW_PROJECT_ID", "project-a")
     monkeypatch.setenv("DRAMACLAW_TOOL_MODE", "default")
     tools = dramaclaw_mcp._agent_tools()
-    schema, _handler = tools["dramaclaw_render_first_frames"]
+    schema, _handler = tools["dramaclaw_generate_script"]
     calls = []
     monkeypatch.setitem(
         tools,
-        "dramaclaw_render_first_frames",
+        "dramaclaw_generate_script",
         (
             schema,
             lambda arguments: calls.append(arguments)
@@ -1268,26 +1257,25 @@ async def test_tool_call_validates_and_dispatches_existing_handler(monkeypatch):
                 {
                     "ok": True,
                     "episode": 1,
-                    "batch_id": "batch-1",
-                    "requested": [1],
-                    "started": [1],
+                    "task_id": "task-1",
+                    "task_type": "script_writer",
                 }
             ),
         ),
     )
 
-    invalid = await dramaclaw_mcp.call_tool("dramaclaw_render_first_frames", {})
+    invalid = await dramaclaw_mcp.call_tool("dramaclaw_generate_script", {})
     invalid_payload = json.loads(invalid.content[0].text)
     assert invalid_payload["ok"] is False
     assert invalid_payload["error"] == "tool_arguments_invalid"
-    assert invalid.structuredContent["tool_name"] == "dramaclaw_render_first_frames"
+    assert invalid.structuredContent["tool_name"] == "dramaclaw_generate_script"
     assert invalid.structuredContent["path"] == "arguments"
     assert invalid.structuredContent["phase"] == "tool_validation"
     assert "details" not in invalid.structuredContent
     assert calls == []
 
     valid = await dramaclaw_mcp.call_tool(
-        "dramaclaw_render_first_frames", {"episode": 1}
+        "dramaclaw_generate_script", {"episode": 1}
     )
     assert json.loads(valid.content[0].text)["ok"] is True
     assert calls == [{"episode": 1}]
@@ -1298,7 +1286,7 @@ async def test_native_tool_call_does_not_block_mcp_event_loop(monkeypatch):
     monkeypatch.setenv("DRAMACLAW_PROJECT_ID", "project-a")
     monkeypatch.setenv("DRAMACLAW_TOOL_MODE", "default")
     tools = dramaclaw_mcp._agent_tools()
-    schema, _handler = tools["dramaclaw_render_first_frames"]
+    schema, _handler = tools["dramaclaw_generate_script"]
 
     def blocking_handler(_arguments):
         time.sleep(0.2)
@@ -1306,20 +1294,19 @@ async def test_native_tool_call_does_not_block_mcp_event_loop(monkeypatch):
             {
                 "ok": True,
                 "episode": 1,
-                "batch_id": "batch-1",
-                "requested": [1],
-                "started": [1],
+                "task_id": "task-1",
+                "task_type": "script_writer",
             }
         )
 
     monkeypatch.setitem(
         tools,
-        "dramaclaw_render_first_frames",
+        "dramaclaw_generate_script",
         (schema, blocking_handler),
     )
     call = asyncio.create_task(
         dramaclaw_mcp.call_tool(
-            "dramaclaw_render_first_frames",
+            "dramaclaw_generate_script",
             {"episode": 1},
         )
     )

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
 import base64
 from io import BytesIO
 from types import SimpleNamespace
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -63,7 +61,6 @@ def _client(monkeypatch, tmp_path, config: dict | None = None):
             f"/static/projects/{getattr(ctx, 'project_id', 'proj_demo')}/{rel}"
         ),
     )
-    monkeypatch.setattr(generation, "load_project_config", lambda username, project: current_config)
     monkeypatch.setattr(generation, "save_project_config", fake_save_project_config, raising=False)
 
     app = FastAPI()
@@ -77,153 +74,6 @@ def _selected_background_path(project_dir):
     return project_dir / "director_control_frames" / "ep001" / "beat_04" / "selected_background.png"
 
 
-@pytest.mark.m09
-def test_render_settings_returns_current_selection_and_options(monkeypatch, tmp_path):
-    client, _saved = _client(
-        monkeypatch,
-        tmp_path,
-        {
-            "render_image_selection": "newapi_nanobanana2",
-            "sketch_aspect_padding": True,
-        },
-    )
-
-    response = client.get("/api/v1/projects/demo/render-settings")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["render_image_selection"] == "newapi_nanobanana2"
-    assert body["data"]["options"] == {
-        "newapi_gpt_image2": "LingShan-G2",
-        "newapi_nanobanana2": "LingShan-NB-2",
-    }
-    assert body["data"]["sketch_aspect_padding"] is True
-    assert "force_half_k" not in body["data"]
-
-
-@pytest.mark.m09
-def test_render_settings_maps_legacy_selection_to_visible_newapi_option(monkeypatch, tmp_path):
-    client, _saved = _client(
-        monkeypatch,
-        tmp_path,
-        {"render_image_selection": "huimeng_gpt_image2"},
-    )
-
-    response = client.get("/api/v1/projects/demo/render-settings")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["render_image_selection"] == "newapi_gpt_image2"
-    assert body["data"]["render_image_selection"] in body["data"]["options"]
-
-
-@pytest.mark.m09
-def test_render_settings_patch_persists_valid_settings(monkeypatch, tmp_path):
-    client, saved = _client(monkeypatch, tmp_path)
-
-    response = client.patch(
-        "/api/v1/projects/demo/render-settings",
-        json={
-            "render_image_selection": "newapi_nanobanana2",
-            "sketch_aspect_padding": True,
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert saved == [
-        {
-            "render_image_selection": "newapi_nanobanana2",
-            "sketch_aspect_padding": True,
-        }
-    ]
-    assert "force_half_k" not in body["data"]
-
-
-@pytest.mark.m09
-def test_render_settings_patch_rejects_unknown_selection(monkeypatch, tmp_path):
-    client, saved = _client(monkeypatch, tmp_path)
-
-    response = client.patch(
-        "/api/v1/projects/demo/render-settings",
-        json={"render_image_selection": "unknown"},
-    )
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["ok"] is False
-    assert "Invalid render_image_selection" in body["error"]
-    assert saved == []
-
-
-def test_sketch_settings_returns_current_selection_and_options(monkeypatch, tmp_path):
-    client, _saved = _client(
-        monkeypatch,
-        tmp_path,
-        {"sketch_image_selection": "newapi_nanobanana2"},
-    )
-
-    response = client.get("/api/v1/projects/demo/sketch-settings")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["sketch_image_selection"] == "newapi_nanobanana2"
-    assert body["data"]["options"] == {
-        "newapi_gpt_image2": "LingShan-G2",
-        "newapi_nanobanana2": "LingShan-NB-2",
-    }
-
-
-def test_sketch_settings_maps_legacy_selection_to_visible_newapi_option(monkeypatch, tmp_path):
-    client, _saved = _client(
-        monkeypatch,
-        tmp_path,
-        {"sketch_image_selection": "huimeng_image2_official"},
-    )
-
-    response = client.get("/api/v1/projects/demo/sketch-settings")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["sketch_image_selection"] == "newapi_gpt_image2"
-    assert body["data"]["sketch_image_selection"] in body["data"]["options"]
-
-
-def test_sketch_settings_patch_persists_valid_selection(monkeypatch, tmp_path):
-    client, saved = _client(monkeypatch, tmp_path)
-
-    response = client.patch(
-        "/api/v1/projects/demo/sketch-settings",
-        json={"sketch_image_selection": "newapi_nanobanana2"},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert saved == [{"sketch_image_selection": "newapi_nanobanana2"}]
-    assert body["data"]["sketch_image_selection"] == "newapi_nanobanana2"
-
-
-def test_sketch_settings_patch_rejects_unknown_selection(monkeypatch, tmp_path):
-    client, saved = _client(monkeypatch, tmp_path)
-
-    response = client.patch(
-        "/api/v1/projects/demo/sketch-settings",
-        json={"sketch_image_selection": "unknown"},
-    )
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["ok"] is False
-    assert "Invalid sketch_image_selection" in body["error"]
-    assert saved == []
-
-
 def test_director_control_frame_status_reports_missing_and_ready(monkeypatch, tmp_path):
     client, _saved = _client(monkeypatch, tmp_path)
 
@@ -233,7 +83,8 @@ def test_director_control_frame_status_reports_missing_and_ready(monkeypatch, tm
     missing_body = missing_response.json()
     assert missing_body["ok"] is True
     assert missing_body["data"]["ready"] is False
-    assert missing_body["data"]["scope"] == "director_control_to_sketch:ep001:beat_04"
+    assert "scope" not in missing_body["data"]
+    assert "mode_key" not in missing_body["data"]
 
     control_frame = tmp_path / "director_control_frames" / "ep001" / "beat_04" / "combined.png"
     control_frame.parent.mkdir(parents=True)
@@ -248,57 +99,7 @@ def test_director_control_frame_status_reports_missing_and_ready(monkeypatch, tm
     assert ready_body["data"]["url"] == (
         "/static/projects/proj_demo/director_control_frames/ep001/beat_04/combined.png"
     )
-    assert ready_body["data"]["mode_key"] == "1x1_16-9_sketch"
-
-
-def test_director_control_to_sketch_starts_existing_actor(monkeypatch, tmp_path):
-    client, _saved = _client(monkeypatch, tmp_path)
-    control_frame = tmp_path / "director_control_frames" / "ep001" / "beat_04" / "combined.png"
-    control_frame.parent.mkdir(parents=True)
-    control_frame.write_bytes(b"fake png")
-    calls: list[dict] = []
-
-    def fake_start_control_frame_to_sketch_task(**kwargs):
-        calls.append(kwargs)
-
-    from novelvideo.api.routes import generation
-
-    monkeypatch.setattr(
-        generation,
-        "start_control_frame_to_sketch_task",
-        fake_start_control_frame_to_sketch_task,
-        raising=False,
-    )
-
-    response = client.post("/api/v1/projects/demo/episodes/1/beats/4/director-control-to-sketch")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["task_type"] == "director_control_to_sketch"
-    assert body["scope"] == "director_control_to_sketch:ep001:beat_04"
-    assert calls == [
-        {
-            "username": "alice",
-            "project": "demo",
-            "episode": 1,
-            "beat_num": 4,
-            "output_dir": str(tmp_path),
-            "state_dir": str(tmp_path / "_state"),
-            "scope": "director_control_to_sketch:ep001:beat_04",
-        }
-    ]
-
-
-def test_director_control_to_sketch_rejects_missing_control_frame(monkeypatch, tmp_path):
-    client, _saved = _client(monkeypatch, tmp_path)
-
-    response = client.post("/api/v1/projects/demo/episodes/1/beats/4/director-control-to-sketch")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is False
-    assert "combined.png" in body["error"]
+    assert "mode_key" not in ready_body["data"]
 
 
 class _FakePropMenuItem:
@@ -750,7 +551,7 @@ def test_director_stage_control_frame_export_writes_images_and_meta(monkeypatch,
     assert "actor_overlay_black" not in data["paths"]
     assert "actor_mask" not in data["paths"]
     assert "combined_layered_debug" not in data["paths"]
-    meta = __import__("json").loads((target_dir / "frame_meta.json").read_text())
+    meta = __import__("json").loads((target_dir / "frame_meta.json").read_text(encoding="utf-8"))
     assert meta["schema_version"] == "director_frame_meta_v1"
     assert meta["source"]["source_type"] == "sog"
     assert meta["camera"] == {
@@ -966,151 +767,6 @@ def test_beat_background_anchor_upload_writes_selected_background(monkeypatch, t
     assert store.updates[-1]["scene_ref"]["render_anchor_source_id"] == "selected_background"
 
 
-def test_sketch_regen_queue_round_trips_per_episode(monkeypatch, tmp_path):
-    client, saved = _client(
-        monkeypatch,
-        tmp_path,
-        {
-            "react_sketch_regen_queue": {
-                "ep001": [
-                    {
-                        "id": "2x2_2-3_sketch:1,2",
-                        "modeKey": "2x2_2-3_sketch",
-                        "modeLabel": "2×2",
-                        "beatNumbers": [1, 2],
-                        "sceneIds": ["store"],
-                        "createdAt": "2026-05-18T00:00:00.000Z",
-                    }
-                ]
-            }
-        },
-    )
-
-    response = client.get("/api/v1/projects/demo/episodes/1/sketch-regen-queue")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["items"][0]["id"] == "2x2_2-3_sketch:1,2"
-
-    response = client.put(
-        "/api/v1/projects/demo/episodes/2/sketch-regen-queue",
-        json={
-            "items": [
-                {
-                    "id": "1x1_2-3_sketch:3",
-                    "modeKey": "1x1_2-3_sketch",
-                    "modeLabel": "1×1",
-                    "beatNumbers": [3],
-                    "sceneIds": ["store"],
-                    "createdAt": "2026-05-18T00:01:00.000Z",
-                }
-            ]
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["items"][0]["beatNumbers"] == [3]
-    assert saved[-1]["react_sketch_regen_queue"]["ep001"][0]["id"] == "2x2_2-3_sketch:1,2"
-    assert saved[-1]["react_sketch_regen_queue"]["ep002"][0]["id"] == "1x1_2-3_sketch:3"
-    assert "sketch_regen_queue" not in saved[-1]
-
-
-def test_sketch_regen_queue_migrates_react_items_out_of_nicegui_legacy_key(
-    monkeypatch,
-    tmp_path,
-):
-    client, saved = _client(
-        monkeypatch,
-        tmp_path,
-        {
-            "sketch_regen_queue": {
-                "ep001": [
-                    {
-                        "id": "1x2_4-3_sketch:2,3",
-                        "modeKey": "1x2_4-3_sketch",
-                        "modeLabel": "1×2_4:3 Sketch",
-                        "beatNumbers": [2, 3],
-                        "sceneIds": ["地下室"],
-                        "createdAt": "2026-05-19T02:39:21.704Z",
-                        "taskScope": "1x2_4-3_sketch__c0e3a7e07213",
-                    }
-                ]
-            }
-        },
-    )
-
-    response = client.get("/api/v1/projects/demo/episodes/1/sketch-regen-queue")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["items"][0]["beatNumbers"] == [2, 3]
-
-    response = client.put(
-        "/api/v1/projects/demo/episodes/1/sketch-regen-queue",
-        json={"items": body["data"]["items"]},
-    )
-
-    assert response.status_code == 200
-    assert saved[-1]["react_sketch_regen_queue"]["ep001"][0]["id"] == "1x2_4-3_sketch:2,3"
-    assert saved[-1]["sketch_regen_queue"] == {}
-
-
-def test_sketch_image_usage_and_guard_return_attempt_context(monkeypatch, tmp_path):
-    from novelvideo.image_request_usage import record_image_request
-
-    client, _saved = _client(monkeypatch, tmp_path)
-    for idx in range(3):
-        record_image_request(
-            project_output_dir=tmp_path,
-            request_id=f"r{idx}",
-            provider="openrouter",
-            model_name="nanobanana2",
-            task_type="sketch_grid",
-            scope="sketch_grid:1x1_2-3_sketch:3",
-            episode=1,
-            beat_num=3,
-        )
-    record_image_request(
-        project_output_dir=tmp_path,
-        request_id="render1",
-        provider="openrouter",
-        model_name="nanobanana2",
-        task_type="render_grid",
-        scope="render_grid:1x1:3",
-        episode=1,
-        beat_num=3,
-    )
-
-    response = client.get("/api/v1/projects/demo/episodes/1/sketch-image-usage")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["today_requests"] == 3
-    assert body["data"]["total_requests"] == 3
-
-    response = client.get(
-        "/api/v1/projects/demo/episodes/1/image-generation-guard",
-        params={
-            "task_type": "sketch_grid",
-            "scope": "sketch_grid:1x1_2-3_sketch:3",
-            "subject": "Beat 3",
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["attempt_count"] == 3
-    assert body["data"]["next_attempt"] == 4
-    assert body["data"]["level"] == "confirm"
-    assert "Beat 3" in body["data"]["message"]
-
-
 def test_image_generation_guard_password_verification_matches_nicegui(monkeypatch, tmp_path):
     from novelvideo.image_request_usage import record_image_request
 
@@ -1158,106 +814,3 @@ def test_image_generation_guard_password_verification_matches_nicegui(monkeypatc
     assert response.status_code == 200
     assert response.json()["data"]["verified"] is True
 
-
-def test_sketch_grid_preview_exposes_nicegui_thumbnail_contract(monkeypatch, tmp_path):
-    from novelvideo.generators import nanobanana_grid, pool_indexer
-
-    client, _saved = _client(monkeypatch, tmp_path)
-    calls: dict[str, object] = {}
-
-    def fake_build_beat_sketch_paths(ep_grids_dir, beat_numbers):
-        calls["paths_args"] = (str(ep_grids_dir), list(beat_numbers))
-        return {7: "sketch/beat_07_t20260519010101.png", 8: "sketch/beat_08_t20260519010102.png"}
-
-    def fake_crop_sketch_panels(
-        ep_grids_dir, beat_numbers, rows, cols, out_file, beat_sketch_paths=None
-    ):
-        calls["crop_args"] = {
-            "ep_grids_dir": ep_grids_dir,
-            "beat_numbers": list(beat_numbers),
-            "rows": rows,
-            "cols": cols,
-            "out_file": out_file,
-            "beat_sketch_paths": beat_sketch_paths,
-        }
-        return out_file
-
-    monkeypatch.setattr(pool_indexer, "build_beat_sketch_paths", fake_build_beat_sketch_paths)
-    monkeypatch.setattr(nanobanana_grid, "crop_sketch_panels", fake_crop_sketch_panels)
-
-    response = client.post(
-        "/api/v1/projects/demo/episodes/1/grids/1/sketch-preview",
-        json={"rows": 5, "cols": 5, "beat_numbers": [7, 8]},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["preview_url"].endswith("/grids/ep001/sketch_thumb_grid1_7_8_5x5.jpg")
-    assert calls["paths_args"] == (str(tmp_path / "grids" / "ep001"), [7, 8])
-    assert calls["crop_args"]["rows"] == 5
-    assert calls["crop_args"]["cols"] == 5
-
-
-def test_sketch_grid_preview_falls_back_to_latest_pool_sketch_cells(monkeypatch, tmp_path):
-    from novelvideo.generators import nanobanana_grid, pool_indexer
-
-    client, _saved = _client(monkeypatch, tmp_path)
-    ep_grids_dir = tmp_path / "grids" / "ep001"
-    old_cell = ep_grids_dir / "sketch" / "beat_07_t20260519010101.png"
-    new_cell = ep_grids_dir / "sketch" / "beat_07_t20260519010202.png"
-    beat8_cell = ep_grids_dir / "sketch" / "beat_08_t20260519010103.png"
-    for cell in (old_cell, new_cell, beat8_cell):
-        cell.parent.mkdir(parents=True, exist_ok=True)
-        cell.write_bytes(b"stub")
-
-    calls: dict[str, object] = {}
-
-    monkeypatch.setattr(pool_indexer, "build_beat_sketch_paths", lambda ep, beats: {})
-    monkeypatch.setattr(
-        pool_indexer,
-        "load_pool_index",
-        lambda ep: SimpleNamespace(
-            images=[
-                SimpleNamespace(
-                    type="sketch",
-                    cell_path="sketch/beat_07_t20260519010101.png",
-                    original_beat=7,
-                    generated_at=datetime(2026, 5, 19, 1, 1, 1),
-                ),
-                SimpleNamespace(
-                    type="sketch",
-                    cell_path="sketch/beat_07_t20260519010202.png",
-                    original_beat=7,
-                    generated_at=datetime(2026, 5, 19, 1, 2, 2),
-                ),
-                SimpleNamespace(
-                    type="sketch",
-                    cell_path="sketch/beat_08_t20260519010103.png",
-                    original_beat=8,
-                    generated_at=datetime(2026, 5, 19, 1, 1, 3),
-                ),
-            ]
-        ),
-    )
-
-    def fake_crop_sketch_panels(
-        ep_grids_dir, beat_numbers, rows, cols, out_file, beat_sketch_paths=None
-    ):
-        calls["beat_sketch_paths"] = beat_sketch_paths
-        return out_file
-
-    monkeypatch.setattr(nanobanana_grid, "crop_sketch_panels", fake_crop_sketch_panels)
-
-    response = client.post(
-        "/api/v1/projects/demo/episodes/1/grids/1/sketch-preview",
-        json={"rows": 5, "cols": 5, "beat_numbers": [7, 8]},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert calls["beat_sketch_paths"] == {
-        7: str(new_cell),
-        8: str(beat8_cell),
-    }

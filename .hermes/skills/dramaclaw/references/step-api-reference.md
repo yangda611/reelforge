@@ -1,7 +1,7 @@
 # DramaClaw 步骤 API 参考
 
 本文件只记录各步骤的端点、参数和任务类型，不拥有流程顺序决策权。Steps 1-7 的顺序以
-`playbooks/init.md` 为准，Steps 8-16 的顺序以 `playbooks/episode.md` 为准；恢复定位以
+`playbooks/init.md` 为准，Steps 8-14 的顺序以 `playbooks/episode.md` 为准；恢复定位以
 `playbooks/resume.md` 为准。每个 API 调用必须以后端当前 FastAPI routes 为准。
 
 变量约定：
@@ -201,57 +201,7 @@ PATCH /projects/$PID/props/$PROP_NAME
 POST /projects/$PID/props/$PROP_NAME/delete
 ```
 
-### Step 12: 草图生成 [ASYNC -> sketch_generation]
-
-```
-POST /projects/$PID/episodes/$EP/sketches/assign-colors
-
-POST /projects/$PID/episodes/$EP/sketches/generate
-Body: {"style": "...", "model": "nanobanana", "grid_index": 0, "sketch_location_grouping": true}
-
-GET /projects/$PID/tasks/sketch_generation/$EP?scope=grid_0
-SSE /projects/$PID/tasks/sketch_generation/$EP/stream?scope=grid_0
-```
-
-按 `grid_index` 串行生成每张 grid。每个 grid 对应 task scope `grid_N`。
-
-状态/结果查看：
-
-```
-GET /projects/$PID/episodes/$EP/grids
-```
-
-### Step 12.3: AI 身份检测 [SYNC]
-
-```
-POST /projects/$PID/episodes/$EP/sketches/detect-identities
-```
-
-### Step 12.5: 全局视频优化 [ASYNC -> global_optimize_video]
-
-```
-POST /projects/$PID/episodes/$EP/optimize/video-global
-Body: {"language":"en"}
-
-GET /projects/$PID/tasks/global_optimize_video/$EP
-SSE /projects/$PID/tasks/global_optimize_video/$EP/stream
-```
-
-### Step 13: 首帧生成 [ASYNC -> selected_regen]
-
-```
-POST /projects/$PID/episodes/$EP/beats/regenerate
-Body: {"beat_indices": [1], "style": "...", "model": "nanobanana",
-       "batch_id": "first-frame-...", "batch_size": 9}
-
-一次 `dramaclaw_render_first_frames` 最多为 9 个 beat 分别提交一个独立任务，共用 batch_id；
-省略 beat_indices 时自动选择接下来 9 个缺少首帧的 beat。图片队列最多并发执行 3 个，
-其余任务排队；每个任务独立计时并独立保存。
-
-GET /projects/$PID/tasks?task_type=selected_regen&episode=$EP
-```
-
-### Step 14: 音频生成 [ASYNC -> audio_generation_indextts2]
+### Step 12: 音频生成 [ASYNC -> audio_generation_indextts2]
 
 当前主线只使用 `audio/generate`。旧 `/tts/generate` 已移除，不要调用。
 
@@ -269,7 +219,7 @@ SSE /projects/$PID/tasks/audio_generation_indextts2/$EP/stream
 POST /projects/$PID/episodes/$EP/beats/$BEAT/audio
 ```
 
-### Step 15: 视频生成 [ASYNC -> single_video]
+### Step 13: 视频生成 [ASYNC -> single_video]
 
 当前后端没有 `/projects/$PID/episodes/$EP/videos/generate` 整集批量视频路由。
 
@@ -289,7 +239,7 @@ SSE /projects/$PID/tasks/single_video/$EP/stream?beat_num=$BEAT
 
 如果用户要求“整集生成视频片段”，先读取 beats，选择最前面最多 9 个未完成且前置满足的 beat，通过批量业务工具提交；没有满足前置的 beat 时只汇报缺项。不要调用不存在的 `/videos/generate`，也不要通过通用 POST 循环模拟批量。
 
-### Step 16: 合成 [ASYNC -> compose_episode]
+### Step 14: 合成 [ASYNC -> compose_episode]
 
 合成只能在本集所有 beat 视频都已完成后启动。启动 `compose_episode` 后立即收口；不要在同一轮先启动视频再启动合成，也不要等待合成完成后继续展示成片。
 

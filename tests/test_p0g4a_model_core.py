@@ -52,7 +52,7 @@ def _platform_context() -> TrustedEgressContext:
     return TrustedEgressContext(
         envelope_id="envelope-platform",
         project_id="project-1",
-        task_type="sketch_generation",
+        task_type="single_video",
         requester_user_id="user-1",
         root_task_id="root-platform",
         admission_id="admission-platform",
@@ -617,74 +617,6 @@ async def test_c1_eg18a_pos_freezone_text_binds_only_trusted_identity(
     assert result == ("hello", "zh", "en")
     assert seen == [context]
     assert runtime.current_model_gateway_context() is None
-
-
-@pytest.mark.asyncio
-async def test_c1_eg04b_deny_precedes_provider_env_and_registry_reads(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    from novelvideo import model_gateway_runtime as runtime
-    from novelvideo.verification import sketch_visual_gate
-
-    summary_path = tmp_path / "summary.json"
-    summary_path.write_text('{"grid_results": []}', encoding="utf-8")
-    monkeypatch.setattr(
-        sketch_visual_gate.failure_registry,
-        "list_active",
-        lambda *_args, **_kwargs: pytest.fail(
-            "registry read must follow organization deny"
-        ),
-    )
-    monkeypatch.setattr(
-        sketch_visual_gate,
-        "_resolve_gate_backend",
-        lambda: pytest.fail("provider env must not be read"),
-    )
-
-    with pytest.raises(runtime.ModelGatewayEgressError) as excinfo:
-        await sketch_visual_gate.gate_candidate_cells(
-            project_dir=tmp_path,
-            summary_path=summary_path,
-            defs_db=object(),
-            egress_context=_organization_context(),
-        )
-
-    assert excinfo.value.code == "ORG_EGRESS_DENIED"
-
-
-def test_c1_eg04b_deny_uses_bound_context_when_leaf_has_no_explicit_argument(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from novelvideo import model_gateway_runtime as runtime
-    from novelvideo.verification import sketch_visual_gate
-
-    monkeypatch.setattr(
-        sketch_visual_gate,
-        "_resolve_gate_backend",
-        lambda: pytest.fail("organization direct gate must not read provider env"),
-    )
-    with runtime.model_gateway_request_scope(_organization_context()):
-        with pytest.raises(runtime.ModelGatewayEgressError) as excinfo:
-            sketch_visual_gate.resolve_gate_backend_for_context(None)
-
-    assert excinfo.value.code == "ORG_EGRESS_DENIED"
-
-
-def test_c1_eg04b_platform_keeps_direct_backend_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from novelvideo.verification import sketch_visual_gate
-
-    monkeypatch.setenv("SKETCH_GATE_PROVIDER", "openrouter")
-    monkeypatch.setenv("SKETCH_GATE_API_KEY", "sk-platform-gate")
-    monkeypatch.setenv("SKETCH_GATE_MODEL", "platform-vlm")
-
-    assert sketch_visual_gate.resolve_gate_backend_for_context(_platform_context()) == (
-        "openrouter",
-        "sk-platform-gate",
-        "platform-vlm",
-    )
 
 
 def test_c1_eg02_and_eg03_calling_leaves_declare_capability() -> None:

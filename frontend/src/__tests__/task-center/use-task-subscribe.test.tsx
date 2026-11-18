@@ -22,15 +22,15 @@ describe("useTaskSubscribe", () => {
     renderHook(
       () =>
         useTaskSubscribe({
-          match: (t) => t.task_type === "sketch_regen",
+          match: (t) => t.task_type === "single_video",
           onComplete,
         }),
       { wrapper: Wrapper },
     );
     bus.emit({
       type: "task_complete",
-      task: sampleTask({ task_type: "sketch_regen", status: "completed" }),
-      previous: sampleTask({ task_type: "sketch_regen", status: "running" }),
+      task: sampleTask({ task_type: "single_video", status: "completed" }),
+      previous: sampleTask({ task_type: "single_video", status: "running" }),
     });
     expect(onComplete).toHaveBeenCalledOnce();
   });
@@ -39,7 +39,7 @@ describe("useTaskSubscribe", () => {
     const { Wrapper, bus } = wrap();
     const onComplete = vi.fn();
     renderHook(
-      () => useTaskSubscribe({ match: (t) => t.task_type === "sketch_regen", onComplete }),
+      () => useTaskSubscribe({ match: (t) => t.task_type === "single_video", onComplete }),
       { wrapper: Wrapper },
     );
     bus.emit({

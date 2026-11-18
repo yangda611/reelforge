@@ -12,12 +12,9 @@ from novelvideo.task_backend.runners import (  # noqa: F401
     identity,
     ingest,
     prop_reference,
-    render,
     scene_reference,
     script,
     skill_import,
-    sketch,
-    sketch_edit_execute,
     stage_asset,
     video,
 )

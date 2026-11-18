@@ -25,8 +25,7 @@ export function HealthBar({ project, episode }: EpisodeNavProps) {
       (tab) =>
         pathname.includes(tab.routeSegment) ||
         (tab.id === "beats" &&
-          (pathname.endsWith("/sketches") ||
-            pathname.endsWith("/audio") ||
+          (pathname.endsWith("/audio") ||
             pathname.endsWith("/video"))),
     ) ?? TOP_TABS[0];
   const items = TOP_TABS.map((tab) => ({

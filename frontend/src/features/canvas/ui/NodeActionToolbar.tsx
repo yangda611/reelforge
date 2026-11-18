@@ -221,7 +221,6 @@ type BeatMainlineContext = MainlineContext & {
 
 const BEAT_CONTEXT_SOURCE_KINDS = new Set([
   "beat",
-  "sketch",
   "frame",
   "video",
   "audio",
@@ -345,7 +344,7 @@ function beatContextFromNode(node: CanvasNode): BeatMainlineContext | null {
   const sourceKind = stringOrUndefined(source?.kind);
   const beatScoped = Boolean(
     sourceRole &&
-      ["current_sketch", "current_frame", "current_video", "current_audio", "selected_background", "director_combined"].includes(sourceRole),
+      ["current_frame", "current_video", "current_audio", "selected_background", "director_combined"].includes(sourceRole),
   ) || Boolean(sourceKind && ["video", "audio"].includes(sourceKind));
   if (!beatScoped) return null;
 

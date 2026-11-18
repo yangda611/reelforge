@@ -8,7 +8,6 @@ import {
   listCharacters,
   listEpisodes,
   listBeats,
-  deriveSketchUrl,
   deriveDirectorRenderUrl,
   type SupertaleCharacter,
   type SupertaleEpisodeSummary,
@@ -26,7 +25,6 @@ export type AssetKind =
   | "identity"
   | "portrait"
   | "frame"
-  | "sketch"
   | "director_render";
 
 export interface ImportableAsset {
@@ -55,7 +53,6 @@ interface KindToggles {
   identity: boolean;
   portrait: boolean;
   frame: boolean;
-  sketch: boolean;
   director_render: boolean;
 }
 
@@ -63,7 +60,6 @@ const DEFAULT_KIND_TOGGLES: KindToggles = {
   identity: true,
   portrait: false,
   frame: true,
-  sketch: false,
   director_render: false,
 };
 
@@ -215,11 +211,6 @@ export function ImportPanel({ project, onClose, onImport }: ImportPanelProps) {
                 onChange={(v) => setKinds({ ...kinds, frame: v })}
               />
               <KindToggleRow
-                label={t("pipelineImport.import.kind.sketch")}
-                checked={kinds.sketch}
-                onChange={(v) => setKinds({ ...kinds, sketch: v })}
-              />
-              <KindToggleRow
                 label={t("pipelineImport.import.kind.directorRender")}
                 checked={kinds.director_render}
                 onChange={(v) => setKinds({ ...kinds, director_render: v })}
@@ -245,7 +236,7 @@ export function ImportPanel({ project, onClose, onImport }: ImportPanelProps) {
               </Section>
             )}
 
-            {(kinds.frame || kinds.sketch || kinds.director_render) && (
+            {(kinds.frame || kinds.director_render) && (
               <Section title={t("pipelineImport.import.episodeBeat")}>
                 <EpisodePicker
                   episodes={episodes}
@@ -485,7 +476,7 @@ function collectAssets(args: CollectArgs): ImportableAsset[] {
     }
   }
 
-  // Frame / sketch / director_render — beat-driven
+  // Frame / director_render — beat-driven
   if (args.episode !== null) {
     for (let i = 0; i < args.beats.length; i++) {
       const beat = args.beats[i];
@@ -501,18 +492,6 @@ function collectAssets(args: CollectArgs): ImportableAsset[] {
         });
       }
       const anchorUrl = beat.frame_url || beat.video_url || beat.audio_url;
-      if (args.kinds.sketch) {
-        const sketchUrl = deriveSketchUrl(anchorUrl, args.episode, beatNum);
-        if (sketchUrl) {
-          out.push({
-            id: `sketch:${args.project}:ep${args.episode}:beat${beatNum}`,
-            kind: "sketch",
-            url: sketchUrl,
-            label: `ep${args.episode} · beat ${beatNum} · sketch`,
-            meta: { project: args.project, episode: args.episode, beat: beatNum },
-          });
-        }
-      }
       if (args.kinds.director_render) {
         const drUrl = deriveDirectorRenderUrl(anchorUrl, args.episode, beatNum);
         if (drUrl) {

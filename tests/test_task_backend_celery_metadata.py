@@ -34,7 +34,7 @@ def test_script_writer_resource_ref_is_episode_slot():
 
 def test_generation_resource_refs_use_beat_slots_from_result():
     refs = _resource_refs_for_task_success(
-        task_type="sketch_regen",
+        task_type="single_video",
         episode=2,
         result={"updated_beats": [4, "5", 0, "bad", 4]},
     )
@@ -44,7 +44,7 @@ def test_generation_resource_refs_use_beat_slots_from_result():
 
 def test_generation_resource_refs_keep_scope_for_dynamic_slots():
     refs = _resource_refs_for_task_success(
-        task_type="grid_regenerate",
+        task_type="single_video",
         episode=1,
         beat_num=7,
         scope="character-grid",

@@ -30,9 +30,6 @@ export function buildBeatContextNodeRefreshPatch(
       String(asset.role || asset.kind || ""),
     ),
   );
-  const currentSketchExists = beat.assets.some((asset) =>
-    ["current_sketch", "sketch_candidate"].includes(String(asset.role || asset.kind || "")),
-  );
   const currentFrameExists = beat.assets.some((asset) =>
     ["current_frame", "frame_candidate"].includes(String(asset.role || asset.kind || "")),
   );
@@ -70,7 +67,6 @@ export function buildBeatContextNodeRefreshPatch(
       sketchColors,
       propMarkerColors,
       selectedBackgroundExists,
-      currentSketchExists,
       currentFrameExists,
     },
     snapshotLoadedAt: new Date().toISOString(),

@@ -23,7 +23,7 @@ def _platform_context() -> TrustedEgressContext:
     return TrustedEgressContext(
         envelope_id="envelope-platform",
         project_id="project-1",
-        task_type="sketch_generation",
+        task_type="single_video",
         requester_user_id="user-1",
         root_task_id="root-platform",
         admission_id="admission-platform",
@@ -43,7 +43,7 @@ def _organization_context() -> TrustedEgressContext:
     return TrustedEgressContext(
         envelope_id="envelope-1",
         project_id="project-1",
-        task_type="sketch_generation",
+        task_type="single_video",
         requester_user_id="user-1",
         root_task_id="root-task-1",
         admission_id="admission-1",
@@ -173,9 +173,8 @@ async def test_volcengine_image_generate_denies_org_without_explicit_context() -
 
 
 def test_scope_survives_asyncio_run_into_a_leaf_gate() -> None:
-    """`verification/sketch_edit_execute.py:546` 用 `asyncio.run` 进叶子，全程无
-    `egress_context` 参数可传——它只能靠作用域身份。ContextVar 会随
-    `asyncio.run` 复制进新事件循环，这条依赖必须被钉住而不是假定。
+    """叶子函数用 `asyncio.run` 进入且无 `egress_context` 参数可传时，只能靠作用域
+    身份。ContextVar 会随 `asyncio.run` 复制进新事件循环，这条依赖必须被钉住而不是假定。
     """
 
     import asyncio

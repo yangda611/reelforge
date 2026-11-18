@@ -391,10 +391,9 @@ async def get_beats(project: str, episode_num: int, user: dict = Depends(get_api
     async with store_scope as store:
         beats = await store.get_beats_as_dicts(episode_num)
 
-    # 为每个 beat 附加 sketch_url / frame_url / video_url / audio_url.
+    # 为每个 beat 附加 frame_url / video_url / audio_url.
     # Asset files are named by beat_number. Do not use enumerate index here:
     # manually inserted shots can have sparse/non-display-order beat numbers.
-    sketches_dir = project_dir / "sketches" / f"ep{episode_num:03d}"
     frames_dir = project_dir / "frames" / f"ep{episode_num:03d}"
     videos_dir = project_dir / "videos" / "beats" / f"ep{episode_num:03d}"
     audio_dir = project_dir / "audio" / f"ep{episode_num:03d}"
@@ -408,7 +407,6 @@ async def get_beats(project: str, episode_num: int, user: dict = Depends(get_api
     # 现在：每个目录列一次（4 次 listdir 取代 4N 次 exists），剩下的 stat 仍是每个
     # 命中文件一次，但整段都发生在线程里，事件循环随时可以调度别的请求。
     def _attach_asset_urls() -> list[tuple[dict, str]]:
-        sketch_names = _dir_entry_names(sketches_dir)
         frame_names = _dir_entry_names(frames_dir)
         video_names = _dir_entry_names(videos_dir)
         audio_names = _dir_entry_names(audio_dir)
@@ -421,22 +419,10 @@ async def get_beats(project: str, episode_num: int, user: dict = Depends(get_api
             beat["audio_duration_seconds"] = None
             beat_num = int(beat.get("beat_number", 0) or 0)
             if beat_num <= 0:
-                beat["sketch_url"] = ""
                 beat["frame_url"] = ""
                 beat["video_url"] = ""
                 beat["audio_url"] = ""
                 continue
-            # sketch
-            sketch_file = f"beat_{beat_num:02d}.png"
-            if sketch_file in sketch_names:
-                rel = f"sketches/ep{episode_num:03d}/{sketch_file}"
-                beat["sketch_url"] = make_static_url_for_context(
-                    resolved.ctx,
-                    rel,
-                    local_path=sketches_dir / sketch_file,
-                )
-            else:
-                beat["sketch_url"] = ""
             # frame
             frame_file = f"beat_{beat_num:02d}.png"
             if frame_file in frame_names:

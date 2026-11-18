@@ -86,7 +86,6 @@ import type { Episode } from "@/types/episode";
 // v3 valid top-level paths + legacy sub routes that redirect to /beats.
 const KNOWN_STAGE_PATHS: readonly string[] = [
   ...TOP_TABS.map((t) => t.routeSegment),
-  "/sketches",
   "/audio",
   "/video",
   "/overview",
@@ -285,7 +284,7 @@ function TopBar({
   // to pull the auto-selected episode's whole beats payload just to take
   // `.length`. Auto-selection is not a signal the user is heading into that
   // episode, so nothing was being usefully prefetched: it was one more full
-  // beats request (sketch/frame/video URLs, an ffprobe per audio clip) on every
+  // beats request (frame/video URLs, an ffprobe per audio clip) on every
   // visit to this page, for one integer already present in the list.
   const beatCount = selectedEpisode?.beat_count ?? 0;
   const sourceLineCount = countContentLines(
@@ -564,7 +563,7 @@ function EpisodeListItem({
   const { t } = useTranslation();
   // 镜头数直接读列表接口带出的 beat_count。这里曾经是 useEpisodeBeats(episode.number)
   // ——每张卡片自己拉一次该集的完整 beats 载荷，只为取 .length。列表有几集就发几个
-  // 请求，每个都要解析项目上下文、开库、给每个 beat 拼 sketch/frame/video URL 并对
+  // 请求，每个都要解析项目上下文、开库、给每个 beat 拼 frame/video URL 并对
   // 每条音频 fork 一次 ffprobe。改成后端一次 GROUP BY 带出来，这一页的扇出归零。
   const shotCount = episode.beat_count;
   const planIdentities = usePlanIdentities(project);

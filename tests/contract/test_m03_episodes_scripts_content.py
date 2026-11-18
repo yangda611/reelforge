@@ -415,7 +415,8 @@ def test_m03_l2_covers_episodes_scripts_and_content_endpoints(m03_client):
 
     beats = client.get("/api/v1/projects/demo/episodes/1/beats")
     assert beats.status_code == 200
-    assert beats.json()["data"][0]["sketch_url"] == ""
+    assert beats.json()["data"][0]["frame_url"] == ""
+    assert "sketch_url" not in beats.json()["data"][0]
     assert beats.json()["data"][0]["audio_duration_seconds"] is None
 
     patched = client.patch(
@@ -430,20 +431,6 @@ def test_m03_l2_covers_episodes_scripts_and_content_endpoints(m03_client):
         json={"visual_description": "missing"},
     )
     assert missing_beat.status_code == 404
-
-    from novelvideo.utils.path_resolver import PathResolver
-
-    sketch_path = PathResolver(str(store.project_dir), 1).sketch(1)
-    sketch_path.parent.mkdir(parents=True, exist_ok=True)
-    sketch_path.write_bytes(b"sketch")
-
-    video_prompt = client.post(
-        "/api/v1/projects/demo/episodes/1/beats/1/video-prompt/generate",
-        json={"language": "zh"},
-    )
-    assert video_prompt.status_code == 200
-    assert video_prompt.json()["task_type"] == "beat_video_prompt"
-    assert video_prompt.json()["backend"] == "inline"
 
     seedance = client.post(
         "/api/v1/projects/demo/episodes/1/beats/1/seedance2-prompt/generate",
@@ -488,7 +475,6 @@ def test_m03_routes_return_no_5xx_for_representative_requests(m03_client):
         ("GET", "/api/v1/projects/demo/episodes/1/script", None),
         ("POST", "/api/v1/projects/demo/episodes/1/script/generate", {}),
         ("PATCH", "/api/v1/projects/demo/episodes/1/beats/1", {"visual_description": "v"}),
-        ("POST", "/api/v1/projects/demo/episodes/1/beats/1/video-prompt/generate", {}),
         ("POST", "/api/v1/projects/demo/episodes/1/beats/1/seedance2-prompt/generate", {}),
         ("PUT", "/api/v1/projects/demo/episodes/1/script", {"beats": []}),
         ("GET", "/api/v1/projects/demo/episodes/1/raw-content", None),

@@ -44,7 +44,7 @@ import { server } from "@/__mocks__/msw/server";
 import { beforeAll, afterAll, afterEach } from "vitest";
 
 // `bypass` (not `error`): the repo has test files that own their own `setupServer`
-// instance (e.g. render-plan.test.tsx). With two MSW instances listening, `error`
+// instance (e.g. generation-credit-cost.test.tsx). With two MSW instances listening, `error`
 // from the global server would reject requests the test-local server would handle.
 // `bypass` lets non-matching requests pass through to other interceptors or fail
 // naturally, without MSW crying foul.

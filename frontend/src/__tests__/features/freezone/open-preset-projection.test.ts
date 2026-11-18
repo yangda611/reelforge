@@ -51,7 +51,7 @@ describe("openPresetProjectionInMyCanvas", () => {
       scope: "beat",
       episode: 3,
       beat: 2,
-      primary_slot: "sketch",
+      primary_slot: "frame",
     });
 
     expect(window.location.pathname).toBe("/projects/proj-a/freezone");
@@ -75,7 +75,7 @@ describe("openPresetProjectionInMyCanvas", () => {
       scope: "beat",
       episode: 3,
       beat: 2,
-      primary_slot: "sketch",
+      primary_slot: "frame",
     });
 
     await vi.waitFor(() => expect(buildProjectionFromPreset).toHaveBeenCalled());
@@ -129,7 +129,7 @@ describe("openPresetProjectionInMyCanvas", () => {
       scope: "beat",
       episode: 3,
       beat: 2,
-      primary_slot: "sketch",
+      primary_slot: "frame",
     });
 
     expect(applyRemote).not.toHaveBeenCalled();

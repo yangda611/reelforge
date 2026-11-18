@@ -391,27 +391,13 @@ async def _invoke_runner(name: str, ctx: ProjectContext) -> None:
             {"payload": {"prop_name": "旧手机"}}, ctx
         )
         return
-    if name == "sketch":
-        from novelvideo.task_backend.runners import sketch
-
-        await sketch._ensure_scene_refs_for_beats(
-            ctx=ctx,
-            output_dir=str(ctx.output_dir),
-            beats=[{"beat_number": 1, "scene_id": "学校天台"}],
-            episode=1,
-            director_ref_mode="off",
-            director_ref_beat_numbers=None,
-            log=lambda _message: None,
-            projection=None,
-        )
-        return
     raise AssertionError(f"unknown runner case: {name}")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "runner_name",
-    ["character_image", "script", "scene_reference", "prop_reference", "sketch"],
+    ["character_image", "script", "scene_reference", "prop_reference"],
 )
 async def test_store_backed_runner_uses_context_state_dir(
     monkeypatch: pytest.MonkeyPatch,

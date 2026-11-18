@@ -42,8 +42,6 @@ const AppProjectsProjectEpisodesEpisodeIndexLazyRouteImport = createFileRoute(
 const AppProjectsProjectEpisodesEpisodeVideoLazyRouteImport = createFileRoute(
   '/_app/projects/$project/episodes/$episode/video',
 )()
-const AppProjectsProjectEpisodesEpisodeSketchesLazyRouteImport =
-  createFileRoute('/_app/projects/$project/episodes/$episode/sketches')()
 const AppProjectsProjectEpisodesEpisodeScriptLazyRouteImport = createFileRoute(
   '/_app/projects/$project/episodes/$episode/script',
 )()
@@ -195,16 +193,6 @@ const AppProjectsProjectEpisodesEpisodeVideoLazyRoute =
       (d) => d.Route,
     ),
   )
-const AppProjectsProjectEpisodesEpisodeSketchesLazyRoute =
-  AppProjectsProjectEpisodesEpisodeSketchesLazyRouteImport.update({
-    id: '/$episode/sketches',
-    path: '/$episode/sketches',
-    getParentRoute: () => AppProjectsProjectEpisodesRoute,
-  } as any).lazy(() =>
-    import('./routes/_app/projects.$project/episodes.$episode/sketches.lazy').then(
-      (d) => d.Route,
-    ),
-  )
 const AppProjectsProjectEpisodesEpisodeScriptLazyRoute =
   AppProjectsProjectEpisodesEpisodeScriptLazyRouteImport.update({
     id: '/$episode/script',
@@ -281,7 +269,6 @@ export interface FileRoutesByFullPath {
   '/projects/$project/episodes/$episode/compose': typeof AppProjectsProjectEpisodesEpisodeComposeLazyRoute
   '/projects/$project/episodes/$episode/overview': typeof AppProjectsProjectEpisodesEpisodeOverviewLazyRoute
   '/projects/$project/episodes/$episode/script': typeof AppProjectsProjectEpisodesEpisodeScriptLazyRoute
-  '/projects/$project/episodes/$episode/sketches': typeof AppProjectsProjectEpisodesEpisodeSketchesLazyRoute
   '/projects/$project/episodes/$episode/video': typeof AppProjectsProjectEpisodesEpisodeVideoLazyRoute
   '/projects/$project/episodes/$episode/': typeof AppProjectsProjectEpisodesEpisodeIndexLazyRoute
 }
@@ -310,7 +297,6 @@ export interface FileRoutesByTo {
   '/projects/$project/episodes/$episode/compose': typeof AppProjectsProjectEpisodesEpisodeComposeLazyRoute
   '/projects/$project/episodes/$episode/overview': typeof AppProjectsProjectEpisodesEpisodeOverviewLazyRoute
   '/projects/$project/episodes/$episode/script': typeof AppProjectsProjectEpisodesEpisodeScriptLazyRoute
-  '/projects/$project/episodes/$episode/sketches': typeof AppProjectsProjectEpisodesEpisodeSketchesLazyRoute
   '/projects/$project/episodes/$episode/video': typeof AppProjectsProjectEpisodesEpisodeVideoLazyRoute
   '/projects/$project/episodes/$episode': typeof AppProjectsProjectEpisodesEpisodeIndexLazyRoute
 }
@@ -341,7 +327,6 @@ export interface FileRoutesById {
   '/_app/projects/$project/episodes/$episode/compose': typeof AppProjectsProjectEpisodesEpisodeComposeLazyRoute
   '/_app/projects/$project/episodes/$episode/overview': typeof AppProjectsProjectEpisodesEpisodeOverviewLazyRoute
   '/_app/projects/$project/episodes/$episode/script': typeof AppProjectsProjectEpisodesEpisodeScriptLazyRoute
-  '/_app/projects/$project/episodes/$episode/sketches': typeof AppProjectsProjectEpisodesEpisodeSketchesLazyRoute
   '/_app/projects/$project/episodes/$episode/video': typeof AppProjectsProjectEpisodesEpisodeVideoLazyRoute
   '/_app/projects/$project/episodes/$episode/': typeof AppProjectsProjectEpisodesEpisodeIndexLazyRoute
 }
@@ -372,7 +357,6 @@ export interface FileRouteTypes {
     | '/projects/$project/episodes/$episode/compose'
     | '/projects/$project/episodes/$episode/overview'
     | '/projects/$project/episodes/$episode/script'
-    | '/projects/$project/episodes/$episode/sketches'
     | '/projects/$project/episodes/$episode/video'
     | '/projects/$project/episodes/$episode/'
   fileRoutesByTo: FileRoutesByTo
@@ -401,7 +385,6 @@ export interface FileRouteTypes {
     | '/projects/$project/episodes/$episode/compose'
     | '/projects/$project/episodes/$episode/overview'
     | '/projects/$project/episodes/$episode/script'
-    | '/projects/$project/episodes/$episode/sketches'
     | '/projects/$project/episodes/$episode/video'
     | '/projects/$project/episodes/$episode'
   id:
@@ -431,7 +414,6 @@ export interface FileRouteTypes {
     | '/_app/projects/$project/episodes/$episode/compose'
     | '/_app/projects/$project/episodes/$episode/overview'
     | '/_app/projects/$project/episodes/$episode/script'
-    | '/_app/projects/$project/episodes/$episode/sketches'
     | '/_app/projects/$project/episodes/$episode/video'
     | '/_app/projects/$project/episodes/$episode/'
   fileRoutesById: FileRoutesById
@@ -604,13 +586,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectEpisodesEpisodeVideoLazyRouteImport
       parentRoute: typeof AppProjectsProjectEpisodesRoute
     }
-    '/_app/projects/$project/episodes/$episode/sketches': {
-      id: '/_app/projects/$project/episodes/$episode/sketches'
-      path: '/$episode/sketches'
-      fullPath: '/projects/$project/episodes/$episode/sketches'
-      preLoaderRoute: typeof AppProjectsProjectEpisodesEpisodeSketchesLazyRouteImport
-      parentRoute: typeof AppProjectsProjectEpisodesRoute
-    }
     '/_app/projects/$project/episodes/$episode/script': {
       id: '/_app/projects/$project/episodes/$episode/script'
       path: '/$episode/script'
@@ -655,7 +630,6 @@ interface AppProjectsProjectEpisodesRouteChildren {
   AppProjectsProjectEpisodesEpisodeComposeLazyRoute: typeof AppProjectsProjectEpisodesEpisodeComposeLazyRoute
   AppProjectsProjectEpisodesEpisodeOverviewLazyRoute: typeof AppProjectsProjectEpisodesEpisodeOverviewLazyRoute
   AppProjectsProjectEpisodesEpisodeScriptLazyRoute: typeof AppProjectsProjectEpisodesEpisodeScriptLazyRoute
-  AppProjectsProjectEpisodesEpisodeSketchesLazyRoute: typeof AppProjectsProjectEpisodesEpisodeSketchesLazyRoute
   AppProjectsProjectEpisodesEpisodeVideoLazyRoute: typeof AppProjectsProjectEpisodesEpisodeVideoLazyRoute
   AppProjectsProjectEpisodesEpisodeIndexLazyRoute: typeof AppProjectsProjectEpisodesEpisodeIndexLazyRoute
 }
@@ -672,8 +646,6 @@ const AppProjectsProjectEpisodesRouteChildren: AppProjectsProjectEpisodesRouteCh
       AppProjectsProjectEpisodesEpisodeOverviewLazyRoute,
     AppProjectsProjectEpisodesEpisodeScriptLazyRoute:
       AppProjectsProjectEpisodesEpisodeScriptLazyRoute,
-    AppProjectsProjectEpisodesEpisodeSketchesLazyRoute:
-      AppProjectsProjectEpisodesEpisodeSketchesLazyRoute,
     AppProjectsProjectEpisodesEpisodeVideoLazyRoute:
       AppProjectsProjectEpisodesEpisodeVideoLazyRoute,
     AppProjectsProjectEpisodesEpisodeIndexLazyRoute:

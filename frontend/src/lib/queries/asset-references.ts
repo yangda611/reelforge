@@ -16,7 +16,7 @@ import type { OkResponse } from "@/types/api";
  * a single pass over the beats table only after the caller names an asset. This
  * used to be derived on the client by fetching every episode's beats and
  * scanning them here — one request per episode, each carrying the full beat
- * payload (sketch/frame/video URLs plus an ffprobe per audio clip) so the FE
+ * payload (frame/video URLs plus an ffprobe per audio clip) so the FE
  * could read three fields per beat.
  * That cost grew with episode count and is why opening the assets page fired
  * dozens of `beats` requests.

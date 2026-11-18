@@ -20,7 +20,6 @@ const KIND_KEYS = new Set([
   "scene",
   "prop",
   "beat",
-  "sketch",
   "frame",
   "video",
   "audio",
@@ -36,7 +35,6 @@ function badgeText(ctx: MainlineContext, t: TFn): string {
   if (typeof ctx.episode === "number" && typeof ctx.beat === "number") {
     if (ctx.kind === "beat") return `EP${ctx.episode} / Beat ${ctx.beat}`;
     if (
-      ctx.kind === "sketch" ||
       ctx.kind === "frame" ||
       ctx.kind === "video" ||
       ctx.kind === "audio" ||
@@ -81,7 +79,6 @@ function contextKey(ctx: MainlineContext, index: number): string {
 function contextPriority(ctx: MainlineContext): number {
   if (ctx.kind === "beat") return 0;
   if (
-    ctx.kind === "sketch" ||
     ctx.kind === "frame" ||
     ctx.kind === "video" ||
     ctx.kind === "audio" ||

@@ -108,8 +108,6 @@ def repo_skills(isolated_workspace):
         "json-render",
         "dramaclaw",
         "freezone",
-        "sketch-correction-worker",
-        "sketch-storyboard-director",
         "workflows",
         "other-skill",
     ):
@@ -148,8 +146,6 @@ def test_fresh_create_layout(isolated_workspace, repo_skills, repo_plugins):
     # Default allowlist should be symlinked in.
     assert (home / "skills" / "dramaclaw").is_symlink()
     assert not (home / "skills" / "freezone").exists()
-    assert (home / "skills" / "sketch-correction-worker").is_symlink()
-    assert (home / "skills" / "sketch-storyboard-director").is_symlink()
     assert not (home / "skills" / "workflows").exists()
     assert not (home / "skills" / "json-render").exists()
     assert not (home / "skills" / "other-skill").exists()

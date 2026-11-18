@@ -167,7 +167,7 @@
         },
         "canvasOverwrite": {
           "question": "虾画里的结果会自动覆盖主线资产吗？",
-          "answer": "不会。虾画里的生成或上传内容默认是候选结果。只有明确点击写回，并选择角色、场景、道具、Beat 草图、首帧或视频等目标槽位后，结果才会进入正式项目主线。"
+          "answer": "不会。虾画里的生成或上传内容默认是候选结果。只有明确点击写回，并选择角色、场景、道具、Beat 首帧或视频等目标槽位后，结果才会进入正式项目主线。"
         },
         "whyAssetsFirst": {
           "question": "为什么要先整理角色、场景、道具和声线？",
@@ -183,7 +183,7 @@
         },
         "unstableResults": {
           "question": "生成效果不稳定时应该先检查什么？",
-          "answer": "先检查问题出在哪个环节：文本是否清楚，角色身份是否正确，场景和道具是否有参考，草图是否讲清楚镜头，首帧是否稳定，音频是否匹配。不要一开始就反复生成视频，先把上游资产和镜头描述修正好。"
+          "answer": "先检查问题出在哪个环节：文本是否清楚，角色身份是否正确，场景和道具是否有参考，镜头描述是否讲清楚，首帧是否稳定，音频是否匹配。不要一开始就反复生成视频，先把上游资产和镜头描述修正好。"
         },
         "dcUniverse": {
           "question": "什么是 “Make Your DC Universe.”？",
@@ -1212,7 +1212,6 @@
         "assets": "资产库"
       },
       "roles": {
-        "current_sketch": "草图",
         "current_frame": "分镜",
         "current_video": "视频",
         "current_audio": "音频",
@@ -1323,7 +1322,6 @@
         "scene": "场景",
         "prop": "道具",
         "beat": "Beat",
-        "sketch": "草图",
         "frame": "分镜",
         "video": "视频",
         "audio": "音频",
@@ -1332,10 +1330,8 @@
       },
       "binding": {
         "background_candidate": "背景候选",
-        "sketch_candidate": "草图候选",
         "frame_candidate": "分镜候选",
         "selected_background": "当前背景",
-        "current_sketch": "当前草图",
         "current_frame": "当前分镜"
       },
       "withEpisodeBeat": "{{label}} · EP{{episode}}/B{{beat}}",
@@ -1406,7 +1402,6 @@
       },
       "kinds": {
         "frame": "首帧",
-        "sketch": "草图",
         "director_render": "导演合成资产",
         "selected_background": "当前背景",
         "identity": "角色身份图",
@@ -1431,7 +1426,6 @@
       },
       "shortKinds": {
         "frame": "首帧",
-        "sketch": "草图",
         "director_render": "导演合成资产",
         "selected_background": "当前背景",
         "video": "视频",
@@ -1456,7 +1450,6 @@
       },
       "nodeLabels": {
         "frame": "分镜",
-        "sketch": "草图",
         "director_render": "导演合成图",
         "selected_background": "当前背景",
         "video": "视频",
@@ -2048,7 +2041,6 @@
     "episodes": "虾镜",
     "script": "脚本",
     "literalScript": "原文脚本",
-    "sketches": "草图",
     "audio": "音频",
     "video": "视频",
     "compose": "合成",
@@ -2658,7 +2650,7 @@
     },
     "purgeDialog": {
       "title": "永久删除「{{name}}」？",
-      "description": "该项目的所有脚本、草图、音频、视频都将被移除。此操作无法撤销。",
+      "description": "该项目的所有脚本、音频、视频都将被移除。此操作无法撤销。",
       "typeHint": "输入项目名称以确认",
       "confirm": "永久删除"
     },
@@ -2958,7 +2950,7 @@
       "world": "世界",
       "ffmpeg": "合成"
     },
-    "generationChannelPolicyBlocked": "本次生成被模型渠道策略拦截（并非真正限流）——低质量草图重生请求通常会被跳过。请稍后重试，或提高生成质量后再试。",
+    "generationChannelPolicyBlocked": "本次生成被模型渠道策略拦截（并非真正限流）——低质量图片重生请求通常会被跳过。请稍后重试，或提高生成质量后再试。",
     "generationInputContentPolicyBlocked": "错误类型：内容安全审核未通过（输入图片）。若素材包含已获授权的真人，请开启“真人素材审核”后重试；否则请更换素材。",
     "generationOutputContentPolicyBlocked": "错误类型：内容安全审核未通过（输出视频或图片）。模型拒绝了本次生成结果，请调整涉及暴力、伤害、隐私或其他敏感内容的描述后重试。",
     "generationContentPolicyBlocked": "错误类型：内容安全审核未通过。模型拒绝了本次生成请求，请调整提示词或更换输入素材后重试。",
@@ -2982,24 +2974,18 @@
     "stop": "停止",
     "reupload": "重新上传",
     "regenerate": "重新生成",
-    "generateNew": "生成新图",
     "regenerateSelected": "重新生成选中",
     "preview": "试听",
-    "cutToPool": "切割入池",
     "noAudio": "无音频",
     "noVideo": "无视频",
     "noBeatData": "暂无节拍数据",
     "download": "下载",
-    "copy": "复制",
-    "comingSoon": "即将推出",
-    "forceUse": "强制使用",
     "use": "使用",
     "confirmExecute": "确认执行",
     "refresh": "刷新",
     "refreshDone": "已刷新",
     "preparing": "准备中...",
     "removed": "（已移除）",
-    "new": "新",
     "saveStatus": {
       "saving": "保存中…",
       "saved": "已保存",
@@ -3262,7 +3248,6 @@
     "generateAudio": "生成音频",
     "audioGenerating": "音频生成中...",
     "generateAllVideos": "生成全部视频",
-    "globalOptimize": "全局优化",
     "videoGenerating": "视频生成中...",
     "addSubtitles": "添加字幕",
     "composeVideo": "合成视频",
@@ -3274,20 +3259,9 @@
     "audioTab": "音频",
     "videoTab": "视频",
     "composeTab": "合成",
-    "globalOptimizeStarted": "全局优化任务已启动",
     "ttsComplete": "TTS 生成完成",
     "ttsPreview": "试听",
     "ttsPreviewPlaying": "正在播放试听..."
-  },
-  "sketches": {
-    "assignColors": "色彩分配",
-    "batchSketches": "批量草图",
-    "generateSketches": "生成草图",
-    "generating": "草图生成中...",
-    "noSketches": "还没有草图。点击「生成草图」开始创作。",
-    "gridGallery": "网格图",
-    "noGrids": "暂无网格图",
-    "beatThumbnails": "节拍缩略图"
   },
   "tasks": {
     "taskCount": "{{count}} 个任务",
@@ -3326,31 +3300,18 @@
       "episode_scene_planner": "规划场景",
       "episode_prop_planner": "规划道具",
       "content_rewriter": "AI 改写",
-      "sketch_generation": "草图生成",
-      "batch_sketch": "批量草图",
-      "sketch_regen": "草图重生成",
-      "grid_preview": "九宫格预览",
-      "batch_render": "批量渲染",
-      "grid_regenerate": "九宫格重生成",
       "audio_generation": "音频生成",
       "audio_generation_indextts2": "IndexTTS2 音频生成",
       "system_voice_setup": "系统声线准备",
       "video_generation": "视频生成",
       "single_video": "单镜视频",
-      "global_optimize_video": "全局优化",
-      "selected_regen": "选中重生成",
       "compose_episode": "视频合成",
       "freezone_image_reverse_prompt": "图片反推提示词",
       "freezone_image_to_blockout": "参考图转白模",
       "build_scenes": "构建场景",
       "build_props": "构建道具",
-      "beat_video_prompt": "生成提示词",
       "scene_reference_asset": "场景参考图",
       "prop_reference_asset": "道具参考图",
-      "director_control_to_sketch": "导演台转草图",
-      "sketch_grid_generation": "生成草图网格",
-      "mainline_sketch_from_context": "生成草图",
-      "mainline_frame_from_context": "渲染分镜",
       "indextts2_audio_generation": "生成音频",
       "freezone_video_gen": "生成自由区视频",
       "stage_asset": "场景资产",
@@ -3403,11 +3364,6 @@
         "fallback": "场景参考图",
         "named": "{{scene}}{{kind}}"
       },
-      "beatRange": "Beat {{ranges}}",
-      "sketchGrid": "草图网格 {{index}}/{{total}}",
-      "sketch": "草图",
-      "episodePrefixed": "第 {{episode}} 集{{label}}",
-      "withBeats": "{{label}}（{{beats}}）",
       "identityPortraitNamed": "{{character}}「{{identity}}」身份肖像",
       "identityPortrait": "{{name}}身份肖像",
       "characterPortraitNamed": "{{character}}肖像",
@@ -3431,9 +3387,7 @@
         "normalizingScenes": "AI 规范化剧本场景块..."
       },
       "script": {
-        "start": "开始生成脚本...",
-        "beatVideoPromptStart": "开始生成 Beat {{beatNum}} 视频提示词",
-        "beatVideoPromptSaved": "已保存 Beat {{beatNum}} 视频提示词"
+        "start": "开始生成脚本..."
       },
       "submitting": "任务正在投递",
       "queued": "任务已进入队列",
@@ -3668,16 +3622,12 @@
       "backgroundCandidate": "背景候选",
       "beatContext": "Beat 上下文",
       "currentBackground": "当前背景",
-      "currentSketch": "当前草图",
-      "currentSketchCandidate": "当前草图候选",
       "currentStoryboard": "当前分镜",
       "directorComposite": "导演合成图",
       "inputReference": "输入参考",
       "masterReverse": "Master + Reverse",
       "pano360": "360 全景",
       "sceneMasterReverse": "场景 Master + Reverse",
-      "sketchBackgroundIdentityProps": "草图 + 背景 + 身份/道具",
-      "sketchCandidate": "草图候选",
       "storyboardCandidate": "分镜候选"
     },
     "batchProgress": "批次进度 {{settled}}/{{expected}}",
@@ -3849,7 +3799,6 @@
   "episode": {
     "stage": {
       "script": "脚本",
-      "sketch": "草图",
       "audio": "音频",
       "video": "视频",
       "compose": "合成"
@@ -3862,8 +3811,6 @@
       "shots": "镜头",
       "compose": "合成",
       "text": "文案",
-      "sketch": "草图",
-      "render": "渲染图",
       "audio": "音频",
       "video": "视频"
     },
@@ -4002,23 +3949,15 @@
       "jumpTo": "跳到{{stage}}",
       "select": "选择",
       "deselect": "取消选择",
-      "noSketch": "无草图",
-      "noRender": "无渲染图",
       "noNarration": "(无旁白)",
       "stale": "旧",
       "clickToView": "点击节拍查看详情",
       "noMatching": "无符合条件的节拍",
       "sectionText": "文案",
-      "sectionSketch": "草图",
-      "sectionRender": "渲染图",
       "sectionAudio": "音频",
       "sectionVideo": "视频",
       "edited": "已编辑",
       "notEdited": "未编辑",
-      "selected": "已选中",
-      "notSelected": "未选中",
-      "rendered": "已渲染",
-      "notRendered": "未渲染",
       "generated": "已生成",
       "notGenerated": "未生成",
       "deleteManualShot": "删除",
@@ -4039,7 +3978,6 @@
     },
     "drawer": {
       "script": "脚本",
-      "sketch": "草图",
       "audio": "音频",
       "video": "视频",
       "close": "关闭 (Esc)"
@@ -4047,13 +3985,8 @@
     "workbench": {
       "aspectSwitch": {
         "title": "切换画幅比例？",
-        "desc": "切换画幅不会拉伸或修改已生成的草图、参考图与视频——它们会保留原比例。要让这些资产变为新比例，需要重新生成。是否继续切换？",
+        "desc": "切换画幅不会拉伸或修改已生成的参考图与视频——它们会保留原比例。要让这些资产变为新比例，需要重新生成。是否继续切换？",
         "confirm": "继续切换"
-      },
-      "pool": {
-        "rebuildIndex": "重建索引",
-        "rebuildSuccess": "图片池索引重建完成：{{count}} 张图片",
-        "rebuildFailed": "图片池索引重建失败"
       },
       "endOfBeats": "—— 已到列表底部 ——",
       "endOfBeatsCount": "共 {{count}} 个镜头",
@@ -4072,9 +4005,6 @@
         "totalShots": "共{{count}}个镜头",
         "activeBeat": "Beat {{n}}",
         "noMatchingBeats": "无符合条件的节拍",
-        "selectionHint": "选择beat可进行草图、渲染图重抽",
-        "batchRegenSketch": "重抽草图",
-        "batchRegenRender": "重抽渲染图",
         "dragToResize": "拖动调节左右宽度占比"
       },
       "text": {
@@ -4259,14 +4189,10 @@
         "humanReview": "真人审核",
         "generateVideo": "生成视频",
         "preview": {
-          "render": "渲染",
-          "sketch": "草图",
           "audio": "音频",
           "video": "视频"
         },
         "previewMissing": {
-          "render": "暂无 渲染 首帧",
-          "sketch": "暂无草图",
           "audio": "暂无音频",
           "video": "暂无视频"
         },
@@ -4292,7 +4218,7 @@
         },
         "s9PlannedDurationHint": "s9 推算段长 {{seconds}} 秒（按分镜结构计算）",
         "s9DurationExceedsModelMax": "s9 推算时长 {{planned}} 秒超出当前模型上限 {{max}} 秒，请切换至 Seedance 2.5 或回「脚本」页按 15 秒重新拆镜",
-        "s9IncludeFirstFrame": "纳入首帧渲染图 (@图片1)",
+        "s9IncludeFirstFrame": "纳入首帧图 (@图片1)",
         "s9TailAnchor": "尾帧锚点镜",
         "s9MissingAssetsNotice": "待绑定虾塘素材：{{assets}}",
         "s9PromptReboundHint": "检测到虾塘素材变化，可同步重排 @图片N / @音频N 编号",
@@ -4303,10 +4229,6 @@
         "seedance2PromptGenerateFailed": "Seedance2 提示词 生成失败",
         "videoPrompt": "视频提示词",
         "keyframePrompt": "单个 Beat 视频提示词",
-        "generateBeatVideoPrompt": "生成本 Beat 提示词",
-        "beatVideoPromptGenerated": "本 Beat 视频提示词已生成",
-        "beatVideoPromptGenerateStarted": "本 Beat 视频提示词生成已启动",
-        "beatVideoPromptGenerateFailed": "本 Beat 视频提示词生成失败",
         "beatVideoPromptRequired": "Beat #{{n}} 缺少视频提示词，请先点击“生成本 Beat 提示词”。",
         "seedance2PromptRequired": "Beat #{{n}} 缺少 Seedance2.0主体提示词，请先填写或点击“AI 优化”。",
         "seedance2OverlayEnabled": "启用",
@@ -4371,309 +4293,33 @@
         "seedance2GuidanceStyleTemplate": "风格：限定画面质感、时代感、色彩倾向和真实度，避免风格漂移。",
         "seedance2GuidanceNoSubtitleTemplate": "无字幕：避免生成任何文字或字幕，保持画面纯净。"
       },
-      "sketch": {
-        "switched": "已切换草图",
-        "switchFailed": "切换失败",
-        "forcedUse": "已强制使用该草图",
-        "forceFailed": "强制失败",
-        "regenStarted": "已启动重生",
-        "regenFailed": "重生失败",
-        "verifyGate": "验证关卡:",
-        "verifyLabel": "草图一致性",
-        "verifyDrawerTitle": "12.9 草图一致性验证",
-        "currentSketch": "当前草图",
-        "generating": "生成中",
-        "genFailed": "生成失败",
-        "notGenerated": "尚未生成草图 · 在批量栏触发整体生成",
-        "candidateHint": "候选草图，尚未从池中确认",
-        "candidateCount": "候选 ({{count}})",
-        "regenThisBeat": "此 beat 重生",
-        "staleBatch": "旧批次草图",
-        "currentBadge": "当前",
-        "staleBadge": "旧",
-        "colorBindings": "角色绑定",
-        "reassignColors": "重新分配颜色",
-        "identityColors": "身份",
-        "propColors": "道具",
-        "aiDetectResults": "AI检测结果",
-        "aiDetectResultCounts": "{{beats}} beat / {{identities}} 身份 / {{props}} 道具",
-        "openGridGallery": "草图网格",
-        "noCandidates": "池中无候选。可在上方批量栏「全生成草图」生成。",
-        "versionMismatch": "草图版本不匹配",
-        "versionMismatchDesc": "该草图基于旧版脚本生成，角色颜色分配可能已变化，选用后可能导致角色配色不一致。确定强制使用吗？",
-        "generateNow": "立即生成",
-        "generateTitle": "立即生成草图？",
-        "generateDesc": "将为 Beat #{{n}} 生成草图，新草图进入候选池。",
-        "regenTitle": "重新生成草图？",
-        "regenDesc": "将为 Beat #{{n}} 重新生成草图，新草图进入候选池。",
-        "poseEdit": "姿势编辑",
-        "poseTitle": "Beat {{n}} 草图编辑",
-        "poseCharacters": "画面角色",
-        "posePreset": "预设姿势",
-        "poseApplyPreset": "应用预设",
-        "poseSelect": "选择拖拽",
-        "poseColorPen": "彩色画笔",
-        "poseInk": "线稿画笔",
-        "poseEraser": "橡皮",
-        "poseWidth": "粗细",
-        "poseUndo": "撤销一步",
-        "poseReset": "重置姿势",
-        "poseAddToFrame": "添加",
-        "poseRemoveFromFrame": "移除",
-        "poseClear": "清空手绘",
-        "poseSaved": "已保存草图编辑结果",
-        "cropEdit": "裁剪保存",
-        "cropTitle": "Beat {{n}} 草图裁剪",
-        "cropWidth": "宽",
-        "cropHeight": "高",
-        "cropSaved": "已保存裁剪后的草图",
-        "directorControl": "导演合成资产",
-        "directorControlFile": "合成图 + 纯背景 + 元数据",
-        "convertDirectorControl": "转草图",
-        "convertDirectorStarted": "导演渲染 转草图任务已启动",
-        "convertDirectorFailed": "导演渲染 转草图启动失败",
-        "openDirectorWorld": "导演世界",
-        "openDirectorWorldTip": "进入当前 Beat 的导演世界",
-        "openDirectorWorldFailed": "无法打开当前 Beat 的导演世界",
-        "chooseBackground": "背景",
-        "chooseBackgroundTip": "选择单 beat 背景",
-        "chooseBackgroundFailed": "选择单 beat 背景失败",
-        "chooseBackgroundSaved": "已保存单 beat 背景",
-        "backgroundDialogTitle": "Beat {{n}} 背景选择",
-        "backgroundDialogDesc": "只影响单 beat 草图和单 beat 渲染；批量仍使用场景 正面。",
-        "backgroundMissing": "还没有背景图",
-        "backgroundCurrent": "当前使用",
-        "backgroundSnapshotUse": "截图使用",
-        "openFreezone": "虾画编辑",
-        "openFreezoneTip": "在 虾画 编辑当前 beat 的草图",
-        "freezoneOpened": "已打开草图 虾画",
-        "freezoneOpenFailed": "打开草图 虾画 失败",
-        "cropTitleWithAspect": "裁剪 {{aspect}}",
-        "cropDragHandle": "移动裁剪区域"
-      },
-      "sketchGrid": {
-        "title": "草图网格",
-        "titleWithCount": "草图网格（共{{count}}个网格）",
-        "gridCount": "{{count}} 个 网格",
-        "gridLabel": "网格 #{{n}}",
-        "cellCount": "{{count}} 格",
-        "noPreview": "无预览",
-        "generateGrid": "生成/重生",
-        "regenStarted": "网格 #{{n}} 已启动",
-        "regenFailed": "网格 生成失败",
-        "uploadGrid": "上传 网格",
-        "uploadSuccess": "网格 #{{n}} 已上传",
-        "uploadFailed": "网格 上传失败",
-        "exportPrompt": "导出 提示词",
-        "promptTitle": "网格 #{{n}} 提示词",
-        "promptContent": "提示词 内容",
-        "promptFailed": "提示词 导出失败",
-        "copySuccess": "提示词 已复制",
-        "cut": "切割入池",
-        "cutSuccess": "网格 #{{n}} 已切割",
-        "cutFailed": "网格 切割失败",
-        "unknownScene": "未知场景"
-      },
-      "render": {
-        "generateNew": "生成新图",
-        "sketchRequired": "请先生成或上传草图",
-        "switched": "已切换渲染图",
-        "switchFailed": "切换失败",
-        "forcedUse": "已强制使用该渲染图",
-        "forceFailed": "强制失败",
-        "regenStarted": "已启动重生",
-        "regenFailed": "重生失败",
-        "versionMismatch": "渲染图版本不匹配",
-        "versionMismatchDesc": "该渲染图基于旧版脚本生成，内容可能与当前脚本不一致。确定强制使用吗？",
-        "regenTitle": "重新生成渲染图？",
-        "regenDesc": "将为 Beat #{{n}} 重新生成渲染图，新渲染图进入候选池。",
-        "openFreezone": "虾画编辑",
-        "openFreezoneTip": "在 虾画 编辑当前 beat 的渲染图",
-        "freezoneOpened": "已打开虾画编辑",
-        "freezoneOpenFailed": "打开虾画编辑失败",
-        "backgroundTitle": "渲染 背景参考",
-        "backgroundCurrent": "当前：{{label}}",
-        "backgroundHint": "只给草图上色/材质，不改构图。",
-        "backgroundRenderInput": "实际渲染输入：{{label}}",
-        "backgroundMissing": "未找到参考图",
-        "backgroundOpen360": "打开导演世界",
-        "backgroundDirectorWorldDescription": "在导演世界取景，并写入当前 Beat 导演合成图。",
-        "backgroundAnchorLabels": {
-          "directorEnvOnly": "导演世界场景截图",
-          "master": "场景正面",
-          "reverse": "场景背面"
-        },
-        "backgroundCropAction": "截图 {{label}}",
-        "backgroundCropTitle": "{{label}} 裁剪截图",
-        "backgroundCropFallbackTitle": "裁剪截图",
-        "backgroundUpload": "上传外部参考",
-        "backgroundUploaded": "渲染 背景参考已上传",
-        "backgroundUploadFailed": "上传 渲染 背景参考失败",
-        "backgroundSaved": "渲染 背景参考已切换",
-        "backgroundSaveFailed": "保存 渲染 背景参考失败",
-        "backgroundCropSave": "保存截图",
-        "backgroundCropTitleWithAspect": "裁剪 {{aspect}}",
-        "backgroundCropDragHandle": "移动裁剪区域",
-        "relightLabel": "Relight 到 {{timeOfDay}}",
-        "relightLabelDefaultTime": "指定时间",
-        "relightTooltip": "Relight：按 beat 时间重新打光，不改变场景结构。",
-        "lockedLightTooltip": "锁图光：使用场景图自带光线，不重新打光。",
-        "lockedLightLabel": "锁图光"
-      },
-      "spatialLock": {
-        "label": "固定机位空间锁定",
-        "idleHint": "未锁定：重绘/渲染与相邻镜自由运镜",
-        "activeHint": "锚定 #B{{n}} 底图与地面站位，生成视频保持稳定三脚架机位",
-        "modeOff": "不锁定",
-        "modeFullBody": "锁定机位·全身",
-        "modeUpperBody": "锁定机位·仅改上半身",
-        "anchorLabel": "锚定源镜头",
-        "anchorItem": "锚定 #B{{n}}",
-        "lockedToast": "已锁定到 #B{{n}} 机位与底图空间",
-        "unlockedToast": "已取消固定机位锁定",
-        "saveFailed": "保存固定机位设置失败",
-        "videoBannerLockedTo": "固定机位连续镜头（锚定 #B{{n}}）：已自动锁定三脚架视角与景别，视频提示词与过渡优先保持画面稳定拼接。",
-        "videoBannerFeedNext": "本镜为下一固定机位镜头（#B{{n}}）的底图锚点：建议在结尾保持稳定落点（首尾帧模式可无缝过渡到 #B{{n}}）。"
-      },
-      "renderGrid": {
-        "title": "渲染网格",
-        "titleWithCount": "渲染网格（共{{count}}个网格）",
-        "gridCount": "{{count}} 个 网格",
-        "rebuildIndex": "重建索引",
-        "rebuildSuccess": "索引重建完成：{{count}} 张图片",
-        "rebuildFailed": "索引重建失败",
-        "noIndexedGrids": "暂无渲染网格索引，可先生成渲染或重建图片池索引",
-        "gridLabel": "网格 #{{n}}",
-        "cellCount": "{{count}} 格",
-        "noPreview": "无预览",
-        "cut": "切割入池",
-        "regenStarted": "网格 #{{n}} 已启动",
-        "regenFailed": "网格 重生失败",
-        "uploadGrid": "上传 网格",
-        "uploadSuccess": "网格 #{{n}} 已上传",
-        "uploadFailed": "网格 上传失败",
-        "exportPrompt": "导出 提示词",
-        "promptTitle": "网格 #{{n}} 提示词",
-        "promptContent": "提示词 内容",
-        "promptFailed": "提示词 导出失败",
-        "copySuccess": "提示词 已复制",
-        "cutSuccess": "网格 #{{n}} 已切割",
-        "cutFailed": "网格 切割失败"
-      },
       "batch": {
         "narrationIncompatible": "此模型仅支持对白镜头 ({{count}} 个旁白不兼容)",
         "toolbar": "生成工具栏",
-        "globalOptimizeStarted": "全局优化已启动",
         "rewriteScriptTitle": "重写全集脚本？",
-        "rewriteScriptDesc": "将根据原文/改写稿重新生成所有 beat 文案。现有文案、草图 过期 标记将受影响。",
+        "rewriteScriptDesc": "将根据原文/改写稿重新生成所有 beat 文案。现有文案将受影响。",
         "rewriteScript": "重写全集脚本",
-        "genSketchTitle": "生成全集草图？",
-        "genSketchDesc": "将为所有 beat 生成草图（草图），已有草图不会被覆盖，新草图进入候选池。",
-        "genSketch": "生成全集草图",
-        "genSketchShort": "全集草图",
-        "autoSelectTitle": "全集抽卡？",
-        "autoSelectDesc": "将从候选草图池中为所有 beat 自动选择最佳草图。",
-        "autoSelect": "全集抽卡",
         "insertManualBeforeFirst": "首镜前插入",
         "insertManualBeforeFirstShort": "首镜前插入",
         "insertManualBeforeFirstTooltip": "在首个 Beat 之前插入一个手工镜头",
-        "genMissingManualTitle": "补草图？",
-        "genMissingManualDesc": "为本集新增的手工镜头中缺少草图的镜头，按场景分组批量生成草图。",
-        "genMissingManual": "补缺失草图",
         "genMissingManualShort": "新增镜头",
-        "genMissingManualTooltip": "为本集所有缺草图的新增手工镜头按场景分组生成草图",
-        "genMissingManualEmpty": "没有缺草图的手工镜头",
-        "genMissingManualDispatched": "已发起 {{count}} 组手工镜头草图任务",
-        "autoCombine": "批量重抽",
-        "genRender": "生成全集渲染图",
-        "genRenderShort": "全集渲染",
-        "genRenderTitle": "生成全集渲染图？",
-        "genRenderDesc": "按标准 渲染计划 生成整集 渲染 网格。需要先有草图和 AI 身份检测结果。",
-        "genRenderTooltip": "打开整集 渲染计划（标准 generate_grid 模式）",
-        "batchRenderStarted": "渲染 已启动",
-        "aiDetect": "AI 检测",
-        "aiDetectTooltip": "用 AI 视觉识别草图中的角色颜色",
-        "aiDetectRunning": "AI 角色检测中...",
-        "aiDetectSuccess": "AI 检测完成：{{beats}} 个 beat，共 {{ids}} 个身份、{{props}} 个道具",
-        "aiDetectEmpty": "AI 未返回检测结果",
-        "aiDetectReview": "请核对每个 beat；漏识别可在更多里的出场身份/出场道具中补选。",
-        "reassignColors": "重新配色",
-        "reassignColorsTitle": "确认重新配色？",
-        "reassignColorsDesc": "这会按当前脚本中的身份重新分配本集草图颜色。已有草图中的旧颜色标记可能与新配色不一致。",
-        "reassignColorsTooltip": "根据脚本身份重新分配颜色（幂等）",
-        "reassignColorsSuccess": "已重新分配 {{count}} 个身份、{{propCount}} 个道具的颜色",
-        "aiCameraLock": "AI 机位锁定",
-        "aiCameraLockTooltip": "自动分析整集连续同机位分镜并设置固定机位空间锁定",
-        "aiCameraLockRunning": "正在分析固定机位锁定…",
-        "aiCameraLockEmpty": "当前集未识别到适合锁定的连续固定机位镜头",
-        "aiCameraLockSuccess": "已完成 AI 机位锁定规划：共锁定 {{count}} 个镜头（{{beats}}）",
         "genAudioTitle": "生成全集音频？",
         "genAudioDesc": "将为所有缺少音频的 beat 生成 TTS 配音。",
         "genAudio": "生成全集音频",
         "genAudioShort": "全集音频",
         "genAudioUnavailableForVideoModel": "当前视频模型不需要单独生成全集音频",
         "videoModel": "视频模型",
-        "sketchSettingsLabel": "草图设置",
-        "renderSettingsLabel": "渲染设置",
         "videoSettingsLabel": "视频设置",
-        "genVideoTitle": "生成全集视频？",
-        "genVideoDesc": "将为所有缺少视频的 beat 生成视频片段。需要先有草图/渲染图和音频。",
+        "genVideoDesc": "将为所有缺少视频的 beat 生成视频片段。需要先有音频。",
         "genVideo": "生成全集视频",
         "genVideoShort": "全集视频",
-        "aiOptimizeTitle": "生成全 Beat 视频提示词？",
-        "aiOptimizeDesc": "将使用 SuperPower 分析本集草图，为所有 beat 生成视频提示词。",
-        "aiOptimize": "生成全 Beat 视频提示词",
-        "aiOptimizeShort": "全 Beat 提示词",
-        "selectedCount": "已选 {{count}} 个节拍",
-        "clearSelection": "清除选择",
-        "batchRegen": "批量重生",
-        "sketch": "草图",
-        "render": "渲染图",
-        "audio": "音频",
         "video": "视频",
-        "singleRegen": "单张重抽",
-        "regenSketchSingleTitle": "单张重抽 {{count}} 个 beat 草图？",
-        "regenSketchSingleDesc": "按当前画幅把 #{{beats}} 拆成 1×1 草图任务。",
-        "regenSketchTitle": "重生 {{count}} 个 beat 草图 ({{mode}})？",
-        "regenSketchDesc": "将为 #{{beats}} 重新生成草图。新草图进入候选池。",
-        "regenSketchDescBatch": "将分 {{batches}} 组执行。",
-        "regenRenderTitle": "重生 {{count}} 个 beat 渲染图 ({{mode}})？",
-        "regenRenderDesc": "将为 #{{beats}} 重新生成渲染图。新渲染图进入候选池。",
-        "regenRenderDescBatch": "将分 {{batches}} 组执行。",
-        "genBatchAudioTitle": "生成 {{count}} 个 beat 的音频？",
-        "genBatchAudioDesc": "将为 #{{beats}} 发起一次 IndexTTS2 音频生成任务。",
-        "genBatchAudio": "生成选中 {{count}} 个 beat 音频",
         "genBatchVideoTitle": "生成 {{count}} 个 beat 的视频？",
-        "genBatchVideoDesc": "将为 #{{beats}} 逐个生成视频片段。需要先有草图/渲染图和音频。",
+        "genBatchVideoDesc": "将为 #{{beats}} 逐个生成视频片段。需要先有音频。",
         "genBatchVideo": "生成选中 {{count}} 个 beat 视频",
-        "batchHint": "推荐模式已高亮。音频按选中 beat 发起异步任务，视频逐个 beat 依次生成。",
-        "dispatched": "已发配 {{count}} 个 beat → {{mode}}",
-        "dispatchedBatch": " × {{batches}} 组",
-        "dispatchFailed": "发配失败",
-        "sketchGroupRunning": "相同草图组正在运行中",
-        "sketchGroupSkippedRunning": "已跳过 {{count}} 个正在运行的草图组",
-        "sketchSameSceneRequired": "草图重生只能选择同一场景的 beat；当前包含：{{scenes}}",
-        "sketchSceneMissingRequired": "选中 beat 缺少场景绑定，无法确认是否同一场景：#{{beats}}。请先完成场景规划或在脚本里绑定场景。",
-        "sketchDispatchQueue": "草图重生发配",
-        "sketchDispatchQueued": "已发配 {{count}} 个 beat 到 {{mode}}",
-        "sketchDispatchDuplicate": "这些 beats 已在上方草图重生发配卡中：#{{beats}}。请点卡片里的“生成本组”或先移除卡片。",
-        "sketchDispatchOverlap": "这些 beats 已被上方草图重生发配卡占用：#{{beats}}。请点卡片里的“生成本组”或先移除卡片。",
-        "sketchDispatchRun": "生成本组",
-        "sketchTaskStatus": "任务状态：{{status}}",
-        "sketchUsageTitle": "草图生成请求用量",
-        "sketchUsageToday": "今日 {{count}}",
-        "sketchUsageTotal": "累计 {{count}}",
-        "imageGuardConfirmTitle": "继续生成确认",
-        "imageGuardLockedTitle": "生成保护",
-        "operatorPasswordPlaceholder": "管理员密码",
-        "operatorPasswordError": "密码错误",
-        "audioDispatched": "已发起 {{count}} 个 beat 的 IndexTTS2 音频任务",
         "audioSuccess": "已生成 {{ok}} 个 beat 的音频",
         "audioPartial": "音频生成：{{ok}} 成功, {{fail}} 失败",
         "videoSuccess": "已生成 {{ok}} 个 beat 的视频",
-        "videoPartial": "视频生成：{{ok}} 成功, {{fail}} 失败",
-        "batchRegenSketchSuccess": "已发起 {{count}} 个 beat 的草图重抽任务",
-        "batchRegenRenderSuccess": "已发起 {{count}} 个 beat 的渲染图重抽任务",
         "episodeFreezone": "EP Freezone",
         "episodeFreezoneTooltip": "打开本集虾画工作区",
         "episodeFreezoneOpened": "已打开 EP Freezone",
@@ -4731,7 +4377,7 @@
       "downloadVideo": "下载视频",
       "composingProgress": "合成进行中...",
       "notComposed": "尚未合成",
-      "composeHint": "确保所有节拍已完成草图、音频、视频。点击「合成剧集」开始生成成片。完成后可在此预览并下载，或通过右上角导出 SRT / ZIP 文件。",
+      "composeHint": "确保所有节拍已完成音频、视频。点击「合成剧集」开始生成成片。完成后可在此预览并下载，或通过右上角导出 SRT / ZIP 文件。",
       "beats": "镜头数",
       "duration": "预估时长",
       "options": "选项",
@@ -4816,59 +4462,7 @@
       "noBeats": "还没有节拍，先生成剧本",
       "generateBeats": "生成节拍",
       "generateBeatsTitle": "生成节拍？",
-      "generateBeatsDesc": "将根据改写稿（或原文）逐行拆分生成节拍，作为后续草图、音频、视频的基础。"
-    },
-    "sketchPlan": {
-      "title": "草图计划（{{beats}} beats → {{grids}} 个网格）",
-      "subtitle": "系统已根据场景自动分组。确认后会直接发配草图任务。",
-      "confirm": "确认草图 {{grids}} 个网格"
-    },
-    "renderPlan": {
-      "title": "渲染计划（{{beats}} beats → {{grids}} 个网格）",
-      "subtitle": "系统已根据场景和角色数量自动分组。确认后开始渲染。",
-      "strategy": "规划策略",
-      "strategyLocation": "按场景分组",
-      "strategyNaive": "顺序打包",
-      "forceOneByOne": "逐个渲染 · 最高保真（1×1 per beat）",
-      "confirm": "确认渲染 {{grids}} 个网格",
-      "planning": "正在生成计划…",
-      "unavailable": "暂无可渲染计划",
-      "openDialog": "重新渲染选中 beats（{{count}}）",
-      "dispatched": "已启动渲染",
-      "featureDisabled": "新版渲染流程已禁用，请使用单个 beat 重新生成",
-      "unknownLocation": "未知场景",
-      "split": "拆分",
-      "mergeNext": "合并下一个",
-      "stale": {
-        "input": "输入已变更（角色或 beat 文案），请重新确认",
-        "plan": "渲染规划逻辑已更新，请重新确认"
-      },
-      "errors": {
-        "invalidBeats": "选中的 beats 不在当前集范围内",
-        "noBeats": "当前集暂无 beats"
-      },
-      "paddingCount": "+{{count}}空",
-      "partial": {
-        "reason": {
-          "unknown": "部分任务暂未投递。"
-        },
-        "summary": "已投 {{ok}} / 被拒 {{fail}}",
-        "continue": "继续"
-      }
-    },
-    "renderSettings": {
-      "model": "渲染模型",
-      "modelPlaceholder": "选择模型"
-    },
-    "sketchSettings": {
-      "model": "草图模型",
-      "modelPlaceholder": "选择草图模型",
-      "aspectRatio": "画幅",
-      "wide16x9": "16:9",
-      "aspectChangeHint": "切换画幅只影响新生成的内容，已生成的资产需重新生成才会更新为新比例。"
-    },
-    "sketches": {
-      "selectFailed": "选择失败"
+      "generateBeatsDesc": "将根据改写稿（或原文）逐行拆分生成节拍，作为后续音频、视频的基础。"
     },
     "video": {
       "switchFailed": "切换视频失败"
@@ -5376,84 +4970,6 @@
           }
         }
       },
-      "real_scene_sketch_repair": {
-        "name": "实景草图修复",
-        "shortName": "实景草图",
-        "description": "用导演世界 control frame 和场景/身份参考修复当前 beat 的实景草图。",
-        "inputs": {
-          "3gs_combined": {
-            "label": "3GS 导演合成图",
-            "description": "第一张连入图会作为 base，控制机位、空间和构图。"
-          },
-          "scene_refs": {
-            "label": "场景/身份/道具参考",
-            "description": "后续连入图作为修复和语义参考。"
-          }
-        },
-        "preserve": {
-          "camera": "原始机位 / 构图",
-          "layout": "桌椅 / 墙面 / 门窗位置",
-          "identity": "人物身份颜色",
-          "props": "道具颜色和位置",
-          "street_mood": "市井氛围"
-        },
-        "modify": {
-          "deblur": "修复模糊 / 糊成一片的背景",
-          "distortion": "修复 3GS 畸变 / 拉伸",
-          "furniture_detail": "补清桌椅结构",
-          "actor_blocks": "方块人转干净角色线稿",
-          "staging_blocks": "占位块转真实物体"
-        },
-        "params": {
-          "shot_type": {
-            "label": "景别",
-            "options": {
-              "closeup": "特写",
-              "medium_closeup": "近景",
-              "medium": "中景",
-              "wide": "全景"
-            }
-          },
-          "angle": {
-            "label": "角度",
-            "options": {
-              "eye_level": "平视",
-              "high": "俯拍",
-              "low": "仰拍",
-              "over_shoulder": "过肩",
-              "reverse": "反打"
-            }
-          },
-          "lens": {
-            "label": "镜头",
-            "options": {
-              "24mm": "24mm 广角",
-              "35mm": "35mm 自然",
-              "50mm": "50mm 标准",
-              "85mm": "85mm 压缩"
-            }
-          },
-          "lighting": {
-            "label": "光线",
-            "options": {
-              "dim_street_warm": "昏暗市井暖光",
-              "mixed_neon": "冷暖混合霓虹",
-              "window_daylight": "自然窗光",
-              "hard_toplight": "顶灯硬光"
-            }
-          },
-          "preserve": {
-            "label": "必须保持"
-          },
-          "modify": {
-            "label": "重点修复"
-          },
-          "notes": {
-            "label": "补充要求",
-            "description": "例如：后排灰色人物也要上色，桌子必须保持木质结构。"
-          }
-        }
-      },
       "portrait_from_ref": {
         "name": "从参考图生成角色身份",
         "shortName": "角色身份",
@@ -5741,14 +5257,6 @@
       "useAria": "使用{{label}}",
       "loading": "加载中…",
       "empty": "暂无风格模板"
-    },
-    "commitHint": {
-      "title": "生成后的产物在 commit 时如何写回主线槽位",
-      "sketch": "草图",
-      "frame": "分镜",
-      "typed": "EP{{episode}}/镜头 {{beat}} · {{candidate}}候选 · 生成后落本节点,commit 后晋升为 {{promoted}}",
-      "untyped": "主线候选 · 已绑定 EP{{episode}}/镜头 {{beat}} · 生成后落本节点,commit 时按上下文匹配槽位",
-      "free": "自由候选 · 生成后落本节点,commit 时需手动选择目标资产"
     },
     "cameraPicker": {
       "title": "摄像机",
@@ -6882,7 +6390,6 @@
       "stale": "已移除",
       "assets": {
         "background": "背景",
-        "sketch": "草图",
         "frame": "分镜",
         "selected": "已选",
         "unselected": "未选",
@@ -7716,8 +7223,6 @@
       "directorCombinedOutputLabel": "导演合成图 · EP{{episode}}/B{{beat}}",
       "directorCombinedCommitSuccess": "已设置 EP{{episode}}/B{{beat}} 导演合成资产",
       "directorCombinedMissingContext": "缺少项目或镜头上下文",
-      "directorControlBundleMissing": "缺少导演合成资产的纯背景和元数据，请从导演世界重新提交",
-      "directorControlCommitted": "已提交导演合成资产：{{path}}（含纯背景和元数据）",
       "canvasSaveConflictBeforeCommit": "当前画布未保存成功，处理冲突后再提交",
       "panoSetAsSelectedBackground": "设为当前背景",
       "panoOutputToCanvasNode": "输出到画布节点",
@@ -7847,18 +7352,6 @@
         "copySelectedSuccess": "已复制镜头 {{sourceBeat}} 到当前镜头 {{targetBeat}}"
       },
       "skillDefinitions": {
-        "freezone_sketch_from_context": {
-          "name": "从当前背景生成草图",
-          "description": "从镜头上下文和当前背景生成主线草图候选。"
-        },
-        "freezone_sketch_from_director_combined": {
-          "name": "从导演合成图生成草图",
-          "description": "从镜头上下文和导演合成图生成主线草图候选。"
-        },
-        "freezone_frame_from_context": {
-          "name": "从镜头上下文生成分镜",
-          "description": "从镜头上下文、草图和参考图生成主线分镜候选。"
-        },
         "freezone_set_selected_background": {
           "name": "设为当前背景",
           "description": "把明确的图片来源写为本镜头的当前背景；不调用图像模型。"
@@ -7874,7 +7367,6 @@
       },
       "skillInputLabels": {
         "beat_context": "镜头上下文",
-        "sketch": "草图",
         "background": "背景",
         "identity": "人物身份",
         "prop": "道具",
@@ -7886,7 +7378,6 @@
         "frame": "分镜"
       },
       "skillOutputLabels": {
-        "current_sketch_candidate": "草图候选",
         "current_frame_candidate": "分镜候选",
         "scene_360_candidate": "360 全景图候选",
         "selected_background": "当前背景",
@@ -7894,34 +7385,6 @@
         "review_report": "审阅报告"
       },
       "skillParametersTitle": "参数",
-      "skillParameterLabels": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": "比例"
-        },
-        "freezone_frame_from_context": {
-          "quality": "质量",
-          "background_reference_mode": "背景参考模式"
-        }
-      },
-      "skillParameterOptions": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": {
-            "2_3": "竖幅 2:3",
-            "16_9": "横幅 16:9"
-          }
-        },
-        "freezone_frame_from_context": {
-          "quality": {
-            "low": "低",
-            "medium": "中",
-            "high": "高"
-          },
-          "background_reference_mode": {
-            "material_only": "仅外观",
-            "scene_anchor": "场景锚点"
-          }
-        }
-      },
       "skillRequirement": {
         "required": "必填",
         "optional": "可选"
@@ -8613,9 +8076,7 @@
         },
         "features": {
           "HERMES": "虾导聊天模型",
-          "GLOBAL_VIDEO_OPTIMIZER": "根据画面优化视频提示词",
           "SEEDANCE2_PROMPT_COMPOSER": "组合视频生成提示词",
-          "GLOBAL_VIDEO_IDENTITY_DETECTOR": "识别草图中的角色与道具标记",
           "IDENTITY_PLANNER_CAST": "规划本集出场角色",
           "IDENTITY_PLANNER_ANALYSIS": "分析角色身份",
           "IDENTITY_PLANNER_APPEARANCE": "生成角色身份造型",
@@ -9237,7 +8698,6 @@
         "identity": "🎭 Identity (角色身份图)",
         "portrait": "🖼 Portrait (角色肖像)",
         "frame": "🎬 Frame (beat 首帧)",
-        "sketch": "✏️ Sketch (草图)",
         "directorRender": "📐 导演合成资产"
       },
       "noCharacters": "该项目没有角色",

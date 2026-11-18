@@ -43,7 +43,6 @@ URL_FIELD_NAMES = {
     "reverse_url",
     "reverseUrl",
     "scene_url",
-    "sketch_url",
     "source_url",
     "sourceUrl",
     "sog_path",

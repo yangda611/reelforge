@@ -215,13 +215,13 @@ describe("selectChatTaskItems", () => {
       task_key: "grid-1",
       progress: 1,
       status: "completed",
-      metadata: { batch_id: "sketch-batch-1", batch_size: "2" },
+      metadata: { batch_id: "video-batch-1", batch_size: "2" },
     });
     const second = task({
       task_key: "grid-2",
       progress: 0.5,
       status: "running",
-      metadata: { batch_id: "sketch-batch-1", batch_size: "2" },
+      metadata: { batch_id: "video-batch-1", batch_size: "2" },
     });
 
     const result = aggregateChatTaskBatchItems([

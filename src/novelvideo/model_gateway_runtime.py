@@ -579,9 +579,6 @@ def _clear_agent_singletons() -> list[str]:
             "_story_script_agent",
             "_video_story_script_agent",
         ),
-        "novelvideo.agents.global_video_optimizer": ("_global_video_optimizer",),
-        "novelvideo.agents.video_prompt_builder": ("_video_prompt_builder",),
-        "novelvideo.agents.keyframe_prompt_builder": ("_keyframe_prompt_builder",),
         "novelvideo.agents.character_reviewer": ("_reviewer_agent",),
         "novelvideo.agents.character_fixer": ("_fixer_agent",),
     }

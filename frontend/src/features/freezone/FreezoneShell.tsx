@@ -3572,7 +3572,6 @@ function pushTargetsEqual(
   const av = a as Record<string, unknown>;
   if (
     b.kind === "frame" ||
-    b.kind === "sketch" ||
     b.kind === "director_render" ||
     b.kind === "selected_background" ||
     b.kind === "video" ||

@@ -161,7 +161,7 @@
         },
         "canvasOverwrite": {
           "question": "Do results in Shrimp Canvas overwrite my mainline assets automatically?",
-          "answer": "No. Anything generated or uploaded in Shrimp Canvas is a candidate by default. It only enters the project mainline once you explicitly commit it and pick a target slot — character, scene, prop, beat sketch, first frame or video."
+          "answer": "No. Anything generated or uploaded in Shrimp Canvas is a candidate by default. It only enters the project mainline once you explicitly commit it and pick a target slot — character, scene, prop, beat first frame or video."
         },
         "whyAssetsFirst": {
           "question": "Why organise characters, scenes, props and voices first?",
@@ -177,7 +177,7 @@
         },
         "unstableResults": {
           "question": "What should I check first when results are inconsistent?",
-          "answer": "Find the stage that's failing: is the text clear, is the character identity right, do the scene and props have references, does the sketch describe the shot, is the first frame stable, does the audio match? Don't start by regenerating video over and over — fix the upstream assets and the shot description first."
+          "answer": "Find the stage that's failing: is the text clear, is the character identity right, do the scene and props have references, does the shot description say what the shot is, is the first frame stable, does the audio match? Don't start by regenerating video over and over — fix the upstream assets and the shot description first."
         },
         "dcUniverse": {
           "question": "What does “Make Your DC Universe.” mean?",
@@ -1198,7 +1198,6 @@
         "assets": "Asset library"
       },
       "roles": {
-        "current_sketch": "Sketch",
         "current_frame": "Frame",
         "current_video": "Video",
         "current_audio": "Audio",
@@ -1309,7 +1308,6 @@
         "scene": "Scene",
         "prop": "Prop",
         "beat": "Beat",
-        "sketch": "Sketch",
         "frame": "Frame",
         "video": "Video",
         "audio": "Audio",
@@ -1318,10 +1316,8 @@
       },
       "binding": {
         "background_candidate": "Background candidate",
-        "sketch_candidate": "Sketch candidate",
         "frame_candidate": "Frame candidate",
         "selected_background": "Current background",
-        "current_sketch": "Current sketch",
         "current_frame": "Current frame"
       },
       "withEpisodeBeat": "{{label}} · EP{{episode}}/B{{beat}}",
@@ -1392,7 +1388,6 @@
       },
       "kinds": {
         "frame": "First frame",
-        "sketch": "Sketch",
         "director_render": "Director composite asset",
         "selected_background": "Current background",
         "identity": "Character identity image",
@@ -1417,7 +1412,6 @@
       },
       "shortKinds": {
         "frame": "First frame",
-        "sketch": "Sketch",
         "director_render": "Director composite",
         "selected_background": "Current background",
         "video": "Video",
@@ -1442,7 +1436,6 @@
       },
       "nodeLabels": {
         "frame": "Frame",
-        "sketch": "Sketch",
         "director_render": "Director render",
         "selected_background": "Current background",
         "video": "Video",
@@ -2034,7 +2027,6 @@
     "episodes": "Episode Studio",
     "script": "Script",
     "literalScript": "Literal Script",
-    "sketches": "Sketches",
     "audio": "Audio",
     "video": "Video",
     "compose": "Compose",
@@ -2555,7 +2547,7 @@
     "pikoWorldEntry": "Enter Piko Piko World",
     "pikoWorldEntryDragHint": "Click to enter Piko Piko World; hold and drag to move",
     "emptyTitle": "Start your first story",
-    "emptyDescription": "Create a project to begin scripting, generating sketches, and producing episodes.",
+    "emptyDescription": "Create a project to begin scripting, generating storyboards, and producing episodes.",
     "heroTitle": "Start your creative journey",
     "heroDescription": "Transform your story into vivid video content by importing scripts, setting styles, and creating characters.",
     "heroButton": "New Project",
@@ -2636,7 +2628,7 @@
     },
     "purgeDialog": {
       "title": "Permanently delete \"{{name}}\"?",
-      "description": "All scripts, sketches, audio, and video for this project will be removed. This cannot be undone.",
+      "description": "All scripts, audio, and video for this project will be removed. This cannot be undone.",
       "typeHint": "Type the project name to confirm",
       "confirm": "Delete forever"
     },
@@ -2936,7 +2928,7 @@
       "world": "world",
       "ffmpeg": "composition"
     },
-    "generationChannelPolicyBlocked": "This request was blocked by the model channel policy (not a real rate limit) — low-quality sketch regeneration requests are typically skipped. Retry later, or raise the generation quality and try again.",
+    "generationChannelPolicyBlocked": "This request was blocked by the model channel policy (not a real rate limit) — low-quality image regeneration requests are typically skipped. Retry later, or raise the generation quality and try again.",
     "generationInputContentPolicyBlocked": "Error type: content safety review failed (input image). If it contains an authorized real person, enable Real-person review and retry; otherwise, replace the input.",
     "generationOutputContentPolicyBlocked": "Error type: content safety review failed (output video or image). The model rejected this result. Adjust descriptions involving violence, harm, privacy, or other sensitive content and retry.",
     "generationContentPolicyBlocked": "Error type: content safety review failed. The model rejected this generation request. Adjust the prompt or replace the input and retry.",
@@ -2953,24 +2945,18 @@
     "stop": "Stop",
     "reupload": "Re-upload",
     "regenerate": "Regenerate",
-    "generateNew": "Generate new",
     "regenerateSelected": "Regenerate Selected",
     "preview": "Preview",
-    "cutToPool": "Cut to Pool",
     "noAudio": "No audio",
     "noVideo": "No video",
     "noBeatData": "No beat data",
     "download": "Download",
-    "copy": "Copy",
-    "comingSoon": "Coming soon",
-    "forceUse": "Force use",
     "use": "Use",
     "confirmExecute": "Confirm",
     "refresh": "Refresh",
     "refreshDone": "Done",
     "preparing": "Preparing...",
     "removed": "(removed)",
-    "new": "NEW",
     "saveStatus": {
       "saving": "Saving…",
       "saved": "Saved",
@@ -3232,7 +3218,6 @@
     "generateAudio": "Generate Audio",
     "audioGenerating": "Generating audio...",
     "generateAllVideos": "Generate All Videos",
-    "globalOptimize": "Global Optimize",
     "videoGenerating": "Generating video...",
     "addSubtitles": "Add Subtitles",
     "composeVideo": "Compose Video",
@@ -3244,20 +3229,9 @@
     "audioTab": "Audio",
     "videoTab": "Video",
     "composeTab": "Compose",
-    "globalOptimizeStarted": "Global optimize task started",
     "ttsComplete": "TTS generation complete",
     "ttsPreview": "Preview",
     "ttsPreviewPlaying": "Playing preview..."
-  },
-  "sketches": {
-    "assignColors": "Assign Colors",
-    "batchSketches": "Batch Sketches",
-    "generateSketches": "Generate Sketches",
-    "generating": "Generating sketches...",
-    "noSketches": "No sketches yet. Click \"Generate Sketches\" to start.",
-    "gridGallery": "Grid Gallery",
-    "noGrids": "No grids yet",
-    "beatThumbnails": "Beat Thumbnails"
   },
   "tasks": {
     "taskCount": "{{count}} tasks",
@@ -3296,31 +3270,18 @@
       "episode_scene_planner": "Plan scenes",
       "episode_prop_planner": "Plan props",
       "content_rewriter": "AI rewrite",
-      "sketch_generation": "Sketch generation",
-      "batch_sketch": "Batch sketch",
-      "sketch_regen": "Sketch regen",
-      "grid_preview": "Grid preview",
-      "batch_render": "Batch render",
-      "grid_regenerate": "Grid regenerate",
       "audio_generation": "Audio generation",
       "audio_generation_indextts2": "IndexTTS2 audio generation",
       "system_voice_setup": "System voice setup",
       "video_generation": "Video generation",
       "single_video": "Single video",
-      "global_optimize_video": "Global optimize video",
-      "selected_regen": "Selected regen",
       "compose_episode": "Video compose",
       "freezone_image_reverse_prompt": "Image reverse prompt",
       "freezone_image_to_blockout": "Reference image to blockout",
       "build_scenes": "Build scenes",
       "build_props": "Build props",
-      "beat_video_prompt": "Generate prompt",
       "scene_reference_asset": "Scene reference image",
       "prop_reference_asset": "Prop reference image",
-      "director_control_to_sketch": "Director stage to sketch",
-      "sketch_grid_generation": "Generate sketch grid",
-      "mainline_sketch_from_context": "Generate sketch",
-      "mainline_frame_from_context": "Render storyboard frame",
       "indextts2_audio_generation": "Generate audio",
       "freezone_video_gen": "Generate Freezone video",
       "stage_asset": "Scene asset",
@@ -3373,11 +3334,6 @@
         "fallback": "scene reference",
         "named": "{{scene}} — {{kind}}"
       },
-      "beatRange": "Beat {{ranges}}",
-      "sketchGrid": "Sketch grid {{index}}/{{total}}",
-      "sketch": "Sketch",
-      "episodePrefixed": "Ep {{episode}} · {{label}}",
-      "withBeats": "{{label}} ({{beats}})",
       "identityPortraitNamed": "{{character}} — “{{identity}}” identity portrait",
       "identityPortrait": "{{name}} identity portrait",
       "characterPortraitNamed": "{{character}} portrait",
@@ -3401,9 +3357,7 @@
         "normalizingScenes": "Normalizing screenplay scene blocks with AI..."
       },
       "script": {
-        "start": "Generating script...",
-        "beatVideoPromptStart": "Generating video prompt for beat {{beatNum}}",
-        "beatVideoPromptSaved": "Saved video prompt for beat {{beatNum}}"
+        "start": "Generating script..."
       },
       "submitting": "Submitting task…",
       "queued": "Task queued",
@@ -3637,16 +3591,12 @@
       "backgroundCandidate": "Background candidate",
       "beatContext": "Beat context",
       "currentBackground": "Current background",
-      "currentSketch": "Current sketch",
-      "currentSketchCandidate": "Current sketch candidate",
       "currentStoryboard": "Current storyboard",
       "directorComposite": "Director composite",
       "inputReference": "Input reference",
       "masterReverse": "Master + reverse",
       "pano360": "360° panorama",
       "sceneMasterReverse": "Scene master + reverse",
-      "sketchBackgroundIdentityProps": "Sketch + background + identities/props",
-      "sketchCandidate": "Sketch candidate",
       "storyboardCandidate": "Storyboard candidate"
     },
     "batchProgress": "Batch progress {{settled}}/{{expected}}",
@@ -3818,7 +3768,6 @@
   "episode": {
     "stage": {
       "script": "Script",
-      "sketch": "Sketches",
       "audio": "Audio",
       "video": "Video",
       "compose": "Compose"
@@ -3831,8 +3780,6 @@
       "shots": "Shots",
       "compose": "Compose",
       "text": "Text",
-      "sketch": "Sketch",
-      "render": "Render",
       "audio": "Audio",
       "video": "Video"
     },
@@ -3971,23 +3918,15 @@
       "jumpTo": "Go to {{stage}}",
       "select": "Select",
       "deselect": "Deselect",
-      "noSketch": "No sketch",
-      "noRender": "No render",
       "noNarration": "(No narration)",
       "stale": "Stale",
       "clickToView": "Click a beat to view details",
       "noMatching": "No matching beats",
       "sectionText": "Text",
-      "sectionSketch": "Sketch",
-      "sectionRender": "Render",
       "sectionAudio": "Audio",
       "sectionVideo": "Video",
       "edited": "Edited",
       "notEdited": "Not edited",
-      "selected": "Selected",
-      "notSelected": "Not selected",
-      "rendered": "Rendered",
-      "notRendered": "Not rendered",
       "generated": "Generated",
       "notGenerated": "Not generated",
       "deleteManualShot": "Delete",
@@ -4008,7 +3947,6 @@
     },
     "drawer": {
       "script": "Script",
-      "sketch": "Sketch",
       "audio": "Audio",
       "video": "Video",
       "close": "Close (Esc)"
@@ -4016,13 +3954,8 @@
     "workbench": {
       "aspectSwitch": {
         "title": "Switch aspect ratio?",
-        "desc": "Switching the aspect ratio won't stretch or alter already-generated sketches, references, or videos — they keep their original ratio. To bring those assets to the new ratio you'll need to regenerate them. Continue?",
+        "desc": "Switching the aspect ratio won't stretch or alter already-generated references or videos — they keep their original ratio. To bring those assets to the new ratio you'll need to regenerate them. Continue?",
         "confirm": "Switch anyway"
-      },
-      "pool": {
-        "rebuildIndex": "Rebuild index",
-        "rebuildSuccess": "Image pool index rebuilt: {{count}} images",
-        "rebuildFailed": "Image pool index rebuild failed"
       },
       "endOfBeats": "—— End of list ——",
       "endOfBeatsCount": "{{count}} beats total",
@@ -4041,9 +3974,6 @@
         "totalShots": "{{count}} shots",
         "activeBeat": "Beat {{n}}",
         "noMatchingBeats": "No matching beats",
-        "selectionHint": "Select beats to batch regen sketches and renders",
-        "batchRegenSketch": "Regen Sketch",
-        "batchRegenRender": "Regen Render",
         "dragToResize": "Drag to adjust the left/right width ratio"
       },
       "text": {
@@ -4228,14 +4158,10 @@
         "humanReview": "Human review",
         "generateVideo": "Generate video",
         "preview": {
-          "render": "Render",
-          "sketch": "Sketch",
           "audio": "Audio",
           "video": "Video"
         },
         "previewMissing": {
-          "render": "No render frame",
-          "sketch": "No sketch",
           "audio": "No audio",
           "video": "No video"
         },
@@ -4261,7 +4187,7 @@
         },
         "s9PlannedDurationHint": "s9 calculated duration: {{seconds}}s",
         "s9DurationExceedsModelMax": "s9 calculated duration ({{planned}}s) exceeds current model limit ({{max}}s). Switch to Seedance 2.5 or re-split at 15s.",
-        "s9IncludeFirstFrame": "Include rendered first frame (@图片1)",
+        "s9IncludeFirstFrame": "Include first frame (@图片1)",
         "s9TailAnchor": "Tail anchor shot",
         "s9MissingAssetsNotice": "Unbound pond assets: {{assets}}",
         "s9PromptReboundHint": "Pond assets changed; renumbered @图片N / @音频N prompt is ready",
@@ -4272,10 +4198,6 @@
         "seedance2PromptGenerateFailed": "Seedance2 prompt generation failed",
         "videoPrompt": "Video prompt",
         "keyframePrompt": "Single-beat video prompt",
-        "generateBeatVideoPrompt": "Generate this beat prompt",
-        "beatVideoPromptGenerated": "This beat video prompt generated",
-        "beatVideoPromptGenerateStarted": "This beat video prompt generation started",
-        "beatVideoPromptGenerateFailed": "This beat video prompt generation failed",
         "beatVideoPromptRequired": "Beat #{{n}} is missing a video prompt. Generate this beat prompt first.",
         "seedance2PromptRequired": "Beat #{{n}} is missing the Seedance2.0 main prompt. Fill it in or run AI optimize first.",
         "seedance2OverlayEnabled": "Enable",
@@ -4340,309 +4262,33 @@
         "seedance2GuidanceStyleTemplate": "Style: Define visual texture, period, color direction, and realism to prevent style drift.",
         "seedance2GuidanceNoSubtitleTemplate": "No subtitles: Do not generate any text or subtitles; keep the frame visually clean."
       },
-      "sketch": {
-        "switched": "Sketch switched",
-        "switchFailed": "Switch failed",
-        "forcedUse": "Force-applied this sketch",
-        "forceFailed": "Force failed",
-        "regenStarted": "Regeneration started",
-        "regenFailed": "Regen failed",
-        "verifyGate": "Verify gate:",
-        "verifyLabel": "Sketch consistency",
-        "verifyDrawerTitle": "12.9 Sketch consistency check",
-        "currentSketch": "Current sketch",
-        "generating": "Generating",
-        "genFailed": "Generation failed",
-        "notGenerated": "No sketch yet — trigger batch generation above",
-        "candidateHint": "Candidate sketch, not yet confirmed from pool",
-        "candidateCount": "Candidates ({{count}})",
-        "regenThisBeat": "Regen this beat",
-        "staleBatch": "Stale batch sketch",
-        "currentBadge": "Current",
-        "staleBadge": "Stale",
-        "colorBindings": "Color bindings",
-        "reassignColors": "Reassign colors",
-        "identityColors": "Identities",
-        "propColors": "Props",
-        "aiDetectResults": "AI results",
-        "aiDetectResultCounts": "{{beats}} beats / {{identities}} identities / {{props}} props",
-        "openGridGallery": "Sketch grid",
-        "noCandidates": "No candidates in pool. Use batch bar above to generate.",
-        "versionMismatch": "Sketch version mismatch",
-        "versionMismatchDesc": "This sketch was generated from an older script. Character color assignments may have changed. Force use anyway?",
-        "generateNow": "Generate now",
-        "generateTitle": "Generate sketch now?",
-        "generateDesc": "Generate sketch for Beat #{{n}}. New sketch enters candidate pool.",
-        "regenTitle": "Regenerate sketch?",
-        "regenDesc": "Regenerate sketch for Beat #{{n}}. New sketch enters candidate pool.",
-        "poseEdit": "Pose edit",
-        "poseTitle": "Beat {{n}} sketch editor",
-        "poseCharacters": "Characters in frame",
-        "posePreset": "Pose preset",
-        "poseApplyPreset": "Apply preset",
-        "poseSelect": "Select/drag",
-        "poseColorPen": "Color pen",
-        "poseInk": "Ink pen",
-        "poseEraser": "Eraser",
-        "poseWidth": "Width",
-        "poseUndo": "Undo",
-        "poseReset": "Reset pose",
-        "poseAddToFrame": "Add",
-        "poseRemoveFromFrame": "Remove",
-        "poseClear": "Clear drawing",
-        "poseSaved": "Sketch edits saved",
-        "cropEdit": "Crop save",
-        "cropTitle": "Beat {{n}} sketch crop",
-        "cropWidth": "Width",
-        "cropHeight": "Height",
-        "cropSaved": "Cropped sketch saved",
-        "directorControl": "Director composite asset",
-        "directorControlFile": "Combined + env-only + metadata",
-        "convertDirectorControl": "Convert to sketch",
-        "convertDirectorStarted": "Direct Render to sketch task started",
-        "convertDirectorFailed": "Failed to start Direct Render to sketch",
-        "openDirectorWorld": "Director World",
-        "openDirectorWorldTip": "Open this Beat in Director World",
-        "openDirectorWorldFailed": "Failed to open this Beat in Director World",
-        "chooseBackground": "Background",
-        "chooseBackgroundTip": "Choose single-beat background",
-        "chooseBackgroundFailed": "Failed to choose single-beat background",
-        "chooseBackgroundSaved": "Single-beat background saved",
-        "backgroundDialogTitle": "Beat {{n}} background",
-        "backgroundDialogDesc": "Only affects single-beat sketch and render. Batch still uses scene master.",
-        "backgroundMissing": "No background image",
-        "backgroundCurrent": "Current",
-        "backgroundSnapshotUse": "Snapshot use",
-        "openFreezone": "Edit in Freezone",
-        "openFreezoneTip": "Edit this beat sketch in Freezone",
-        "freezoneOpened": "Sketch Freezone opened",
-        "freezoneOpenFailed": "Failed to open Sketch Freezone",
-        "cropTitleWithAspect": "Crop {{aspect}}",
-        "cropDragHandle": "Move crop area"
-      },
-      "sketchGrid": {
-        "title": "Sketch Grid",
-        "titleWithCount": "Sketch Grid ({{count}} grids)",
-        "gridCount": "{{count}} grids",
-        "gridLabel": "Grid #{{n}}",
-        "cellCount": "{{count}} cells",
-        "noPreview": "No preview",
-        "generateGrid": "Generate/Regen",
-        "regenStarted": "Grid #{{n}} started",
-        "regenFailed": "Grid generation failed",
-        "uploadGrid": "Upload grid",
-        "uploadSuccess": "Grid #{{n}} uploaded",
-        "uploadFailed": "Grid upload failed",
-        "exportPrompt": "Export prompt",
-        "promptTitle": "Grid #{{n}} prompt",
-        "promptContent": "Prompt content",
-        "promptFailed": "Prompt export failed",
-        "copySuccess": "Prompt copied",
-        "cut": "Cut to pool",
-        "cutSuccess": "Grid #{{n}} cut",
-        "cutFailed": "Grid cut failed",
-        "unknownScene": "Unknown scene"
-      },
-      "render": {
-        "generateNew": "Generate new",
-        "sketchRequired": "Generate or upload a sketch first",
-        "switched": "Render switched",
-        "switchFailed": "Switch failed",
-        "forcedUse": "Force-applied this render",
-        "forceFailed": "Force failed",
-        "regenStarted": "Regeneration started",
-        "regenFailed": "Regen failed",
-        "versionMismatch": "Render version mismatch",
-        "versionMismatchDesc": "This render was generated from an older script. Content may be inconsistent. Force use anyway?",
-        "regenTitle": "Regenerate render?",
-        "regenDesc": "Regenerate render for Beat #{{n}}. New render enters candidate pool.",
-        "openFreezone": "Edit in Freezone",
-        "openFreezoneTip": "Edit this beat render in Freezone",
-        "freezoneOpened": "Freezone editor opened",
-        "freezoneOpenFailed": "Failed to open Freezone editor",
-        "backgroundTitle": "Render background reference",
-        "backgroundCurrent": "Current: {{label}}",
-        "backgroundHint": "Applies color/material to the sketch without changing composition.",
-        "backgroundRenderInput": "Render input: {{label}}",
-        "backgroundMissing": "No reference image found",
-        "backgroundOpen360": "Open Director World",
-        "backgroundDirectorWorldDescription": "Frame the shot in Director World and write it to the current shot Director combined frame.",
-        "backgroundAnchorLabels": {
-          "directorEnvOnly": "Director world scene screenshot",
-          "master": "Scene front",
-          "reverse": "Scene back"
-        },
-        "backgroundCropAction": "Crop {{label}}",
-        "backgroundCropTitle": "{{label}} crop screenshot",
-        "backgroundCropFallbackTitle": "Crop screenshot",
-        "backgroundUpload": "Upload external reference",
-        "backgroundUploaded": "Render background reference uploaded",
-        "backgroundUploadFailed": "Failed to upload render background reference",
-        "backgroundSaved": "Render background reference switched",
-        "backgroundSaveFailed": "Failed to save render background reference",
-        "backgroundCropSave": "Save crop",
-        "backgroundCropTitleWithAspect": "Crop {{aspect}}",
-        "backgroundCropDragHandle": "Move crop area",
-        "relightLabel": "Relight to {{timeOfDay}}",
-        "relightLabelDefaultTime": "specified time",
-        "relightTooltip": "Relight: re-lights the shot for the beat's time of day without changing the scene structure.",
-        "lockedLightTooltip": "Locked lighting: uses the scene image's own lighting; no relight.",
-        "lockedLightLabel": "Locked lighting"
-      },
-      "spatialLock": {
-        "label": "Fixed-camera spatial lock",
-        "idleHint": "Unlocked: free framing and camera motion",
-        "activeHint": "Locked to #B{{n}} background plate & stance; video keeps a steady tripod camera",
-        "modeOff": "Unlocked",
-        "modeFullBody": "Lock camera · Full body",
-        "modeUpperBody": "Lock camera · Upper body only",
-        "anchorLabel": "Anchor beat",
-        "anchorItem": "Anchor #B{{n}}",
-        "lockedToast": "Locked camera & background space to #B{{n}}",
-        "unlockedToast": "Fixed-camera lock cleared",
-        "saveFailed": "Failed to save fixed-camera lock",
-        "videoBannerLockedTo": "Fixed-camera sequence (anchored to #B{{n}}): tripod framing and camera scale stay locked for seamless shot-to-shot continuity.",
-        "videoBannerFeedNext": "This shot anchors the next fixed-camera beat (#B{{n}}): keep ending motion steady (first-last-frame mode bridges cleanly into #B{{n}})."
-      },
-      "renderGrid": {
-        "title": "Render Grid",
-        "titleWithCount": "Render Grid ({{count}} grids)",
-        "gridCount": "{{count}} grids",
-        "rebuildIndex": "Rebuild index",
-        "rebuildSuccess": "Index rebuilt: {{count}} images",
-        "rebuildFailed": "Index rebuild failed",
-        "noIndexedGrids": "No Render Grid index yet. Generate Render first or rebuild the image pool index.",
-        "gridLabel": "Grid #{{n}}",
-        "cellCount": "{{count}} cells",
-        "noPreview": "No preview",
-        "cut": "Cut to pool",
-        "regenStarted": "Grid #{{n}} started",
-        "regenFailed": "Grid regen failed",
-        "uploadGrid": "Upload grid",
-        "uploadSuccess": "Grid #{{n}} uploaded",
-        "uploadFailed": "Grid upload failed",
-        "exportPrompt": "Export prompt",
-        "promptTitle": "Grid #{{n}} prompt",
-        "promptContent": "Prompt content",
-        "promptFailed": "Prompt export failed",
-        "copySuccess": "Prompt copied",
-        "cutSuccess": "Grid #{{n}} cut",
-        "cutFailed": "Grid cut failed"
-      },
       "batch": {
         "narrationIncompatible": "This model only supports dialogue shots ({{count}} narration beats incompatible)",
         "toolbar": "Generation toolbar",
-        "globalOptimizeStarted": "Global optimize started",
         "rewriteScriptTitle": "Rewrite all scripts?",
-        "rewriteScriptDesc": "Regenerate all beat narrations from source/adapted text. Existing text and sketch stale marks will be affected.",
+        "rewriteScriptDesc": "Regenerate all beat narrations from source/adapted text. Existing text will be affected.",
         "rewriteScript": "Rewrite all scripts",
-        "genSketchTitle": "Generate all sketches?",
-        "genSketchDesc": "Generate sketches for all beats. Existing sketches won't be overwritten; new ones enter the candidate pool.",
-        "genSketch": "Generate all sketches",
-        "genSketchShort": "All sketches",
-        "autoSelectTitle": "Auto-select all?",
-        "autoSelectDesc": "Automatically pick the best sketch from the candidate pool for every beat.",
-        "autoSelect": "Auto-select all",
         "insertManualBeforeFirst": "Before first shot",
         "insertManualBeforeFirstShort": "Before first shot",
         "insertManualBeforeFirstTooltip": "Insert a manual shot before the first beat",
-        "genMissingManualTitle": "Fill missing sketches?",
-        "genMissingManualDesc": "Batch generate sketches for newly inserted manual shots in this episode that are missing one, grouped by scene.",
-        "genMissingManual": "Fill sketches",
         "genMissingManualShort": "New shots",
-        "genMissingManualTooltip": "Generate sketches for newly inserted manual shots in this episode that are missing one, grouped by scene",
-        "genMissingManualEmpty": "No manual shots are missing a sketch",
-        "genMissingManualDispatched": "Dispatched {{count}} manual-shot sketch task(s)",
-        "autoCombine": "Batch redraw",
-        "genRender": "Render full episode",
-        "genRenderShort": "All renders",
-        "genRenderTitle": "Generate full-episode Render?",
-        "genRenderDesc": "Generate full-episode Render grids through the standard Render Plan flow. Sketches and AI identity detections are required first.",
-        "genRenderTooltip": "Open full-episode Render Plan (standard generate_grid mode)",
-        "batchRenderStarted": "Render started",
-        "aiDetect": "AI detect",
-        "aiDetectTooltip": "Use AI vision to detect which colored characters appear in each sketch",
-        "aiDetectRunning": "AI detecting characters...",
-        "aiDetectSuccess": "AI detect complete: {{beats}} beats, {{ids}} identities, {{props}} props",
-        "aiDetectEmpty": "AI returned no detections",
-        "aiDetectReview": "Review each beat; add missing identities or props under More if AI missed anything.",
-        "reassignColors": "Reassign colors",
-        "reassignColorsTitle": "Reassign sketch colors?",
-        "reassignColorsDesc": "This will reassign colors for this episode's sketches based on current script identities. Existing sketches may display inconsistent color markers.",
-        "reassignColorsTooltip": "Reassign colors based on script identities (idempotent)",
-        "reassignColorsSuccess": "Reassigned colors for {{count}} identities and {{propCount}} props",
-        "aiCameraLock": "AI Camera Lock",
-        "aiCameraLockTooltip": "Automatically plan fixed-camera spatial locks across consecutive same-setup beats",
-        "aiCameraLockRunning": "Analyzing fixed-camera shot locks…",
-        "aiCameraLockEmpty": "No consecutive fixed-camera shots need locking in this episode",
-        "aiCameraLockSuccess": "Planned fixed-camera lock for {{count}} beat(s) ({{beats}})",
         "genAudioTitle": "Generate all audio?",
         "genAudioDesc": "Generate TTS voiceover for all beats missing audio.",
         "genAudio": "Generate all audio",
         "genAudioShort": "All audio",
         "genAudioUnavailableForVideoModel": "The current video model does not need separate full-episode audio generation",
         "videoModel": "Video model",
-        "sketchSettingsLabel": "Sketch settings",
-        "renderSettingsLabel": "Render settings",
         "videoSettingsLabel": "Video settings",
-        "genVideoTitle": "Generate all videos?",
-        "genVideoDesc": "Generate video clips for all beats missing video. Requires sketches/renders and audio first.",
+        "genVideoDesc": "Generate video clips for all beats missing video. Requires audio first.",
         "genVideo": "Generate all videos",
         "genVideoShort": "All videos",
-        "aiOptimizeTitle": "Generate all-beat video prompts?",
-        "aiOptimizeDesc": "Use SuperPower to analyze this episode's sketches and generate video prompts for all beats.",
-        "aiOptimize": "Generate all-beat video prompts",
-        "aiOptimizeShort": "All-beat prompts",
-        "selectedCount": "{{count}} beats selected",
-        "clearSelection": "Clear selection",
-        "batchRegen": "Batch regen",
-        "sketch": "Sketch",
-        "render": "Render",
-        "audio": "Audio",
         "video": "Video",
-        "singleRegen": "Single redraw",
-        "regenSketchSingleTitle": "Single redraw {{count}} beat sketches?",
-        "regenSketchSingleDesc": "Split #{{beats}} into 1×1 sketch tasks using the current aspect ratio.",
-        "regenSketchTitle": "Regen {{count}} beat sketches ({{mode}})?",
-        "regenSketchDesc": "Regenerate sketches for #{{beats}}. New sketches enter candidate pool.",
-        "regenSketchDescBatch": "Will run in {{batches}} batches.",
-        "regenRenderTitle": "Regen {{count}} beat renders ({{mode}})?",
-        "regenRenderDesc": "Re-render #{{beats}}. New renders enter candidate pool.",
-        "regenRenderDescBatch": "Will run in {{batches}} batches.",
-        "genBatchAudioTitle": "Generate audio for {{count}} beats?",
-        "genBatchAudioDesc": "Dispatch one IndexTTS2 audio task for #{{beats}}.",
-        "genBatchAudio": "Generate audio for {{count}} beats",
         "genBatchVideoTitle": "Generate video for {{count}} beats?",
-        "genBatchVideoDesc": "Generate video clips for #{{beats}} one by one. Requires sketches/renders and audio.",
+        "genBatchVideoDesc": "Generate video clips for #{{beats}} one by one. Requires audio.",
         "genBatchVideo": "Generate video for {{count}} beats",
-        "batchHint": "Recommended mode highlighted. Audio dispatches one async task for selected beats; video still runs beat by beat.",
-        "dispatched": "Dispatched {{count}} beats → {{mode}}",
-        "dispatchedBatch": " × {{batches}} batches",
-        "dispatchFailed": "Dispatch failed",
-        "sketchGroupRunning": "Matching sketch group is already running",
-        "sketchGroupSkippedRunning": "Skipped {{count}} running sketch groups",
-        "sketchSameSceneRequired": "Sketch regen can only use beats from the same scene; current scenes: {{scenes}}",
-        "sketchSceneMissingRequired": "Selected beats are missing scene bindings, so same-scene regen cannot be verified: #{{beats}}. Plan or bind scenes first.",
-        "sketchDispatchQueue": "Sketch regen dispatch",
-        "sketchDispatchQueued": "Queued {{count}} beats for {{mode}}",
-        "sketchDispatchDuplicate": "These beats are already in the sketch regen dispatch card above: #{{beats}}. Use Generate group there or remove the card first.",
-        "sketchDispatchOverlap": "These beats are already used by the sketch regen dispatch card above: #{{beats}}. Use Generate group there or remove the card first.",
-        "sketchDispatchRun": "Generate group",
-        "sketchTaskStatus": "Task status: {{status}}",
-        "sketchUsageTitle": "Sketch generation request usage",
-        "sketchUsageToday": "Today {{count}}",
-        "sketchUsageTotal": "Total {{count}}",
-        "imageGuardConfirmTitle": "Continue generation?",
-        "imageGuardLockedTitle": "Generation guard",
-        "operatorPasswordPlaceholder": "Operator password",
-        "operatorPasswordError": "Incorrect password",
-        "audioDispatched": "Dispatched IndexTTS2 audio task for {{count}} beats",
         "audioSuccess": "Generated audio for {{ok}} beats",
         "audioPartial": "Audio: {{ok}} ok, {{fail}} failed",
         "videoSuccess": "Generated video for {{ok}} beats",
-        "videoPartial": "Video: {{ok}} ok, {{fail}} failed",
-        "batchRegenSketchSuccess": "Started sketch regen for {{count}} beats",
-        "batchRegenRenderSuccess": "Started render regen for {{count}} beats",
         "episodeFreezone": "EP Freezone",
         "episodeFreezoneTooltip": "Open this episode in Freezone",
         "episodeFreezoneOpened": "EP Freezone opened",
@@ -4700,7 +4346,7 @@
       "downloadVideo": "Download Video",
       "composingProgress": "Composing...",
       "notComposed": "Not composed yet",
-      "composeHint": "Make sure all beats have sketches, audio, and video. Click \"Compose Episode\" to generate. Once done, preview and download here, or export SRT/ZIP from the top right.",
+      "composeHint": "Make sure all beats have audio and video. Click \"Compose Episode\" to generate. Once done, preview and download here, or export SRT/ZIP from the top right.",
       "beats": "Beats",
       "duration": "Est. Duration",
       "options": "Options",
@@ -4785,59 +4431,7 @@
       "noBeats": "No beats yet — generate a script first",
       "generateBeats": "Generate beats",
       "generateBeatsTitle": "Generate beats?",
-      "generateBeatsDesc": "Split the adapted (or source) text line by line into beats as the basis for sketches, audio, and video."
-    },
-    "sketchPlan": {
-      "title": "Sketch plan ({{beats}} beats → {{grids}} grids)",
-      "subtitle": "System auto-grouped by scene. Confirm to dispatch sketch tasks.",
-      "confirm": "Confirm {{grids}} sketch grids"
-    },
-    "renderPlan": {
-      "title": "Render plan ({{beats}} beats → {{grids}} grids)",
-      "subtitle": "System auto-grouped by scene and character count. Confirm to start.",
-      "strategy": "Planning strategy",
-      "strategyLocation": "Group by scene",
-      "strategyNaive": "Sequential packing",
-      "forceOneByOne": "Render individually · max fidelity (1×1 per beat)",
-      "confirm": "Confirm {{grids}} grids",
-      "planning": "Planning render…",
-      "unavailable": "No render plan available",
-      "openDialog": "Re-render selected ({{count}})",
-      "dispatched": "Render started",
-      "featureDisabled": "V2 render disabled. Use per-beat regen instead.",
-      "unknownLocation": "unknown scene",
-      "split": "Split",
-      "mergeNext": "Merge next",
-      "stale": {
-        "input": "Inputs changed (characters or beat text). Please re-confirm.",
-        "plan": "Planner logic updated. Please re-confirm."
-      },
-      "errors": {
-        "invalidBeats": "Selected beats are not in this episode",
-        "noBeats": "This episode has no beats yet"
-      },
-      "paddingCount": "+{{count}} empty",
-      "partial": {
-        "reason": {
-          "unknown": "Some tasks have not been dispatched yet."
-        },
-        "summary": "Dispatched {{ok}} / rejected {{fail}}",
-        "continue": "Continue"
-      }
-    },
-    "renderSettings": {
-      "model": "Render model",
-      "modelPlaceholder": "Select model"
-    },
-    "sketchSettings": {
-      "model": "Sketch model",
-      "modelPlaceholder": "Select sketch model",
-      "aspectRatio": "Aspect",
-      "wide16x9": "16:9",
-      "aspectChangeHint": "Switching aspect ratio only affects newly generated content; existing assets must be regenerated to update to the new ratio."
-    },
-    "sketches": {
-      "selectFailed": "Selection failed"
+      "generateBeatsDesc": "Split the adapted (or source) text line by line into beats as the basis for audio and video."
     },
     "video": {
       "switchFailed": "Failed to switch video"
@@ -5334,84 +4928,6 @@
           }
         }
       },
-      "real_scene_sketch_repair": {
-        "name": "Real-scene sketch repair",
-        "shortName": "Scene sketch",
-        "description": "Repair the current beat's real-scene sketch using the director-world control frame plus scene/identity references.",
-        "inputs": {
-          "3gs_combined": {
-            "label": "3GS director composite",
-            "description": "The first connected image is the base and controls camera, space and composition."
-          },
-          "scene_refs": {
-            "label": "Scene / identity / prop refs",
-            "description": "Later connected images serve as repair and semantic references."
-          }
-        },
-        "preserve": {
-          "camera": "Original camera / composition",
-          "layout": "Furniture, walls, doors and windows",
-          "identity": "Character identity colors",
-          "props": "Prop colors and placement",
-          "street_mood": "Street-life atmosphere"
-        },
-        "modify": {
-          "deblur": "Fix blur / smeared background",
-          "distortion": "Fix 3GS distortion / stretching",
-          "furniture_detail": "Clean up furniture structure",
-          "actor_blocks": "Blocky actors → clean character line art",
-          "staging_blocks": "Staging blocks → real objects"
-        },
-        "params": {
-          "shot_type": {
-            "label": "Shot size",
-            "options": {
-              "closeup": "Close-up",
-              "medium_closeup": "Medium close-up",
-              "medium": "Medium",
-              "wide": "Wide"
-            }
-          },
-          "angle": {
-            "label": "Angle",
-            "options": {
-              "eye_level": "Eye level",
-              "high": "High angle",
-              "low": "Low angle",
-              "over_shoulder": "Over the shoulder",
-              "reverse": "Reverse"
-            }
-          },
-          "lens": {
-            "label": "Lens",
-            "options": {
-              "24mm": "24mm wide",
-              "35mm": "35mm natural",
-              "50mm": "50mm standard",
-              "85mm": "85mm compressed"
-            }
-          },
-          "lighting": {
-            "label": "Lighting",
-            "options": {
-              "dim_street_warm": "Dim warm street light",
-              "mixed_neon": "Mixed warm/cool neon",
-              "window_daylight": "Natural window light",
-              "hard_toplight": "Hard toplight"
-            }
-          },
-          "preserve": {
-            "label": "Must preserve"
-          },
-          "modify": {
-            "label": "Repair focus"
-          },
-          "notes": {
-            "label": "Extra requirements",
-            "description": "e.g. color the grey background figures too; keep the table's wooden structure."
-          }
-        }
-      },
       "portrait_from_ref": {
         "name": "Character identity from reference",
         "shortName": "Identity",
@@ -5699,14 +5215,6 @@
       "useAria": "Use {{label}}",
       "loading": "Loading…",
       "empty": "No style templates yet"
-    },
-    "commitHint": {
-      "title": "How this output is written back to a mainline slot on commit",
-      "sketch": "sketch",
-      "frame": "frame",
-      "typed": "EP{{episode}} / beat {{beat}} · {{candidate}} candidate · lands on this node, promoted to {{promoted}} on commit",
-      "untyped": "Mainline candidate · bound to EP{{episode}} / beat {{beat}} · lands on this node, slot matched by context on commit",
-      "free": "Free candidate · lands on this node, you pick the target asset on commit"
     },
     "cameraPicker": {
       "title": "Camera",
@@ -6823,7 +6331,6 @@
       "stale": "Removed",
       "assets": {
         "background": "Background",
-        "sketch": "Sketch",
         "frame": "Shot",
         "selected": "Selected",
         "unselected": "Unselected",
@@ -7657,8 +7164,6 @@
       "directorCombinedOutputLabel": "Director combined frame · EP{{episode}}/B{{beat}}",
       "directorCombinedCommitSuccess": "Set EP{{episode}}/B{{beat}} Director composite asset",
       "directorCombinedMissingContext": "Missing project or shot context",
-      "directorControlBundleMissing": "Missing env-only image and metadata for the Director composite asset. Submit again from Director World.",
-      "directorControlCommitted": "Committed Director composite asset: {{path}} (includes env-only and metadata).",
       "canvasSaveConflictBeforeCommit": "The canvas was not saved. Resolve the conflict before committing.",
       "panoSetAsSelectedBackground": "Set as current background",
       "panoOutputToCanvasNode": "Output to canvas node",
@@ -7788,18 +7293,6 @@
         "copySelectedSuccess": "Copied shot {{sourceBeat}} into current shot {{targetBeat}}"
       },
       "skillDefinitions": {
-        "freezone_sketch_from_context": {
-          "name": "Sketch from Current Background",
-          "description": "Generate a mainline sketch candidate from shot context and current background."
-        },
-        "freezone_sketch_from_director_combined": {
-          "name": "Sketch from Director Combined",
-          "description": "Generate a mainline sketch candidate from shot context and Director combined image."
-        },
-        "freezone_frame_from_context": {
-          "name": "Frame from Shot Context",
-          "description": "Render a mainline frame candidate from shot context, sketch, and references."
-        },
         "freezone_set_selected_background": {
           "name": "Set Current Background",
           "description": "Set the current shot background from an explicit image source without calling an image model."
@@ -7815,7 +7308,6 @@
       },
       "skillInputLabels": {
         "beat_context": "Shot context",
-        "sketch": "Sketch",
         "background": "Background",
         "identity": "Actor identity",
         "prop": "Prop",
@@ -7827,7 +7319,6 @@
         "frame": "Frame"
       },
       "skillOutputLabels": {
-        "current_sketch_candidate": "Sketch candidate",
         "current_frame_candidate": "Frame candidate",
         "scene_360_candidate": "360 panorama candidate",
         "selected_background": "Current background",
@@ -7835,34 +7326,6 @@
         "review_report": "Review report"
       },
       "skillParametersTitle": "Parameters",
-      "skillParameterLabels": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": "Aspect"
-        },
-        "freezone_frame_from_context": {
-          "quality": "Quality",
-          "background_reference_mode": "Background reference mode"
-        }
-      },
-      "skillParameterOptions": {
-        "freezone_sketch_from_context": {
-          "aspect_ratio": {
-            "2_3": "Portrait 2:3",
-            "16_9": "Landscape 16:9"
-          }
-        },
-        "freezone_frame_from_context": {
-          "quality": {
-            "low": "Low",
-            "medium": "Medium",
-            "high": "High"
-          },
-          "background_reference_mode": {
-            "material_only": "Appearance only",
-            "scene_anchor": "Scene anchor"
-          }
-        }
-      },
       "skillRequirement": {
         "required": "Required",
         "optional": "Optional"
@@ -8550,9 +8013,7 @@
         },
         "features": {
           "HERMES": "AI Director chat model",
-          "GLOBAL_VIDEO_OPTIMIZER": "Optimize video prompts from visuals",
           "SEEDANCE2_PROMPT_COMPOSER": "Compose video generation prompts",
-          "GLOBAL_VIDEO_IDENTITY_DETECTOR": "Detect character and prop markers in sketches",
           "IDENTITY_PLANNER_CAST": "Plan the episode cast",
           "IDENTITY_PLANNER_ANALYSIS": "Analyze character identities",
           "IDENTITY_PLANNER_APPEARANCE": "Generate identity-specific character looks",
@@ -9174,7 +8635,6 @@
         "identity": "🎭 Identity (character identity image)",
         "portrait": "🖼 Portrait (character portrait)",
         "frame": "🎬 Frame (beat first frame)",
-        "sketch": "✏️ Sketch",
         "directorRender": "📐 Director composite asset"
       },
       "noCharacters": "This project has no characters",

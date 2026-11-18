@@ -51,7 +51,7 @@ describe("inferSkillConnectionRole", () => {
     ).toBe("source_image");
   });
 
-  it("maps a selected_background source onto the background input of frame_from_context", () => {
+  it("maps a selected_background source onto the background input of a generic skill", () => {
     const node = {
       id: "bg",
       type: "uploadNode",
@@ -64,7 +64,7 @@ describe("inferSkillConnectionRole", () => {
     expect(
       inferSkillConnectionRole({
         sourceNode: node,
-        targetNode: skillNode("freezone.frame_from_context"),
+        targetNode: skillNode("freezone.scene_360"),
         requestedTargetHandle: "",
       }),
     ).toBe("background");
@@ -79,7 +79,7 @@ describe("inferSkillConnectionRole", () => {
     expect(
       inferSkillConnectionRole({
         sourceNode: node,
-        targetNode: skillNode("freezone.frame_from_context"),
+        targetNode: skillNode("freezone.scene_360"),
         requestedTargetHandle: "target",
       }),
     ).toBeNull();
@@ -89,9 +89,9 @@ describe("inferSkillConnectionRole", () => {
     expect(
       inferSkillConnectionRole({
         sourceNode: sceneNode("scene_master"),
-        targetNode: skillNode("freezone.frame_from_context"),
-        requestedTargetHandle: "sketch",
+        targetNode: skillNode("freezone.scene_360"),
+        requestedTargetHandle: "scene_master",
       }),
-    ).toBe("sketch");
+    ).toBe("scene_master");
   });
 });

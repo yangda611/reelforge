@@ -320,7 +320,6 @@ def m06_client_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return {
             "beat_data": (await store.get_beats_as_dicts(1))[0],
             "refs": [],
-            "sketch_context": {"sketch_colors": {}, "prop_marker_colors": {}},
         }
 
     def static_url(_ctx, rel_path: str, local_path=None):
@@ -432,14 +431,6 @@ def _assert_helper_task_shape(payload: dict, *, backend: str, task_type: str) ->
     assert data["queue"] == ("inline" if backend == "inline" else "default")
     assert data.get("task_id")
     return data
-
-
-def _assert_skill_task_shape(payload: dict, *, task_type: str):
-    assert payload["status"] == "queued"
-    assert payload["task_type"] == task_type
-    assert payload["job_id"]
-    assert payload["task_key"]
-    assert payload["run_id"] == f"{task_type}:{payload['job_id']}"
 
 
 def test_m06_ingest_upload_preview_and_unsupported_format(m06_client_factory):
@@ -585,20 +576,6 @@ def _freezone_task_cases(client: TestClient, assets: SimpleNamespace):
         (
             "freezone_gen",
             client.post(f"/api/v1/projects/{p}/freezone/gen", json={"prompt": "rain alley"}),
-        ),
-        (
-            "sketch_generation",
-            client.post(
-                f"/api/v1/projects/{p}/freezone/sketch-from-context",
-                json={"episode": 1, "beat": 1, "source_kind": "beat"},
-            ),
-        ),
-        (
-            "mainline_frame_from_context",
-            client.post(
-                f"/api/v1/projects/{p}/freezone/frame-from-context",
-                json={"episode": 1, "beat": 1, "sketch_url": image},
-            ),
         ),
         (
             "stage_asset",
@@ -821,43 +798,13 @@ def test_m06_freezone_task_backend_responses_are_ce_ee_isomorphic(
     client, task_backend, _task_manager, _project_dir, assets, _store = m06_client_factory(backend)
 
     cases = _freezone_task_cases(client, assets)
-    # 两分支分别新增逐帧拉片与参考图转白模，合并后共有 31 个契约用例。
-    assert len(cases) == 31
+    # 两分支分别新增逐帧拉片与参考图转白模，合并后共有 29 个契约用例。
+    assert len(cases) == 29
     for task_type, response in cases:
         assert response.status_code == 200, response.text
         _assert_freezone_http_task_shape(response.json(), task_type=task_type)
 
-    response = client.post(
-        f"/api/v1/projects/{_PROJECT}/freezone/skills/freezone.sketch_from_context/run",
-        json={
-            "schema_version": "skill.v1",
-            "skill_node_id": "skill-node",
-            "canvas_id": "canvas-skill",
-            "parameters": {"aspect_ratio": "2:3"},
-            "resolved_inputs": [
-                {
-                    "role": "beat_context",
-                    "node_id": "beat",
-                    "node_type": "beatContextNode",
-                    "beat_context": {
-                        "episode": 1,
-                        "beat": 1,
-                        "visual_description": "林昭在雨巷中。",
-                    },
-                },
-                {
-                    "role": "background",
-                    "node_id": "bg",
-                    "node_type": "imageNode",
-                    "image_url": assets.image_url,
-                },
-            ],
-        },
-    )
-    assert response.status_code == 200, response.text
-    _assert_skill_task_shape(response.json(), task_type="mainline_sketch_from_context")
-
-    assert len(task_backend.calls) == len(cases) + 1
+    assert len(task_backend.calls) == len(cases)
     assert {call["task_type"] for call in task_backend.calls} >= {
         "freezone_gen",
         "freezone_edit",
@@ -1018,8 +965,8 @@ def test_m06_build_projection_from_preset_returns_local_graph_without_canvas_sid
             "scope": "beat",
             "episode": 1,
             "beat": 1,
-            "primary_slot": "sketch",
-            "projection_key": "beat:1:1:sketch",
+            "primary_slot": "frame",
+            "projection_key": "beat:1:1:frame",
             "base_revision": 0,
         },
     )
@@ -1027,13 +974,13 @@ def test_m06_build_projection_from_preset_returns_local_graph_without_canvas_sid
     payload = _assert_ok(response)
     data = payload["data"]
     assert set(data) == {"projection_key", "facts_signature", "nodes", "edges", "metadata"}
-    assert data["projection_key"] == "beat:1:1:sketch"
+    assert data["projection_key"] == "beat:1:1:frame"
     assert data["facts_signature"]
     assert isinstance(data["nodes"], list)
     assert isinstance(data["edges"], list)
-    assert data["metadata"]["last_projection_key"] == "beat:1:1:sketch"
+    assert data["metadata"]["last_projection_key"] == "beat:1:1:frame"
     assert (
-        data["metadata"]["projections"]["beat:1:1:sketch"]["facts_signature"]
+        data["metadata"]["projections"]["beat:1:1:frame"]["facts_signature"]
         == data["facts_signature"]
     )
     assert not (project_dir / "freezone" / "canvases").exists()

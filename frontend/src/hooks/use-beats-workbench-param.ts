@@ -10,14 +10,9 @@ export function parseBeatParam(raw: unknown): number | null {
   return n;
 }
 
-export type BeatsSubParam = "sketch" | "render" | "audio" | "video";
+export type BeatsSubParam = "audio" | "video";
 
-const BEATS_SUB_PARAMS = new Set<BeatsSubParam>([
-  "sketch",
-  "render",
-  "audio",
-  "video",
-]);
+const BEATS_SUB_PARAMS = new Set<BeatsSubParam>(["audio", "video"]);
 
 export function parseBeatsSubParam(raw: unknown): BeatsSubParam | null {
   if (typeof raw !== "string") return null;
@@ -28,7 +23,7 @@ export function parseBeatsSubParam(raw: unknown): BeatsSubParam | null {
 
 /**
  * URL-backed beat selection for deep-linking.
- * Reads `?beat=N&sub=sketch|render|audio|video`.
+ * Reads `?beat=N&sub=audio|video`.
  *
  * `focusBeat` (`?focusBeat=N`) is a one-shot "force select & scroll to this
  * beat" signal used by explicit jumps (e.g. the compose tab). Unlike `beat`,

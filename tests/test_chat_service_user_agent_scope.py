@@ -588,74 +588,6 @@ def test_hermes_lifecycle_tool_updates_are_not_user_visible():
     assert all(chat_service._is_hermes_lifecycle_tool_update(event) for event in events)
 
 
-def test_infer_display_tool_call_recovers_sketch_display_promise():
-    inferred = chat_service._infer_display_tool_call_from_text(
-        "全部显示",
-        "我来为您显示全部37个beat的草图。正在为您展示第1集前12个beat的草图：",
-        [],
-    )
-
-    assert inferred == ("dramaclaw_get_sketches", {"episode": 1})
-
-
-def test_infer_display_tool_call_uses_recent_context_for_short_reply():
-    inferred = chat_service._infer_display_tool_call_from_text(
-        "全部显示",
-        "正在为您展示前12个。",
-        ["如果您需要查看全部37个草图，我可以分页显示。"],
-    )
-
-    assert inferred == ("dramaclaw_get_sketches", {"episode": 1})
-
-
-def test_infer_display_tool_call_ignores_progress_status_language():
-    inferred = chat_service._infer_display_tool_call_from_text(
-        "进度怎样了",
-        "当前进度如下：草图生成已完成，下面展示进度表。",
-        ["如果您需要查看全部37个草图，我可以分页显示。"],
-    )
-
-    assert inferred is None
-
-
-def test_infer_display_tool_call_requires_user_sketch_display_intent():
-    inferred = chat_service._infer_display_tool_call_from_text(
-        "看一下第2集草图",
-        "正在为您展示第2集草图。",
-        [],
-    )
-
-    assert inferred == ("dramaclaw_get_sketches", {"episode": 2})
-
-
-def test_infer_display_tool_call_uses_sketch_candidate_tool_for_pool_terms():
-    inferred = chat_service._infer_display_tool_call_from_text(
-        "看第1集 Beat 3 的草图候选池",
-        "正在为您展示 Beat 3 的草图候选。",
-        [],
-    )
-
-    assert inferred == ("dramaclaw_get_sketch_candidates", {"episode": 1, "beat": 3})
-
-
-def test_extract_display_tool_call_uses_named_tool_field():
-    inferred = chat_service._extract_display_tool_call(
-        {
-            "sessionUpdate": "tool_call",
-            "title": "tool",
-            "name": "dramaclaw_get_sketches",
-            "content": [
-                {
-                    "type": "content",
-                    "content": {"type": "text", "text": '{"episode": 1}'},
-                }
-            ],
-        }
-    )
-
-    assert inferred == ("dramaclaw_get_sketches", {"episode": 1})
-
-
 def test_backend_api_get_default_uses_ipv4_loopback(monkeypatch):
     seen = {}
 
@@ -795,43 +727,6 @@ async def test_deterministic_stream_redacts_local_paths(monkeypatch, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_fallback_display_does_not_use_pool_sketch_as_current_sketch(
-    monkeypatch,
-    tmp_path,
-):
-    project_dir = tmp_path / "project"
-    sketch_dir = project_dir / "grids" / "ep001" / "sketch"
-    sketch_dir.mkdir(parents=True)
-    (sketch_dir / "beat_01_t123.png").write_bytes(b"fake")
-
-    monkeypatch.setattr(
-        chat_service,
-        "_backend_api_get",
-        lambda path, token: {
-            "ok": True,
-            "beats": [
-                {
-                    "beat_number": 1,
-                    "sketch_url": "",
-                    "frame_url": "",
-                }
-            ],
-        },
-    )
-
-    specs = await chat_service._fallback_display_tool_ui_specs(
-        "admin",
-        "project-a",
-        "dramaclaw_get_sketches",
-        {"episode": 1},
-        token="token",
-        project_dir=project_dir,
-    )
-
-    assert specs == []
-
-
-@pytest.mark.anyio
 async def test_fallback_display_prefers_api_project_id(monkeypatch):
     seen_paths = []
 
@@ -842,8 +737,7 @@ async def test_fallback_display_prefers_api_project_id(monkeypatch):
             "beats": [
                 {
                     "beat_number": 1,
-                    "sketch_url": "/static/projects/api-project/sketch.png?v=1",
-                    "frame_url": "",
+                    "frame_url": "/static/projects/api-project/frame.png?v=1",
                 }
             ],
         }
@@ -853,7 +747,7 @@ async def test_fallback_display_prefers_api_project_id(monkeypatch):
     specs = await chat_service._fallback_display_tool_ui_specs(
         "local",
         "chat-scope",
-        "dramaclaw_get_sketches",
+        "dramaclaw_get_first_frames",
         {"episode": 1, "project_id": "api-project"},
         token="token",
     )
@@ -864,7 +758,7 @@ async def test_fallback_display_prefers_api_project_id(monkeypatch):
     first_child = specs[0]["elements"][root]["children"][0]
     assert (
         specs[0]["elements"][first_child]["props"]["src"]
-        == "/static/projects/api-project/sketch.png?v=1"
+        == "/static/projects/api-project/frame.png?v=1"
     )
 
 
@@ -5981,11 +5875,12 @@ def test_prompt_injects_json_render_contract(monkeypatch, tmp_path):
     assert "后端会自动把工具结果渲染为 json-render" not in prompt
     assert "不要手写、复制或粘贴 <ui-spec> JSON" not in prompt
     assert "dramaclaw_get_character_media" in prompt
-    assert "dramaclaw_get_sketches" in prompt
+    assert "dramaclaw_get_sketches" not in prompt
+    assert "dramaclaw_get_first_frames" in prompt
     assert "dramaclaw_get_scene_images" in prompt
     assert "dramaclaw_get_episode_media" in prompt
     assert (
-        "只有在回复需要展示图片、肖像、身份图、草图、首帧、视频、音频等可视/可播放媒体时"
+        "只有在回复需要展示图片、肖像、身份图、首帧、视频、音频等可视/可播放媒体时"
         in prompt
     )
     assert "media_json" in prompt
@@ -6021,7 +5916,7 @@ def test_prompt_injects_one_step_execution_hint_for_explicit_continuation(
 
     assert "[DRAMACLAW_CONTINUATION]" in prompt
     assert "start exactly one matching write" in prompt
-    assert "dramaclaw_render_first_frames" in prompt
+    assert "dramaclaw_render_first_frames" not in prompt
     assert "Do not reread identical status" in prompt
     assert prompt.rstrip().endswith("下一步")
 
@@ -8153,28 +8048,6 @@ def test_extract_tool_chat_error_ignores_raw_provider_error_without_hint():
     assert chat_service._extract_tool_chat_error(payload) is None
 
 
-def test_extract_tool_chat_error_maps_render_prereq_task_error():
-    raw_error = (
-        "Render 重生未生成可用图片（mode=1x1_2-3, beats=[1, 2, 3]）："
-        "Render 模式需要草图但未找到覆盖 beat 1-1 的草图"
-    )
-    payload = {
-        "sessionUpdate": "tool_call_update",
-        "status": "completed",
-        "result": {
-            "status": "failed",
-            "error": raw_error,
-        },
-    }
-
-    chat_error = chat_service._extract_tool_chat_error(payload)
-
-    assert chat_error is not None
-    assert "Render 任务没有生成可用图片" in chat_error
-    assert "虾塘" in chat_error
-    assert raw_error in chat_error
-
-
 def test_extract_tool_chat_error_maps_generic_failed_task_error():
     payload = {
         "sessionUpdate": "tool_call_update",
@@ -8688,90 +8561,6 @@ def test_append_tool_ui_specs_does_not_duplicate_existing_ui_spec():
     assert "已有展示" in content
     assert "/static/projects/demo/portrait.png" in content
     assert "/static/projects/demo/sketch.png" not in content
-
-
-def test_dramaclaw_get_sketch_candidates_displays_pool_candidates(monkeypatch):
-    from novelvideo.chat import dramaclaw_mcp
-
-    plugin = dramaclaw_mcp._plugin("dramaclaw")
-
-    def fake_request(method, path, **kwargs):
-        assert method == "GET"
-        assert path == "/api/v1/projects/project-a/episodes/1/beats/3/sketch-candidates"
-        return {
-            "ok": True,
-            "data": {
-                "episode": 1,
-                "beat": 3,
-                "current_sketch_url": "/static/current.png",
-                "candidate_count": 1,
-                "candidates": [
-                    {
-                        "id": "sketch_pool",
-                        "url": "/static/candidate.png",
-                        "generated_at": "2026-01-01T00:00:00",
-                        "stale": False,
-                    }
-                ],
-            },
-        }
-
-    monkeypatch.setattr(plugin, "_request", fake_request)
-
-    payload = json.loads(
-        plugin._handle_get_sketch_candidates(
-            {
-                "project_id": "project-a",
-                "episode": 1,
-                "beat": 3,
-            }
-        )
-    )
-
-    assert payload["ok"] is True
-    assert payload["media_kind"] == "sketch_candidate"
-    assert payload["candidate_count"] == 1
-    assert payload["ui_spec"]["type"] == "sketch_gallery"
-    assert "candidate.png" in json.dumps(payload["ui_spec"], ensure_ascii=False)
-
-
-def test_dramaclaw_get_sketches_does_not_use_pool_candidates(monkeypatch, tmp_path):
-    from novelvideo.chat import dramaclaw_mcp
-
-    plugin = dramaclaw_mcp._plugin("dramaclaw")
-    project_dir = tmp_path / "project"
-    sketch_dir = project_dir / "grids" / "ep001" / "sketch"
-    sketch_dir.mkdir(parents=True)
-    (sketch_dir / "beat_01_t123.png").write_bytes(b"fake")
-
-    monkeypatch.setenv("DRAMACLAW_PROJECT_OUTPUT_DIR", str(project_dir))
-    monkeypatch.setattr(
-        plugin,
-        "_request",
-        lambda method, path, **kwargs: {
-            "ok": True,
-            "beats": [
-                {
-                    "beat_number": 1,
-                    "sketch_url": "",
-                    "frame_url": "",
-                }
-            ],
-        },
-    )
-
-    payload = json.loads(
-        plugin._handle_get_sketches(
-            {
-                "project_id": "project-a",
-                "episode": 1,
-            }
-        )
-    )
-
-    assert payload["ok"] is True
-    assert payload["sketches"][0]["sketch_url"] == ""
-    assert payload["ui_spec"] is None
 
 
 def test_fmv_skill_guidance_is_only_appended_to_canvas_instructions():

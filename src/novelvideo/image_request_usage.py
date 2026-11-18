@@ -80,7 +80,7 @@ def infer_project_output_dir(path_like: str | Path | None) -> Path | None:
                     return candidate
         except ValueError:
             pass
-        if parent.name in {"grids", "frames", "sketches", "videos", "assets", "prompts"}:
+        if parent.name in {"grids", "frames", "videos", "assets", "prompts"}:
             return parent.parent
     return None
 

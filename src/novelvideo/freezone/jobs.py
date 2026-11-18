@@ -184,7 +184,7 @@ async def run_freezone_mask_edit(
     if egress_context is not None and egress_context.is_organization:
         # 与 run_freezone_edit 同一口径：组织下不读本地目录配置。
         # `get_grid_generation_config` 可能返回非 newapi provider，而组织出网闸门
-        # （`nanobanana_grid.py:138-139`）对非 newapi 一律 ORG_EGRESS_DENIED。
+        # （`nanobanana_grid.py` 的 `__init__`）对非 newapi 一律 ORG_EGRESS_DENIED。
         cfg = {
             "provider": "newapi",
             "api_key": "request-scoped",

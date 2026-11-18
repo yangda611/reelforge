@@ -38,7 +38,6 @@ through sync callers too.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -385,36 +384,6 @@ async def finalize(
     finally:
         await db.close()
     handle.final_status = final_status
-
-
-# --------------------------------------------------------------------- #
-# Sync bridges for pipelines that aren't already inside an event loop    #
-# --------------------------------------------------------------------- #
-
-def begin_trace_for_beat_sync(**kwargs: Any) -> TraceHandle:
-    """Synchronous wrapper for `begin_trace_for_beat`.
-
-    `sketch_edit_execute.execute_sketch_edit_batches` is sync (uses
-    `asyncio.run` internally for model calls). The trace-capture hooks
-    have to run from that sync context without nesting event loops.
-    """
-    return asyncio.run(begin_trace_for_beat(**kwargs))
-
-
-def record_prompt_and_response_sync(handle: TraceHandle, **kwargs: Any) -> None:
-    asyncio.run(record_prompt_and_response(handle, **kwargs))
-
-
-def record_execute_output_sync(handle: TraceHandle, **kwargs: Any) -> None:
-    asyncio.run(record_execute_output(handle, **kwargs))
-
-
-def record_gate_sync(handle: TraceHandle, **kwargs: Any) -> None:
-    asyncio.run(record_gate(handle, **kwargs))
-
-
-def finalize_sync(handle: TraceHandle, **kwargs: Any) -> None:
-    asyncio.run(finalize(handle, **kwargs))
 
 
 # --------------------------------------------------------------------- #

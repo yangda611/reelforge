@@ -269,33 +269,6 @@ def test_dramaclaw_plugin_stops_before_tts_when_pipeline_requires_voice_setup():
     assert "chat_error" not in data["audio_prerequisites"]
 
 
-def test_dramaclaw_plugin_adds_render_prereq_chat_error():
-    plugin = _load_plugin_module()
-    raw_error = (
-        "Render 重生未生成可用图片（mode=1x1_2-3, beats=[1, 2, 3]）："
-        "Render 模式需要草图但未找到覆盖 beat 1-1 的草图"
-    )
-
-    result = plugin._with_chat_error_hints(
-        {
-            "ok": True,
-            "data": [
-                {
-                    "status": "failed",
-                    "error": raw_error,
-                }
-            ],
-        }
-    )
-
-    task = result["data"][0]
-    assert task["error"] == raw_error
-    assert "Render 任务没有生成可用图片" in task["chat_error"]
-    assert "虾塘" in task["chat_error"]
-    assert raw_error in task["chat_error"]
-    assert "Do not start another tool" in task["agent_instruction"]
-
-
 def test_dramaclaw_plugin_registers_freezone_canvas_tools():
     plugin = _load_plugin_module()
 
@@ -352,11 +325,10 @@ def test_dramaclaw_complex_write_tools_publish_one_canonical_schema():
         "client_save_id",
     }
 
-    sketches = schemas["dramaclaw_generate_sketches"]
-    assert sketches["additionalProperties"] is False
-    assert "body" not in sketches["properties"]
+    assert "dramaclaw_generate_sketches" not in schemas
+    assert "dramaclaw_render_first_frames" not in schemas
 
-    for schema in (skill, preset, save, sketches):
+    for schema in (skill, preset, save):
         Draft202012Validator.check_schema(schema)
 
     assert not list(
@@ -388,9 +360,6 @@ def test_dramaclaw_complex_write_tools_publish_one_canonical_schema():
                 },
             }
         )
-    )
-    assert not list(
-        Draft202012Validator(sketches).iter_errors({"episode": 1})
     )
 
 
@@ -581,108 +550,6 @@ def test_get_final_video_displays_all_existing_finals_in_one_tool_call(monkeypat
     ]
 
 
-def test_render_first_frames_starts_three_independent_tasks(monkeypatch):
-    plugin = _load_plugin_module()
-    calls = []
-
-    def fake_request(method, path, *, query=None, body=None):
-        calls.append((method, path, body))
-        if path.endswith("/tasks/limits"):
-            return {
-                "ok": True,
-                "data": {"default": {"remaining": 3, "user_remaining": 3}},
-            }
-        return {"ok": True, "task_id": f"task-{len(calls)}"}
-
-    monkeypatch.setattr(plugin, "_request", fake_request)
-    monkeypatch.setattr(plugin, "_launch_capacity_aware_batch_dispatcher", lambda **_kwargs: None)
-
-    result = plugin._handle_render_first_frames(
-        {"project_id": "proj-1", "episode": 3, "beat_indices": [3, 1, 2]}
-    )
-
-    assert result["ok"] is True
-    assert result["started"] == [1, 2, 3]
-    post_calls = [call for call in calls if call[0] == "POST"]
-    assert all(call[1].endswith("/episodes/3/beats/regenerate") for call in post_calls)
-    assert [call[2]["beat_indices"] for call in post_calls] == [[1], [2], [3]]
-    assert {call[2]["batch_id"] for call in post_calls} == {result["batch_id"]}
-    assert all(call[2]["batch_size"] == 3 for call in post_calls)
-
-
-def test_render_first_frames_omits_completed_beats_and_limits_batch(monkeypatch):
-    plugin = _load_plugin_module()
-    calls = []
-
-    def fake_request(method, path, *, query=None, body=None):
-        calls.append((method, path, body))
-        if path.endswith("/tasks/limits"):
-            return {
-                "ok": True,
-                "data": {"default": {"remaining": 3, "user_remaining": 3}},
-            }
-        if method == "GET":
-            return {
-                "ok": True,
-                "data": [
-                    {"beat_number": 1, "frame_url": "/frame-1.png"},
-                    {"beat_number": 2, "frame_url": ""},
-                    {"beat_number": 3, "frame_url": ""},
-                    {"beat_number": 4, "frame_url": ""},
-                    *[
-                        {"beat_number": beat, "frame_url": ""}
-                        for beat in range(5, 12)
-                    ],
-                ],
-            }
-        return {"ok": True, "task_id": f"task-{len(calls)}"}
-
-    monkeypatch.setattr(plugin, "_request", fake_request)
-    monkeypatch.setattr(plugin, "_launch_capacity_aware_batch_dispatcher", lambda **_kwargs: None)
-
-    result = plugin._handle_render_first_frames({"project_id": "proj-1", "episode": 3})
-
-    assert result["started"] == [2, 3, 4]
-    assert result["waiting"] == list(range(5, 11))
-    assert result["remaining"] == 1
-    assert [call[2]["beat_indices"] for call in calls if call[0] == "POST"] == [
-        [2], [3], [4]
-    ]
-
-
-def test_render_first_frames_rejects_more_than_nine_beats():
-    plugin = _load_plugin_module()
-
-    result = plugin._handle_render_first_frames(
-        {"project_id": "proj-1", "episode": 3, "beat_indices": list(range(1, 11))}
-    )
-
-    assert "at most 9 first-frame beats" in result
-
-
-def test_render_first_frames_does_not_restart_completed_episode(monkeypatch):
-    plugin = _load_plugin_module()
-    calls = []
-
-    def fake_request(method, path, *, query=None, body=None):
-        calls.append((method, path, body))
-        return {
-            "ok": True,
-            "data": [
-                {"beat_number": 1, "frame_url": "/frame-1.png"},
-                {"beat_number": 2, "frame_url": "/frame-2.png"},
-            ],
-        }
-
-    monkeypatch.setattr(plugin, "_request", fake_request)
-
-    result = plugin._handle_render_first_frames({"project_id": "proj-1", "episode": 3})
-
-    assert result["code"] == "first_frames_complete"
-    assert result["started"] == []
-    assert [call[0] for call in calls] == ["GET"]
-
-
 def test_compose_episode_sends_canonical_body(monkeypatch):
     plugin = _load_plugin_module()
     calls = []
@@ -752,10 +619,10 @@ def test_dramaclaw_run_freezone_skill_uses_typed_endpoint(monkeypatch):
     result = plugin._handle_run_freezone_skill(
         {
             "project_id": "demo",
-            "skill_id": "freezone.sketch_from_context",
+            "skill_id": "freezone.set_selected_background",
             "skill_node_id": "skill_1",
             "canvas_id": "canvas_a",
-            "parameters": {"aspect_ratio": "2:3"},
+            "parameters": {},
             "resolved_inputs": [{"role": "beat_context", "node_id": "beat_1"}],
         }
     )
@@ -764,14 +631,14 @@ def test_dramaclaw_run_freezone_skill_uses_typed_endpoint(monkeypatch):
     assert calls == [
         {
             "method": "POST",
-            "path": "/api/v1/projects/demo/freezone/skills/freezone.sketch_from_context/run",
+            "path": "/api/v1/projects/demo/freezone/skills/freezone.set_selected_background/run",
             "query": None,
             "body": {
                 "schema_version": "skill.v1",
                 "skill_node_id": "skill_1",
                 "canvas_id": "canvas_a",
                 "idempotency_key": None,
-                "parameters": {"aspect_ratio": "2:3"},
+                "parameters": {},
                 "resolved_inputs": [{"role": "beat_context", "node_id": "beat_1"}],
             },
         }
@@ -841,7 +708,7 @@ def test_dramaclaw_create_freezone_canvas_from_preset_uses_preset_endpoint(monke
                 "scope": "beat",
                 "episode": 1,
                 "beat": 2,
-                "primary_slot": "sketch",
+                "primary_slot": "frame",
             },
         }
     )
@@ -856,7 +723,7 @@ def test_dramaclaw_create_freezone_canvas_from_preset_uses_preset_endpoint(monke
                 "scope": "beat",
                 "episode": 1,
                 "beat": 2,
-                "primary_slot": "sketch",
+                "primary_slot": "frame",
             },
         }
     ]
@@ -870,9 +737,6 @@ def test_dramaclaw_complex_write_handlers_reject_legacy_or_open_wrappers():
     )
     assert "preset is required" in plugin._handle_create_freezone_canvas_from_preset(
         {"project_id": "demo", "scope": "beat", "episode": 1, "beat": 2}
-    )
-    assert "body overrides are not supported" in plugin._handle_generate_sketches(
-        {"project_id": "demo", "episode": 1, "body": {}}
     )
     assert "unsupported fields" in plugin._handle_save_freezone_canvas(
         {
@@ -900,8 +764,8 @@ def test_dramaclaw_freezone_mode_denies_mainline_writes(monkeypatch):
     monkeypatch.setenv("DRAMACLAW_TOOL_MODE", "freezone_canvas")
     monkeypatch.setattr(plugin, "_request", fail_request)
     denied = plugin._guard_freezone_mainline_write(
-        "dramaclaw_generate_sketches",
-        plugin._handle_generate_sketches,
+        "dramaclaw_generate_script",
+        plugin._handle_generate_script,
     )({"project_id": "demo", "episode": 1})
 
     assert denied["ok"] is False

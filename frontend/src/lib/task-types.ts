@@ -22,28 +22,18 @@ export const TASK_TYPES = {
   // Script
   SCRIPT_WRITER: "script_writer",
   LITERAL_SCRIPT_WRITER: "literal_script_writer",
-  BEAT_VIDEO_PROMPT: "beat_video_prompt",
   // Backend emits `director_notes`; keep the FE key aligned with that exact
   // task_type so the task stream and cancel endpoint target the same task.
   DIRECTOR_NOTES: "director_notes",
   IDENTITY_PLANNER: "identity_planner",
   EPISODE_SCENE_PLANNER: "episode_scene_planner",
   EPISODE_PROP_PLANNER: "episode_prop_planner",
-  // Sketch
-  SKETCH_GENERATION: "sketch_generation",
-  DIRECTOR_CONTROL_TO_SKETCH: "director_control_to_sketch",
-  SKETCH_GRID_GENERATION: "sketch_grid_generation",
-  BATCH_SKETCH: "batch_sketch",
-  SKETCH_REGEN: "sketch_regen",
-  GRID_REGENERATE: "grid_regenerate",
   // Audio
   AUDIO_GENERATION: "audio_generation",
   AUDIO_GENERATION_INDEXTTS2: "audio_generation_indextts2",
   SYSTEM_VOICE_SETUP: "system_voice_setup",
   // Video
   SINGLE_VIDEO: "single_video",
-  GLOBAL_OPTIMIZE_VIDEO: "global_optimize_video",
-  SELECTED_REGEN: "selected_regen",
   // Compose — BE emits `compose_episode` (task_identity.py); FE used
   // `video_compose` which caused the same infinite-spinner class of bug
   // we hit with script_writer / staging.
@@ -59,11 +49,6 @@ export type TaskType = (typeof TASK_TYPES)[keyof typeof TASK_TYPES];
  */
 export const SCOPED_TASK_TYPES = new Set<TaskType>([
   TASK_TYPES.SINGLE_VIDEO,
-  TASK_TYPES.BEAT_VIDEO_PROMPT,
-  TASK_TYPES.GRID_REGENERATE,
-  TASK_TYPES.SKETCH_REGEN,
-  TASK_TYPES.DIRECTOR_CONTROL_TO_SKETCH,
-  TASK_TYPES.SELECTED_REGEN,
 ]);
 
 export function isScopedTask(type: string): boolean {
@@ -73,8 +58,7 @@ export function isScopedTask(type: string): boolean {
 /**
  * Beats a task row covers, or `null` when the row doesn't say.
  *
- * Selection-scoped runs (`sketch_regen` / `selected_regen`) carry `beat_num =
- * null` and a scope that is a server-side hash of the beat list, so the beat
+ * Selection-scoped runs carry `beat_num = null` and a scope that is a server-side hash of the beat list, so the beat
  * numbers only reach the FE through `metadata.beat_numbers` (written by the
  * BE's `display_metadata_for_task`). Single-beat rows still answer through
  * `beat_num`.

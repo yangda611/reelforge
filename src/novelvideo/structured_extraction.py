@@ -1035,7 +1035,7 @@ role、body_type、face_prompt 必须使用用户消息指定的输出语言。
 不要新增角色，不要删除角色，不要合并角色。输入给几个就返回几个。"""
 
 
-def _create_character_appearance_agent(agent: Any = None):
+def _create_character_appearance_agent(agent: Any = None, *, live_action: bool = False):
     if agent is not None:
         return agent
 
@@ -1045,6 +1045,15 @@ def _create_character_appearance_agent(agent: Any = None):
         get_newapi_structured_output_model_settings,
         get_newapi_text_pydantic_model,
     )
+    from novelvideo.skills.realistic_asset_skills import (
+        get_live_action_character_extraction_directives,
+    )
+
+    system_prompt = CHARACTER_APPEARANCE_SYSTEM_PROMPT
+    if live_action:
+        system_prompt = (
+            f"{system_prompt}\n\n{get_live_action_character_extraction_directives()}"
+        )
 
     return Agent(
         get_newapi_text_pydantic_model(
@@ -1052,7 +1061,7 @@ def _create_character_appearance_agent(agent: Any = None):
             "gemini-3-flash-preview",
             capability="text.generate.agent",
         ),
-        system_prompt=CHARACTER_APPEARANCE_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         model_settings=get_newapi_structured_output_model_settings(),
         output_type=CharacterAppearanceList,
         name="Structured Character Appearance",
@@ -1363,6 +1372,7 @@ async def enrich_character_appearances(
     on_log: Optional[Callable[[str], None]] = None,
     concurrency: Optional[int] = None,
     output_language: AssetLanguage | None = None,
+    live_action: bool = False,
 ) -> dict[str, CharacterAppearance]:
     """Write the creative half of a character: face, role, build, age band.
 
@@ -1426,7 +1436,7 @@ async def enrich_character_appearances(
         await _settle_narrator_nomination(results, order, cache, narrator_key, keys)
         return results
 
-    llm = _create_character_appearance_agent(agent)
+    llm = _create_character_appearance_agent(agent, live_action=live_action)
     # A screenplay's pre-scene block is its character bible — it names hair,
     # build and bearing outright. Extraction already chunks it, but only as one
     # span among many; handing it to this stage whole is what legacy did, and

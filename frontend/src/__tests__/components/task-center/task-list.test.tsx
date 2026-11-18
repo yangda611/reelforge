@@ -63,7 +63,7 @@ beforeAll(async () => {
           tasks: {
             types: {
               script_writer: "Script writer",
-              sketch_regen: "Sketch regen",
+              single_video: "Single video",
             },
           },
         },

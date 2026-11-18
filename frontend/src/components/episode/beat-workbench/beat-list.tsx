@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
 import { useTranslation } from "react-i18next";
-import { FileText, Mic2, Pencil, Video } from "lucide-react";
+import { FileText, Mic2, Video } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { BeatStageState, BeatStates } from "@/types/beat-state";
@@ -51,7 +51,7 @@ function BeatRow({
 }: {
   beat: Beat;
   stageSet:
-    | { script: BeatStageState; sketch: BeatStageState; audio: BeatStageState; video: BeatStageState }
+    | { script: BeatStageState; audio: BeatStageState; video: BeatStageState }
     | undefined;
   isSelected: boolean;
   onSelect: () => void;
@@ -94,7 +94,6 @@ function BeatRow({
           </p>
           <div className="flex items-center gap-1.5">
             <StageDot state={stageSet?.script ?? "missing"} icon={FileText} />
-            <StageDot state={stageSet?.sketch ?? "missing"} icon={Pencil} />
             <StageDot state={stageSet?.audio ?? "missing"} icon={Mic2} />
             <StageDot state={stageSet?.video ?? "missing"} icon={Video} />
           </div>

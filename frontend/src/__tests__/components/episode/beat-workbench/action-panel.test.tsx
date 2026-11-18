@@ -23,16 +23,10 @@ beforeAll(async () => {
           episode: {
             beat: {
               sectionText: "文案",
-              sectionSketch: "草图",
-              sectionRender: "渲染图",
               sectionAudio: "音频",
               sectionVideo: "视频",
               edited: "已编辑",
               notEdited: "未编辑",
-              selected: "已选择",
-              notSelected: "未选择",
-              rendered: "已渲染",
-              notRendered: "未渲染",
               generated: "已生成",
               notGenerated: "未生成",
               clickToView: "点击镜头查看详情",
@@ -48,10 +42,6 @@ beforeEach(() => {
   localStorage.clear();
   useEpisodeWorkbenchStore.getState().reset();
 });
-
-vi.mock("@/lib/queries/sketches", () => ({
-  useGridsByBeat: () => ({ byBeat: new Map(), assignments: {} }),
-}));
 
 vi.mock("@/lib/queries/episodes", () => ({
   useDeleteManualShot: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -79,10 +69,6 @@ vi.mock("@/stores/save-status-store", () => ({
   useSaveState: () => ({ status: "idle" }),
 }));
 
-vi.mock("@/hooks/use-escape-to-close", () => ({
-  useEscapeToClose: vi.fn(),
-}));
-
 vi.mock("@/components/save-status", () => ({
   SaveStatus: () => null,
 }));
@@ -91,16 +77,8 @@ vi.mock("@/components/episode/beat-workbench/text-pane", () => ({
   TextPane: () => <div>TextPane</div>,
 }));
 
-vi.mock("@/components/episode/beat-workbench/sketch-section", () => ({
-  SketchSection: () => <div>SketchSection</div>,
-}));
-
-vi.mock("@/components/episode/beat-workbench/render-section", () => ({
-  RenderSection: () => <div>RenderSection</div>,
-}));
-
 vi.mock("@/components/episode/beat-workbench/audio-pane", () => ({
-  AudioPane: () => <div>AudioPane</div>,
+  VideoPane: () => <div>VideoPane</div>,
 }));
 
 vi.mock("@/components/episode/beat-workbench/video-pane", () => ({
@@ -130,7 +108,6 @@ describe("ActionPanel", () => {
         script: "missing",
         audio: "missing",
         video: "missing",
-        sketch: "missing",
       },
     };
 
@@ -150,7 +127,7 @@ describe("ActionPanel", () => {
 
     // 文案默认展开，用户无需点击即可看到文案内容；其它区块仍折叠。
     expect(screen.getByText("TextPane")).toBeInTheDocument();
-    expect(screen.queryByText("SketchSection")).not.toBeInTheDocument();
+    expect(screen.queryByText("VideoPane")).not.toBeInTheDocument();
   });
 
   it("keeps section open state after the panel remounts for the same episode", async () => {
@@ -159,7 +136,6 @@ describe("ActionPanel", () => {
         script: "missing",
         audio: "missing",
         video: "missing",
-        sketch: "missing",
       },
     };
     const props = {
@@ -178,11 +154,11 @@ describe("ActionPanel", () => {
       </I18nextProvider>,
     );
 
-    // 用一个非默认展开的区块（草图）验证展开状态跨 remount 持久化。
-    fireEvent.click(screen.getByRole("button", { name: /草图/ }));
+    // 用一个非默认展开的区块（视频）验证展开状态跨 remount 持久化。
+    fireEvent.click(screen.getByRole("button", { name: /视频/ }));
 
     await waitFor(() => {
-      expect(screen.getByText("SketchSection")).toBeInTheDocument();
+      expect(screen.getByText("VideoPane")).toBeInTheDocument();
     });
 
     unmount();
@@ -193,7 +169,7 @@ describe("ActionPanel", () => {
       </I18nextProvider>,
     );
 
-    expect(screen.getByText("SketchSection")).toBeInTheDocument();
+    expect(screen.getByText("VideoPane")).toBeInTheDocument();
   });
 
   it("keeps section open state when switching between beats", () => {
@@ -202,13 +178,11 @@ describe("ActionPanel", () => {
         script: "missing",
         audio: "missing",
         video: "missing",
-        sketch: "missing",
       },
       2: {
         script: "missing",
         audio: "missing",
         video: "missing",
-        sketch: "missing",
       },
     };
 
@@ -226,9 +200,9 @@ describe("ActionPanel", () => {
       </I18nextProvider>,
     );
 
-    // 用一个非默认展开的区块（草图）验证切换 beat 时展开状态保留。
-    fireEvent.click(screen.getByRole("button", { name: /草图/ }));
-    expect(screen.getByText("SketchSection")).toBeInTheDocument();
+    // 用一个非默认展开的区块（视频）验证切换 beat 时展开状态保留。
+    fireEvent.click(screen.getByRole("button", { name: /视频/ }));
+    expect(screen.getByText("VideoPane")).toBeInTheDocument();
 
     rerender(
       <I18nextProvider i18n={i18n}>
@@ -244,7 +218,7 @@ describe("ActionPanel", () => {
       </I18nextProvider>,
     );
 
-    expect(screen.getByText("SketchSection")).toBeInTheDocument();
+    expect(screen.getByText("VideoPane")).toBeInTheDocument();
   });
 
   it("opens the target section from a deep link", () => {
@@ -253,7 +227,6 @@ describe("ActionPanel", () => {
         script: "missing",
         audio: "missing",
         video: "missing",
-        sketch: "missing",
       },
     };
 
@@ -267,11 +240,11 @@ describe("ActionPanel", () => {
           episode={1}
           defaultBackend="huimeng_seedance-2.0-fast"
           onDefaultBackendChange={vi.fn()}
-          targetSection="sketch"
+          targetSection="video"
         />
       </I18nextProvider>,
     );
 
-    expect(screen.getByText("SketchSection")).toBeInTheDocument();
+    expect(screen.getByText("VideoPane")).toBeInTheDocument();
   });
 });

@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -283,78 +282,6 @@ def _display_tool_call_key(tool_name: str, args: dict[str, Any]) -> str:
     return f"{tool_name}:{encoded_args}"
 
 
-def _infer_display_tool_call_from_text(
-    prompt: str,
-    assistant_text: str,
-    previous_assistant: list[str],
-) -> tuple[str, dict[str, Any]] | None:
-    """Recover from display promises where the model forgot to call a display tool."""
-    prompt_text = str(prompt or "")
-    prompt_lower = prompt_text.casefold()
-    recent_context = "\n".join(previous_assistant[-2:] if previous_assistant else [])
-    context_text = "\n".join([prompt_text, str(assistant_text or ""), recent_context])
-    context_lower = context_text.casefold()
-    progress_terms = ("进度", "状态", "任务", "做到哪", "做到哪儿", "当前情况")
-    if any(term in prompt_text for term in progress_terms):
-        return None
-    display_terms = (
-        "展示",
-        "显示",
-        "查看",
-        "看",
-        "全部显示",
-        "show",
-        "display",
-        "view",
-    )
-    if not any(term in prompt_lower for term in display_terms):
-        return None
-    prompt_mentions_sketch = "草图" in prompt_text or "sketch" in prompt_lower
-    context_mentions_sketch = "草图" in context_text or "sketch" in context_lower
-    short_followup = len(prompt_text.strip()) <= 20 and any(
-        term in prompt_text for term in ("全部", "继续", "下一页", "更多")
-    )
-    if not prompt_mentions_sketch and not (short_followup and context_mentions_sketch):
-        return None
-
-    episode = 1
-    episode_match = re.search(
-        r"(?:第\s*(\d+)\s*集|ep(?:isode)?\s*\.?\s*(\d+))",
-        context_text,
-        re.IGNORECASE,
-    )
-    if episode_match:
-        raw_episode = episode_match.group(1) or episode_match.group(2)
-        try:
-            episode = max(1, int(raw_episode))
-        except (TypeError, ValueError):
-            episode = 1
-    wants_sketch_candidates = any(
-        term in context_text for term in ("草图候选", "候选草图", "图池", "备选草图")
-    )
-    if wants_sketch_candidates:
-        beat_match = re.search(
-            r"(?:beat|Beat|BEAT)\s*\.?\s*(\d+)|第\s*(\d+)\s*(?:个|张)?\s*beat|Beat\s*(\d+)",
-            context_text,
-            re.IGNORECASE,
-        )
-        raw_beat = None
-        if beat_match:
-            raw_beat = next((group for group in beat_match.groups() if group), None)
-        if raw_beat:
-            try:
-                beat = max(1, int(raw_beat))
-            except (TypeError, ValueError):
-                beat = 0
-            if beat > 0:
-                return "dramaclaw_get_sketch_candidates", {
-                    "episode": episode,
-                    "beat": beat,
-                }
-        return None
-    return "dramaclaw_get_sketches", {"episode": episode}
-
-
 def _backend_api_get(
     path: str, token: str, *, open_url: Callable[..., Any] = urlopen
 ) -> dict[str, Any]:
@@ -459,11 +386,8 @@ async def _fallback_display_tool_ui_specs(
                     page_items,
                 )
             ]
-        if tool_name in {"dramaclaw_get_sketches", "dramaclaw_get_first_frames"}:
+        if tool_name == "dramaclaw_get_first_frames":
             episode = int(args.get("episode") or 1)
-            media_kind = (
-                "frame" if tool_name == "dramaclaw_get_first_frames" else "sketch"
-            )
             resp = _backend_api_get(
                 f"/api/v1/projects/{project_q}/episodes/{episode}/beats",
                 token,
@@ -480,18 +404,8 @@ async def _fallback_display_tool_ui_specs(
                     beat_int = None
                 if requested_beats is not None and beat_int not in requested_beats:
                     continue
-                sketch_url = str(beat.get("sketch_url") or "").strip()
                 frame_url = str(beat.get("frame_url") or "").strip()
-                if sketch_url and media_kind == "sketch":
-                    media_items.append(
-                        {
-                            "src": sketch_url,
-                            "title": f"Beat {beat_number} 草图",
-                            "description": "草图",
-                            "aspectRatio": "3/4",
-                        }
-                    )
-                if frame_url and media_kind == "frame":
+                if frame_url:
                     media_items.append(
                         {
                             "src": frame_url,
@@ -500,47 +414,6 @@ async def _fallback_display_tool_ui_specs(
                             "aspectRatio": "3/4",
                         }
                     )
-            limited = _limit_display_items(media_items, args, 12)
-            return (
-                [_media_ui_spec("sketch_gallery", "Image", limited)] if limited else []
-            )
-
-        if tool_name == "dramaclaw_get_sketch_candidates":
-            episode = int(args.get("episode") or 1)
-            try:
-                beat = int(
-                    args.get("beat")
-                    or args.get("beat_num")
-                    or args.get("beat_number")
-                    or 0
-                )
-            except (TypeError, ValueError):
-                beat = 0
-            if beat <= 0:
-                return []
-            resp = _backend_api_get(
-                f"/api/v1/projects/{project_q}/episodes/{episode}/beats/{beat}/sketch-candidates",
-                token,
-            )
-            data = resp.get("data") if isinstance(resp, dict) else None
-            candidates = data.get("candidates") if isinstance(data, dict) else []
-            media_items = []
-            for candidate in candidates if isinstance(candidates, list) else []:
-                if not isinstance(candidate, dict):
-                    continue
-                src = str(candidate.get("url") or "").strip()
-                if not src:
-                    continue
-                media_items.append(
-                    {
-                        "src": src,
-                        "title": f"Beat {beat} 草图候选",
-                        "description": (
-                            "过期候选" if candidate.get("stale") else "草图候选"
-                        ),
-                        "aspectRatio": "3/4",
-                    }
-                )
             limited = _limit_display_items(media_items, args, 12)
             return (
                 [_media_ui_spec("sketch_gallery", "Image", limited)] if limited else []
@@ -784,9 +657,7 @@ async def _fallback_display_tool_ui_specs(
                     continue
                 video_url = str(beat.get("video_url") or "").strip()
                 audio_url = str(beat.get("audio_url") or "").strip()
-                frame_url = str(
-                    beat.get("frame_url") or beat.get("sketch_url") or ""
-                ).strip()
+                frame_url = str(beat.get("frame_url") or "").strip()
                 if video_url:
                     video_items.append(
                         {

@@ -84,10 +84,9 @@ export interface TaskKey {
    * "Only follow runs that cover this beat."
    *
    * Different from `beatNum`, which matches the task row's `beat_num` column.
-   * Selection-scoped runs (`sketch_regen`, `selected_regen`) write
-   * `beat_num = null` and carry their beat list in `metadata.beat_numbers`, so
-   * `beatNum` can never match them — passing it just makes reconcile miss the
-   * row entirely (see the comment above `regenTask` in sketch-section.tsx).
+   * Selection-scoped runs write `beat_num = null` and carry their beat list
+   * in `metadata.beat_numbers`, so `beatNum` can never match them — passing
+   * it just makes reconcile miss the row entirely.
    *
    * Setting this gives each beat its own registry entry and filters reconcile
    * by coverage, so one beat's in-flight run no longer freezes every other
@@ -127,7 +126,7 @@ export interface TaskControllerSnapshot {
   /**
    * Beats the currently-tracked run covers, or `null` when unknown.
    *
-   * Per-beat panels (草图 / 渲染图) all subscribe to one episode-wide entry
+   * Per-beat panels all subscribe to one episode-wide entry
    * because selection-scoped runs carry `beat_num = null` and an opaque scope
    * hash — without this field every panel would render the same spinner and a
    * single regen would look like the whole episode was generating.

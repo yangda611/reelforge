@@ -25,7 +25,7 @@ def test_dramaclaw_playbooks_own_current_step_order() -> None:
 
     assert "流程顺序的唯一事实源" in init
     assert "流程顺序的唯一事实源" in episode
-    assert "逐集生成阶段（Steps 8-16）" in episode
+    assert "逐集生成阶段（Steps 8-14）" in episode
     assert "Steps 8-21" not in episode
     assert "本文件只决定执行前是否再次询问用户" in run_modes
     assert "不拥有流程顺序决策权" in step_api
@@ -38,7 +38,7 @@ def test_dramaclaw_media_delivery_uses_display_tools() -> None:
 
     assert "路径和 URL 只作为工具输入，不直接输出给用户" in delivery
     assert "dramaclaw_get_character_media" in delivery
-    assert "dramaclaw_get_sketches" in delivery
+    assert "dramaclaw_get_sketches" not in delivery
     assert "dramaclaw_get_first_frames" in delivery
     assert "dramaclaw_get_episode_media" in delivery
     assert "dramaclaw_get_final_video" in delivery
@@ -49,6 +49,6 @@ def test_dramaclaw_evals_are_well_formed() -> None:
     payload = json.loads((SKILL_DIR / "evals" / "evals.json").read_text(encoding="utf-8"))
 
     assert payload["skill_name"] == "dramaclaw"
-    assert len(payload["evals"]) >= 8
+    assert len(payload["evals"]) >= 7
     assert len({case["id"] for case in payload["evals"]}) == len(payload["evals"])
     assert all(case["prompt"] and case["expectations"] for case in payload["evals"])

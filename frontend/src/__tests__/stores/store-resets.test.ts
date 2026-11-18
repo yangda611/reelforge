@@ -2,7 +2,6 @@
 // Copyright (c) 2026 ClaymoreLab
 import { describe, it, expect, beforeEach } from "vitest";
 import { useSaveStatusStore } from "@/stores/save-status-store";
-import { useSeenPoolStore } from "@/stores/seen-pool-store";
 import { useTaskCenterStore } from "@/task-center/store";
 import type { TaskState } from "@/task-center/types";
 
@@ -53,18 +52,6 @@ describe("per-store reset() actions", () => {
     useSaveStatusStore.getState().reset();
 
     expect(useSaveStatusStore.getState().scopes).toEqual({});
-  });
-
-  it("seen-pool-store.reset() empties the seen map", () => {
-    useSeenPoolStore.getState().markSeen("p1", 1, "pool-a");
-    useSeenPoolStore.getState().markSeen("p1", 1, "pool-b");
-    useSeenPoolStore.getState().markSeen("p2", 4, "pool-c");
-    expect(Object.keys(useSeenPoolStore.getState().seen)).toHaveLength(2);
-
-    useSeenPoolStore.getState().reset();
-
-    expect(useSeenPoolStore.getState().seen).toEqual({});
-    expect(useSeenPoolStore.getState().isSeen("p1", 1, "pool-a")).toBe(false);
   });
 
   it("task-center-store.reset() returns to initial state", () => {

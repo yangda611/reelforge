@@ -255,22 +255,6 @@ def test_render_keeps_prop_colorization_as_incremental_reference() -> None:
     assert "#00a2ff ELECTRIC AZURE marker =" in prompt
 
 
-def test_render_reference_map_keeps_sketch_as_first_image() -> None:
-    ctx = _render_context(
-        scene_refs=[_scene_ref("base_image", path="/tmp/master.png")],
-        prop_refs=[_prop_ref("纸箱")],
-        prop_marker_colors={"纸箱": "#0D47A1 ROYAL BLUE"},
-    )
-
-    prompt = RenderModeStrategy().build(ctx, PromptComponents())
-
-    assert "Colorize this 1×1 storyboard SKETCH (first attached image / Image 1)" in prompt
-    assert "Image 1 = SKETCH TO COLORIZE" in prompt
-    assert 'Image 2 = Scene "兰州拉面馆": environment reference asset' in prompt
-    assert 'Image 3 = Prop "纸箱" prop identity reference' in prompt
-    assert "LAST attached image" not in prompt
-
-
 def test_single_beat_render_includes_visual_description_as_reference_only() -> None:
     ctx = _render_context(
         scene_refs=[_scene_ref("base_image", path="/tmp/master.png")],

@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, FileText, Image as ImageIcon, Mic2, Pencil, Video, X } from "lucide-react";
+import { Check, ChevronDown, FileText, Mic2, Video } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
 import { SaveStatus } from "@/components/save-status";
-import { useEscapeToClose } from "@/hooks/use-escape-to-close";
-import { useGridsByBeat } from "@/lib/queries/sketches";
 import { useVideoBackends } from "@/lib/queries/video";
-import { resolveImage } from "@/lib/resolve-image";
 import { saveScopes, useSaveState } from "@/stores/save-status-store";
 import { cn } from "@/lib/utils";
 import type { Beat } from "@/types/episode";
@@ -27,12 +23,10 @@ import {
 } from "./toolbar-select-styles";
 
 import { TextPane } from "./text-pane";
-import { SketchSection } from "./sketch-section";
-import { RenderSection } from "./render-section";
 import { AudioPane } from "./audio-pane";
 import { VideoPane } from "./video-pane";
 
-export type SectionId = "text" | "sketch" | "render" | "audio" | "video";
+export type SectionId = "text" | "audio" | "video";
 
 interface SingleBeatPanelProps {
   beat: Beat;
@@ -49,26 +43,12 @@ interface SingleBeatPanelProps {
   onToggleSection: (id: SectionId) => void;
 }
 
-function isRenderImageMatch(img: { type?: string; id?: string; cell_path?: string | null; grid_path?: string | null; original_beat?: number | null }, assignment: string) {
-  return (
-    img.type === "render" &&
-    (img.id === assignment ||
-      img.cell_path === assignment ||
-      img.grid_path === assignment)
-  );
-}
-
 function sectionStatusKey(
   id: SectionId,
   beat: Beat,
-  stages: Record<string, BeatStageState> | undefined,
-  hasSketch: boolean,
-  hasRender: boolean,
 ): string {
   switch (id) {
     case "text": return beat.narration_segment ? "episode.beat.edited" : "episode.beat.notEdited";
-    case "sketch": return hasSketch || stages?.sketch === "ready" ? "episode.beat.selected" : "episode.beat.notSelected";
-    case "render": return hasRender ? "episode.beat.rendered" : "episode.beat.notRendered";
     case "audio": return beat.audio_url ? "episode.beat.generated" : "episode.beat.notGenerated";
     case "video": return beat.video_url ? "episode.beat.generated" : "episode.beat.notGenerated";
   }
@@ -77,16 +57,12 @@ function sectionStatusKey(
 function isReadyStatus(statusKey: string) {
   return (
     statusKey === "episode.beat.edited" ||
-    statusKey === "episode.beat.selected" ||
-    statusKey === "episode.beat.rendered" ||
     statusKey === "episode.beat.generated"
   );
 }
 
 const SECTIONS: { id: SectionId; labelKey: string; icon: React.ElementType }[] = [
   { id: "text", labelKey: "episode.beat.sectionText", icon: FileText },
-  { id: "sketch", labelKey: "episode.beat.sectionSketch", icon: Pencil },
-  { id: "render", labelKey: "episode.beat.sectionRender", icon: ImageIcon },
   { id: "audio", labelKey: "episode.beat.sectionAudio", icon: Mic2 },
   { id: "video", labelKey: "episode.beat.sectionVideo", icon: Video },
 ];
@@ -106,20 +82,6 @@ export function SingleBeatPanel({
   onToggleSection,
 }: SingleBeatPanelProps) {
   const { t } = useTranslation();
-  const { byBeat, assignments } = useGridsByBeat(project, episode);
-  const images = byBeat.get(beat.beat_number) ?? [];
-  const resolvedSketch = resolveImage(images, assignments, beat.beat_number, "sketch", beat.sketch_url ?? null);
-  const renderAssignment = assignments[String(beat.beat_number)] ?? null;
-  const hasRender =
-    !!beat.frame_url ||
-    (renderAssignment !== null && images.some((image) => isRenderImageMatch(image, renderAssignment))) ||
-    images.some((image) => image.type === "render" && image.original_beat === beat.beat_number && !!image.cell_url);
-  const hasSketch = !!resolvedSketch.url;
-
-  // Image preview popup
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  useEscapeToClose(previewUrl !== null, () => setPreviewUrl(null));
-
   const beatTextScope = saveScopes.beatText(project, episode, beat.beat_number);
   const textSaveState = useSaveState(beatTextScope);
 
@@ -135,7 +97,7 @@ export function SingleBeatPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {sections.map(({ id, labelKey, icon: Icon }) => {
           const isOpen = openSections.has(id);
-          const statusKey = sectionStatusKey(id, beat, stages, hasSketch, hasRender);
+          const statusKey = sectionStatusKey(id, beat);
           const ready = isReadyStatus(statusKey);
           return (
             <div key={id}>
@@ -202,26 +164,6 @@ export function SingleBeatPanel({
                       spineTemplate={spineTemplate}
                     />
                   )}
-                  {id === "sketch" && (
-                    <SketchSection
-                      beat={beat}
-                      project={project}
-                      episode={episode}
-                      images={images}
-                      assignments={assignments}
-                      onPreview={setPreviewUrl}
-                    />
-                  )}
-                  {id === "render" && (
-                    <RenderSection
-                      beat={beat}
-                      project={project}
-                      episode={episode}
-                      images={images}
-                      assignments={assignments}
-                      onPreview={setPreviewUrl}
-                    />
-                  )}
                   {id === "audio" && (
                     <AudioPane
                       beat={beat}
@@ -247,29 +189,6 @@ export function SingleBeatPanel({
           );
         })}
       </div>
-
-      {/* Image preview overlay */}
-      {previewUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setPreviewUrl(null)}
-            className="absolute right-4 top-4 rounded-full bg-background/80 p-2 text-foreground hover:bg-background"
-          >
-            <X className="size-5" />
-          </button>
-          <img
-            src={previewUrl}
-            alt="Preview"
-            className="max-h-full max-w-full object-contain"
-            decoding="async"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
     </div>
   );
 }

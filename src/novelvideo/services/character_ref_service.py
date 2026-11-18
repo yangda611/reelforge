@@ -14,11 +14,11 @@ def build_character_map_for_grid(
     sketch_colors: dict[str, str] | None = None,
     use_detected_identities: bool = False,
 ) -> dict[str, dict]:
-    """Build the character reference map used by sketch/render grid generation.
+    """Build the character reference map used by render prompt construction.
 
     Args:
-        use_detected_identities: When true, collect identities from detected sketch colors
-            for render; otherwise collect identities from {{identity}} markers for sketch.
+        use_detected_identities: When true, collect identities from the beats'
+            detected_identities; otherwise collect them from {{identity}} markers.
     """
     from novelvideo.generators.prompt_builder import PromptComponents
     from novelvideo.models import real_detected_identities

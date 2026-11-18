@@ -49,7 +49,7 @@ describe("freezone projection helpers", () => {
         scope: "beat",
         episode: 1,
         beat: 4,
-        primary_slot: "sketch",
+        primary_slot: "frame",
       }),
     ).toEqual({
       scope: "beat",
@@ -145,7 +145,7 @@ describe("freezone projection helpers", () => {
           scope: "beat",
           episode: 1,
           beat: 4,
-          primary_slot: "sketch",
+          primary_slot: "frame",
         },
       ),
     ).toMatchObject({

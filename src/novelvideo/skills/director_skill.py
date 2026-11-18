@@ -648,7 +648,6 @@ def cmd_commit_beat_overlay(args: argparse.Namespace) -> None:
                 "当前场景 world.json 决定固定空间和固定场景物；"
                 "本 overlay 只决定本 beat 的人物、全局资产道具和镜头。"
             ),
-            "sketch": "决定表演动作、坐姿细节、手势、表情和动作线，但不能改根位置/镜头。",
             "render": "决定材质、上色、光照和最终美术风格，但不能改布局/动作。",
         },
         "notes": "Beat overlay committed from live AI Director state.",

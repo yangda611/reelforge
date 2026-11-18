@@ -27,7 +27,7 @@ LITERAL_BEAT_STORYBOARD_SKILL_DIRECTIVES = """
 2. **15套景别组合自动编排（严禁同类景别堆砌）**：
    - 按情绪阶段推进景别层次：2镜常用（远+近 / 全+特 / 中+特）；3镜常用（远+全+近 压入、全+中+特 递进、中+近+特 交锋、近+特+近 情绪震荡、特+近+全 局部悬念后拉揭晓）；4~6镜按「远/全建立空间 → 中景交互 → 近/特写放大危机或反转 → 回拉全景重构压迫」成组调度。
 3. **反同质化防跳切铁律（严禁连续相近中景死切）**：
-   - 同一场次内**严禁连续 3 拍及以上停留在相同角度、相同景别**（例如连续正反打平视中景）；相邻镜头切换必须推进景别梯度（至少跨越半级~一级景别变化）或切换机位轴线，或穿插局部特写（手部动作特写、眼神特写、关键道具/屏幕特写），除非画面明确要求 `[固定机位锁定]`。
+   - 同一场次内**严禁连续 3 拍及以上停留在相同角度、相同景别**（例如连续正反打平视中景）；相邻镜头切换必须推进景别梯度（至少跨越半级~一级景别变化）或切换机位轴线，或穿插局部特写（手部动作特写、眼神特写、关键道具/屏幕特写）。
 4. **静态首帧与动态运镜严格分离**：
    - `visual_description` 描述**单一静止瞬时构图 + 人物此刻姿态、视线方向与手部接触状态**，**严禁**把“推镜头/拉远/摇镜/环绕/跟拍”等连续运镜过程词直接写进首帧静态画面描述。
 5. **6大无痕转场视觉锚点（相邻 Beat 必含衔接线索）**：
@@ -47,7 +47,7 @@ VIDEO_MOTION_AND_TRANSITION_SKILL_DIRECTIVES_EN = """
      (5) Focal Length (`optical zoom in/out` vs physical displacement).
    - **Visible Parallax Proof**: Whenever the camera translates (dolly, truck, arc, crane), explicitly describe how foreground occluders, midground subject, and background architecture shift at different speeds to prevent fake 2D sliding motion.
    - **Optical Causality & Dolly Zoom (`f/d` Conservation)**: Physical push-in widens perspective and separates planes; optical zoom flattens depth without parallax shift; a Dolly Zoom / vertigo shot must simultaneously move opposite to the zoom (`camera dollies backward while zooming in, keeping subject framing constant as the background violently stretches/compresses`).
-   - **26 Camera Cards & `[LOCKED FIXED CAMERA]` Discipline**: Choose camera movement strictly from narrative intent (reveal, pressure, intimacy, isolation, disorientation). When `[LOCKED FIXED CAMERA]` is active, hold a rock-steady tripod (zero pan, tilt, dolly, or zoom) and drive 100% of energy through continuous forward subject motion and ambient dynamics.
+   - **26 Camera Cards Discipline**: Choose camera movement strictly from narrative intent (reveal, pressure, intimacy, isolation, disorientation).
 2. **15 Shot-Scale Progression (`Extreme Long / Full / Medium / Medium-Close / Extreme Close-Up`)**:
    - Honor the intentional scale step between adjacent beats: translate wide/full beats with clear spatial blocking arcs and close-ups/inserts with tactile micro-motion (finger twitch, pupil contraction, breath mist, paper tremor). Never flatten distinct shot-scale inserts into generic medium coverage.
 3. **6 Seamless Shot Transitions & Cross-Episode Bridge (`Ep N-1 Finale` → `Ep N Beat 1`)**:
@@ -66,7 +66,6 @@ SEEDANCE2_CINEMATIC_SKILL_DIRECTIVES = """
 1. **Azhe 5-Variable Camera Choreography & Parallax Proof**:
    - Specify physical camera displacement (`推轨前进/后拉/横移/环绕/升降/甩镜`) separately from subject action, and state visible foreground/midground/background parallax shifts so movement feels three-dimensional.
    - Respect optical causality: physical dolly shifts perspective/parallax, focal zoom compresses background, Hitchcock Dolly Zoom pairs reverse dolly with opposite zoom (`主体占比不变、背景纵深剧烈压缩或拉伸`).
-   - When `locked_with_prev` / `locked_with_next` / `locked_camera_beat` is set, enforce a locked tripod (`固定机位严禁推拉摇移`) and carry continuity purely via subject motion.
 2. **Shot-Scale Rhythm & Avoid Stagnant Medium Shots**:
    - Match visual motion density to shot scale (Far/Full = spatial blocking & silhouette sweep; Medium = torso/interaction axis; Close-Up/ECU = iris, fingertip, key prop micro-dynamics) and preserve deliberate scale progression across `prev_beat` → current → `next_beat`.
 3. **6 Seamless Shot Transitions & Cross-Episode Continuation**:

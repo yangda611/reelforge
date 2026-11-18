@@ -79,7 +79,7 @@ Plan 中的边只表示真实输入依赖，不表示时间顺序。节点 ID �
 
 语音节点默认使用系统预设音色，不要求用户上传参考音频。只有用户明确提出“使用我的声音”“克隆声音”或指定项目/角色声线时，才把节点切换为克隆音色并检查对应参考声线；背景音乐始终走 music 模式，不依赖声线样本。
 
-不要列 `freezone.sketch_from_context`、`freezone.frame_from_context`、`freezone.scene_360`、`agent.review_frame`。这些是画布原子执行技能，不是工作流技能。
+不要列 `freezone.scene_360`、`agent.review_frame`。这些是画布原子执行技能，不是工作流技能。
 
 ## 路由
 

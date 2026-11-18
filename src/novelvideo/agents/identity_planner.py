@@ -1492,11 +1492,22 @@ class IdentityPlanner:
                 "\n".join((character_name, visual_state, reason))
             )
             language_instruction = asset_language_instruction(language)
+            system_prompt = f"{APPEARANCE_GENERATION_PROMPT}\n{language_instruction}"
+            from novelvideo.skills.realistic_asset_skills import (
+                get_live_action_character_extraction_directives,
+                is_live_action_project,
+            )
+
+            if is_live_action_project(
+                state_dir=getattr(self.cognee_store, "state_dir", None)
+            ):
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    f"{get_live_action_character_extraction_directives()}"
+                )
             appearance_agent = Agent(
                 self._identity_model("IDENTITY_PLANNER_APPEARANCE_MODEL"),
-                system_prompt=(
-                    f"{APPEARANCE_GENERATION_PROMPT}\n{language_instruction}"
-                ),
+                system_prompt=system_prompt,
                 model_settings=self._identity_model_settings(),
                 output_type=AppearanceDescription,
                 retries={"output": 2},

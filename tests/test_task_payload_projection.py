@@ -132,15 +132,10 @@ def _registered_task_types() -> tuple[str, ...]:
 
 def test_registered_task_types_are_the_full_bridge_set() -> None:
     """Guards the iteration source itself: T1 is only meaningful if it sees them all."""
-    # 22 → 24：同时保留逐帧拉片与参考图转白模两个新增任务。
     task_types = _registered_task_types()
-    # 2026-09-29 新增 `freezone_image_to_blockout`（参考图转白模），
-    # 它不声明投影需求，输入随任务 payload 走。
-    assert len(task_types) == 24, task_types
+    # `freezone_image_to_blockout`（参考图转白模）不声明投影需求，输入随任务 payload 走。
+    assert len(task_types) == 21, task_types
     assert {
-        "mainline_sketch_from_context",
-        "mainline_frame_from_context",
-        "mainline_director_control_sketch",
         "freezone_audio_speech",
         "freezone_workflow_confirm",
         "freezone_image_vectorize",
@@ -186,15 +181,15 @@ async def test_read_projection_round_trips_what_build_projection_wrote(
     from novelvideo.task_backend.projection import build_projection, read_projection
 
     projection = await build_projection(
-        _FakeStore(), _build_context(), task_type="mainline_sketch_from_context"
+        _FakeStore(), _build_context(), task_type="freezone_audio_speech"
     )
     assert projection is not None
     payload = {"episode": 1, "projection": projection}
 
     proj = read_projection(payload)
     assert proj is not None
-    assert proj.task_type == "mainline_sketch_from_context"
-    assert proj.require("scenes")
+    assert proj.task_type == "freezone_audio_speech"
+    assert proj.require("narration_style") == "first_person"
 
 
 def test_read_projection_returns_none_when_not_injected() -> None:
@@ -209,7 +204,7 @@ def test_read_projection_raises_when_a_required_field_is_missing() -> None:
     payload = {
         "projection": {
             "projection_version": 1,
-            "task_type": "mainline_sketch_from_context",
+            "task_type": "freezone_audio_speech",
             "fields": {},
         }
     }

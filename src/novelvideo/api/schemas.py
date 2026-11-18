@@ -103,18 +103,6 @@ class ProjectUpdate(BaseModel):
     use_director_render: Optional[bool] = None
     video_resolution: Optional[str] = None
     add_subtitles: Optional[bool] = None
-    sketch_image_selection: Optional[str] = None
-    render_image_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-
-
-class RenderSettingsUpdate(BaseModel):
-    render_image_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-
-
-class SketchSettingsUpdate(BaseModel):
-    sketch_image_selection: Optional[str] = None
 
 
 class BeatBackgroundAnchorUpdate(BaseModel):
@@ -198,10 +186,6 @@ class Seedance2PromptGenerateRequest(BaseModel):
     s9_include_first_frame: Optional[bool] = None
 
 
-class BeatVideoPromptGenerateRequest(BaseModel):
-    language: str = "zh"
-
-
 class Seedance2AssetDeleteRequest(BaseModel):
     media_kind: Literal["images", "audios"]
     path: str
@@ -224,20 +208,11 @@ class Seedance2AssetAudioTrimRequest(BaseModel):
     duration_seconds: float = 4
 
 
-# ── 图片池选择 ────────────────────────────────────────────────────────────────
-
-
-class PoolSelectRequest(BaseModel):
-    pool_id: str
-    force: bool = False
+# ── 视频池选择 ────────────────────────────────────────────────────────────────
 
 
 class VideoPoolSelectRequest(BaseModel):
     pool_id: str
-
-
-class GlobalOptimizeRequest(BaseModel):
-    language: str = "en"  # "zh" 中文 / "en" SuperPower英文(Gemini)
 
 
 class VideoGenerateRequest(BaseModel):
@@ -288,63 +263,6 @@ class TTSPreviewRequest(BaseModel):
     provider: Optional[str] = None
     voice: Optional[str] = None
     model: Optional[str] = None
-
-
-# ── 草图 & 首帧 ──────────────────────────────────────────────────────────────
-
-
-class SketchGenerateRequest(BaseModel):
-    style: Optional[str] = None
-    model: str = "nanobanana"
-    grid_index: int = 0
-    sketch_scene_grouping: bool = True
-    aspect_ratio: Literal["2:3", "16:9"] = "2:3"
-    image_generation_selection: Optional[str] = None
-
-
-# ── 再生 ──────────────────────────────────────────────────────────────────────
-
-
-class GridRegenerateRequest(BaseModel):
-    style: Optional[str] = None
-    model: str = "nanobanana"
-    scene_grouping: bool = False
-    character_grouping: bool = False
-    image_generation_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-
-
-class BeatsRegenerateRequest(BaseModel):
-    beat_indices: list[int]
-    style: Optional[str] = None
-    model: str = "nanobanana"
-    mode_key: str = "1x1_2-3"
-    image_generation_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-    batch_id: Optional[str] = Field(default=None, max_length=100)
-    batch_size: Optional[int] = Field(default=None, ge=1, le=9)
-
-
-class SketchRegenerateRequest(BaseModel):
-    beat_indices: list[int]
-    style: Optional[str] = None
-    model: str = "nanobanana"
-    mode_key: str = "1x1_2-3"
-    image_generation_selection: Optional[str] = None
-
-
-class SketchRegenQueueItem(BaseModel):
-    id: str
-    modeKey: str
-    modeLabel: str
-    beatNumbers: list[int] = Field(default_factory=list)
-    sceneIds: list[str] = Field(default_factory=list)
-    createdAt: str
-    taskScope: Optional[str] = None
-
-
-class SketchRegenQueueUpdate(BaseModel):
-    items: list[SketchRegenQueueItem] = Field(default_factory=list)
 
 
 class OperatorPasswordVerifyRequest(BaseModel):
@@ -523,42 +441,6 @@ class FreezoneEditRequest(BaseModel):
             "媒体模型目录声明的动态参数取值。与 /freezone/gen 同一口径 —— "
             "带参考图的图编辑走这条路由，少了这个字段目录参数在图编辑侧等于没生效"
         ),
-    )
-
-
-class FreezoneSketchFromContextRequest(BaseModel):
-    episode: int
-    beat: int
-    aspect_ratio: Literal["2:3", "16:9"] = "2:3"
-    source_kind: Literal[
-        "beat",
-        "selected_background",
-        "director_combined",
-        "background_candidate",
-    ] = "beat"
-    source_url: Optional[str] = None
-    canvas_id: str = Field(default="")
-    node_id: str = Field(default="")
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
-
-
-class FreezoneFrameFromContextRequest(BaseModel):
-    episode: int
-    beat: int
-    aspect_ratio: Literal["2:3", "16:9"] = "2:3"
-    sketch_url: str
-    background_url: Optional[str] = None
-    identity_urls: list[str] = Field(default_factory=list)
-    prop_urls: list[str] = Field(default_factory=list)
-    canvas_id: str = Field(default="")
-    node_id: str = Field(default="")
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    quality: Literal["low", "medium", "high"] = Field(
-        default="medium",
-        description="图片画质档位，默认 medium",
     )
 
 
@@ -2482,77 +2364,6 @@ class IdentityUpdate(BaseModel):
 
 class ScriptSaveRequest(BaseModel):
     beats: list[dict]
-
-
-# ── 草图切割 ─────────────────────────────────────────────────────────────────
-
-
-class GridCutRequest(BaseModel):
-    grid_type: Literal["render", "sketch"] = "sketch"
-    mode_key: str | None = None
-    rows: int
-    cols: int
-    beat_start: int
-    beat_end: int
-    beat_numbers: list[int] | None = None
-
-
-class GridSketchPreviewRequest(BaseModel):
-    rows: int = Field(..., ge=1)
-    cols: int = Field(..., ge=1)
-    beat_numbers: list[int] = Field(..., min_length=1)
-
-
-# ── 渲染计划 ─────────────────────────────────────────────────────────────────
-
-
-class RenderPlanRequest(BaseModel):
-    beat_indices: list[int] = Field(..., min_length=1)
-    strategy: Literal["location", "naive"] = "naive"
-    force_one_by_one: bool = False
-    aspect_mode: str = Field(..., description="e.g. '9:16', '1:1', '16:9'")
-    image_generation_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-
-
-class PlanEntryOut(BaseModel):
-    mode_key: str
-    rows: int
-    cols: int
-    beat_numbers: list[int]
-    location: str = ""
-    padding_count: int = 0
-    reasons: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class RenderPlanResponse(BaseModel):
-    plan: list[PlanEntryOut]
-    plan_hash: str
-    input_fingerprint: str
-    strategy: str
-    total_beats: int
-    total_grids: int
-
-
-class RenderPlanExecuteRequest(BaseModel):
-    plan: list[PlanEntryOut]
-    plan_hash: str
-    input_fingerprint: str
-    strategy: Literal["location", "naive"]
-    aspect_mode: str
-    force_one_by_one: bool = False
-    custom_plan: bool = False
-    beat_indices: list[int] = Field(..., min_length=1)
-    image_generation_selection: Optional[str] = None
-    sketch_aspect_padding: Optional[bool] = None
-
-
-class RenderPlanExecuteResponse(BaseModel):
-    task_type: str
-    message: str
-    scope: str
-    resolved_grids: list[PlanEntryOut]
 
 
 # ── 风格预览 ─────────────────────────────────────────────────────────────────

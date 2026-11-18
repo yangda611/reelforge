@@ -59,7 +59,7 @@ vi.mock("@/lib/queries/tasks", () => ({
 
 describe("serializeKey", () => {
   const base: TaskKey = {
-    taskType: "sketch_generation",
+    taskType: "single_video",
     project: "demo",
     episode: 1,
   };
@@ -70,7 +70,7 @@ describe("serializeKey", () => {
 
   it("includes taskType, project, episode in the output", () => {
     const s = serializeKey(base);
-    expect(s).toContain("sketch_generation");
+    expect(s).toContain("single_video");
     expect(s).toContain("demo");
     expect(s).toContain("1");
   });
@@ -298,7 +298,7 @@ describe("ownership transitions emit snapshot updates", () => {
 // canonical map entry.
 
 const KEY: TaskKey = {
-  taskType: "sketch_generation",
+  taskType: "single_video",
   project: "demo",
   episode: 1,
 };

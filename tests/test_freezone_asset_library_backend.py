@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +16,6 @@ from novelvideo.freezone.presets import (
     _add_scene_refs,
     _is_asset_library_reference,
     _nearest_supported_image_aspect_ratio,
-    _project_sketch_aspect_ratio,
     build_episode_preset_context,
     build_asset_preset_context,
     build_canvas_payload_from_context,
@@ -922,7 +920,6 @@ async def test_beat_preset_keeps_minimal_context_refs(tmp_path: Path) -> None:
     _write_fake_image(tmp_path / "assets/scenes/小区/master.png")
     _write_fake_image(tmp_path / "assets/scenes/小区/reverse_master.png")
     _write_fake_image(tmp_path / "assets/scenes/小区/scene_panorama_sketch_360.png")
-    _write_fake_image(tmp_path / "sketches/ep001/beat_02.png")
     _write_fake_image(tmp_path / "frames/ep001/beat_02.png")
     _write_fake_image(tmp_path / "director_control_frames/ep001/beat_02/combined.png")
     _write_fake_image(tmp_path / "director_control_frames/ep001/beat_02/selected_background.png")
@@ -964,67 +961,10 @@ async def test_beat_preset_keeps_minimal_context_refs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_beat_preset_current_sketch_ignores_pool_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from novelvideo.utils import state_index_files
-
-    monkeypatch.setattr(state_index_files, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(state_index_files, "STATE_DIR", str(tmp_path / "state"))
-    pool_cell = tmp_path / "grids/ep001/sketch/beat_02_t20260101010101.png"
-    _write_fake_image(pool_cell)
-    (tmp_path / "grids/ep001/pool_index.json").write_text(
-        json.dumps(
-            {
-                "episode": 1,
-                "generated_at": "2026-01-01T00:00:00",
-                "version": 2,
-                "modes": {},
-                "grids": [],
-                "images": [
-                    {
-                        "id": "sketch_beat_02_t20260101010101",
-                        "mode": "sketch",
-                        "grid_index": 0,
-                        "cell_index": 0,
-                        "grid_path": "",
-                        "cell_path": "sketch/beat_02_t20260101010101.png",
-                        "row": 0,
-                        "col": 0,
-                        "original_beat": 2,
-                        "generated_at": "2026-01-01T00:00:00",
-                        "type": "sketch",
-                    }
-                ],
-                "beat_assignments": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    context = await freezone_presets.build_beat_preset_context(
-        project_id="proj_demo",
-        username="admin",
-        project="demo",
-        project_dir=tmp_path,
-        store=_FakeBeatWorkbenchStore(),
-        episode=1,
-        beat=2,
-        primary_slot="sketch",
-    )
-
-    current_sketch_refs = [ref for ref in context["refs"] if ref["role"] == "current_sketch"]
-    assert current_sketch_refs == []
-    assert all("grids/ep001/sketch" not in str(ref.get("rel_path")) for ref in context["refs"])
-
-
-@pytest.mark.asyncio
 async def test_beat_preset_falls_back_to_scene_master_for_missing_selected_background(
     tmp_path: Path,
 ) -> None:
     _write_fake_image(tmp_path / "assets/scenes/小区/master.png")
-    _write_fake_image(tmp_path / "sketches/ep001/beat_02.png")
 
     context = await freezone_presets.build_beat_preset_context(
         project_id="proj_demo",
@@ -1077,16 +1017,6 @@ def test_beat_preset_includes_refs_as_workflow_nodes() -> None:
         },
         "prop_menu": [{"prop_id": "业主守则"}],
         "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "label": "current sketch",
-                "rel_path": "sketches/ep001/beat_02.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_02.png",
-                "exists": True,
-                "aspect_ratio": "16:9",
-                "meta": {"episode": 1, "beat": 2},
-            },
             {
                 "kind": "render",
                 "role": "current_frame",
@@ -1157,10 +1087,8 @@ def test_beat_preset_includes_refs_as_workflow_nodes() -> None:
     )
     nodes = {node["id"]: node for node in payload["nodes"]}
     edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
-    edge_by_pair = {(edge["source"], edge["target"]): edge for edge in payload["edges"]}
 
-    assert "prompt_beat_visual" in nodes
-    assert "Colorize this" in nodes["prompt_beat_visual"]["data"]["content"]
+    assert "prompt_beat_visual" not in nodes
     assert "context_beat" in nodes
     assert nodes["context_beat"]["type"] == "beatContextNode"
     assert nodes["context_beat"]["measured"] == {"width": 420, "height": 560}
@@ -1184,11 +1112,12 @@ def test_beat_preset_includes_refs_as_workflow_nodes() -> None:
         "beat": 2,
     }
     # Skill Hub cleanup: legacy workflow trigger nodes and embedded
-    # mainline_slot panels are gone. Canonical source nodes keep slot metadata,
-    # but executable dependencies go through SkillNode edges.
+    # mainline_slot panels are gone. Canonical source nodes keep slot metadata.
     assert "workflow_selected_background_to_sketch" not in nodes
     assert "workflow_director_combined_to_sketch" not in nodes
     assert "workflow_background_sketch_to_frame" not in nodes
+    assert not any("sketch" in node_id for node_id in nodes)
+    assert not any(node_id.startswith("skill_frame") for node_id in nodes)
     frame_data = nodes["ref_current_frame_1"]["data"]
     assert frame_data["preset_managed"] is True
     assert frame_data["slot_target"] == {"kind": "frame", "episode": 1, "beat": 2}
@@ -1204,23 +1133,9 @@ def test_beat_preset_includes_refs_as_workflow_nodes() -> None:
         for ctx in nodes["ref_current_frame_1"]["data"]["mainline_context"]
     )
     assert nodes["ref_character_identity_1"]["data"]["mainline_context"][0]["kind"] == "identity"
-    assert ("context_beat", "prompt_beat_visual") in edges
-    role_edges = {
-        (edge["source"], edge["target"], (edge.get("data") or {}).get("role"))
-        for edge in payload["edges"]
-        if (edge.get("data") or {}).get("edgeKind") == "role_binding"
-    }
-    assert ("context_beat", "skill_frame_from_context", "beat_context") in role_edges
-    assert ("ref_current_sketch_1", "skill_frame_from_context", "sketch") in role_edges
-    assert ("ref_selected_background_1", "skill_frame_from_context", "background") in role_edges
-    assert ("ref_character_identity_1", "skill_frame_from_context", "identity") not in role_edges
-    assert ("ref_prop_reference_1", "skill_frame_from_context", "prop") not in role_edges
-    assert ("skill_frame_from_context", "ref_current_frame_1") in edges
-    assert ("prompt_beat_visual", "ref_current_frame_1") not in edges
-    assert ("ref_current_sketch_1", "ref_current_frame_1") not in edges
-    frame_output_edge = edge_by_pair[("skill_frame_from_context", "ref_current_frame_1")]
-    assert frame_output_edge["sourceHandle"] == "current_frame_candidate"
-    assert frame_output_edge["data"]["role"] == "current_frame_candidate"
+    assert not any(target == "ref_current_frame_1" for _source, target in edges)
+    assert ("context_beat", "skill_set_selected_background") in edges
+    assert ("skill_set_selected_background", "ref_selected_background_1") in edges
 
 
 def test_freezone_preset_maps_unknown_image_ratios_to_supported_generation_ratios() -> None:
@@ -1228,24 +1143,6 @@ def test_freezone_preset_maps_unknown_image_ratios_to_supported_generation_ratio
     assert _nearest_supported_image_aspect_ratio("75:112") == "2:3"
     assert _nearest_supported_image_aspect_ratio("56:75") == "3:4"
     assert _nearest_supported_image_aspect_ratio("43:24") == "16:9"
-
-
-def test_project_sketch_aspect_ratio_uses_episode_config_and_supported_fallback() -> None:
-    assert (
-        _project_sketch_aspect_ratio(
-            {"sketch_aspect_ratio_by_episode": {"1": "16:9"}},
-            1,
-        )
-        == "16:9"
-    )
-    assert (
-        _project_sketch_aspect_ratio(
-            {"sketch_aspect_ratio_by_episode": {"1": "17:25"}},
-            1,
-        )
-        == "2:3"
-    )
-    assert _project_sketch_aspect_ratio({}, 1) == "2:3"
 
 
 def test_beat_context_asset_omits_beat_director_control_frames() -> None:
@@ -1337,27 +1234,14 @@ def test_asset_library_reference_omits_director_json_metadata() -> None:
     )
 
 
-def test_beat_frame_preset_uses_readable_backend_layout(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def _fake_render_prompt(render_context: dict) -> str:
-        render_context["_freezone_render_reference_paths"] = [
-            str(tmp_path / "assets/characters/陈默/portrait.png"),
-            str(
-                tmp_path / "freezone/director_control_frames/ep001/beat_03/selected_background.png"
-            ),
-        ]
-        return "render prompt"
-
-    monkeypatch.setattr(freezone_presets, "_beat_render_prompt", _fake_render_prompt)
+def test_beat_frame_preset_uses_readable_backend_layout(tmp_path: Path) -> None:
     context = {
         "scope": "beat",
         "project_dir": str(tmp_path),
         "episode": 1,
         "beat": 3,
         "primary_slot": "frame",
-        "sketch_aspect_ratio": "2:3",
+        "frame_aspect_ratio": "2:3",
         "beat_data": {
             "beat_number": 3,
             "visual_description": "{{陈默_青年时期}}低头看着[[业主守则]]。",
@@ -1367,16 +1251,6 @@ def test_beat_frame_preset_uses_readable_backend_layout(
             "detected_props": ["业主守则"],
         },
         "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "label": "current sketch",
-                "rel_path": "sketches/ep001/beat_03.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_03.png",
-                "exists": True,
-                "aspect_ratio": "17:25",
-                "meta": {"episode": 1, "beat": 3, "primary_slot": "frame"},
-            },
             {
                 "kind": "frame",
                 "role": "current_frame",
@@ -1478,16 +1352,6 @@ def test_beat_frame_preset_uses_readable_backend_layout(
                 "aspect_ratio": "1:1",
                 "meta": {"episode": 1, "beat": 3},
             },
-            {
-                "kind": "sketch",
-                "role": "sketch_candidate",
-                "label": "beat_03_t1",
-                "rel_path": "grids/ep001/sketch/beat_03_t1.png",
-                "url": "/static/admin/demo/grids/ep001/sketch/beat_03_t1.png",
-                "exists": True,
-                "aspect_ratio": "17:26",
-                "meta": {"episode": 1, "beat": 3},
-            },
         ],
     }
 
@@ -1507,8 +1371,9 @@ def test_beat_frame_preset_uses_readable_backend_layout(
         "node_id": "director_capture",
     }
     assert nodes["context_beat"]["position"] == {"x": -1840, "y": -720}
-    assert nodes["prompt_beat_visual"]["position"] == {"x": -1840, "y": -260}
-    assert nodes["ref_current_sketch_1"]["position"] == {"x": 520, "y": -700}
+    assert "prompt_beat_visual" not in nodes
+    assert "ref_current_sketch_1" not in nodes
+    assert "ref_sketch_candidate_1" not in nodes
     assert nodes["ref_current_frame_1"]["position"] == {"x": 1680, "y": 260}
     assert nodes["ref_character_portrait_1"]["position"] == {"x": -1500, "y": 420}
     assert nodes["ref_prop_reference_1"]["position"] == {"x": -1080, "y": 1040}
@@ -1521,12 +1386,10 @@ def test_beat_frame_preset_uses_readable_backend_layout(
     assert nodes["ref_director_combined_1"]["position"] == {"x": -1080, "y": -360}
     assert nodes["ref_director_env_1"]["position"] == {"x": -1500, "y": 1560}
     assert nodes["ref_actor_mask_1"]["position"] == {"x": -1060, "y": 1940}
-    assert nodes["ref_sketch_candidate_1"]["position"] == {"x": 520, "y": 1040}
     assert nodes["skill_set_selected_background"]["position"] == {"x": -1560, "y": -1240}
     assert nodes["skill_set_director_combined"]["position"] == {"x": -1560, "y": -620}
-    assert nodes["skill_sketch_from_background"]["position"] == {"x": -360, "y": -1040}
-    assert nodes["skill_sketch_from_director_combined"]["position"] == {"x": -360, "y": -360}
-    assert nodes["skill_frame_from_context"]["position"] == {"x": 1020, "y": 260}
+    assert not any(node_id.startswith("skill_sketch") for node_id in nodes)
+    assert not any(node_id.startswith("skill_frame") for node_id in nodes)
     assert not any(node_id.startswith("prompt_scene_") for node_id in nodes)
     assert nodes["ref_current_frame_1"]["data"]["aspectRatio"] == "2:3"
     assert nodes["ref_current_frame_1"]["data"]["actualAspectRatio"] == "75:112"
@@ -1537,33 +1400,9 @@ def test_beat_frame_preset_uses_readable_backend_layout(
         "detected_identities": ["陈默_青年时期"],
         "detected_props": ["业主守则"],
     }
-    role_edges = {
-        (edge["source"], edge["target"], (edge.get("data") or {}).get("role"))
-        for edge in payload["edges"]
-        if (edge.get("data") or {}).get("edgeKind") == "role_binding"
-    }
-    assert ("context_beat", "skill_frame_from_context", "beat_context") in role_edges
-    assert ("ref_selected_background_1", "skill_frame_from_context", "background") in role_edges
     assert ("ref_director_env_1", "context_beat") not in edges
     slot_target = "ref_current_frame_1"
-    slot_inputs = {edge["source"] for edge in payload["edges"] if edge["target"] == slot_target}
-    assert slot_inputs == {"skill_frame_from_context"}
-    assert (
-        nodes["ref_current_sketch_1"]["position"]["x"]
-        > nodes["skill_sketch_from_background"]["position"]["x"]
-    )
-    assert (
-        nodes["ref_current_sketch_1"]["position"]["x"]
-        > nodes["skill_sketch_from_director_combined"]["position"]["x"]
-    )
-    assert (
-        nodes["ref_current_sketch_1"]["position"]["x"]
-        < nodes["skill_frame_from_context"]["position"]["x"]
-    )
-    assert (
-        nodes["ref_current_frame_1"]["position"]["x"]
-        > nodes["skill_frame_from_context"]["position"]["x"]
-    )
+    assert not [edge for edge in payload["edges"] if edge["target"] == slot_target]
     reference_paths = {
         ref.get("rel_path") for ref in payload["metadata"]["references"] if ref.get("rel_path")
     }
@@ -1573,293 +1412,6 @@ def test_beat_frame_preset_uses_readable_backend_layout(
     )
     assert "freezone/director_control_frames/ep001/beat_03/env_only.png" not in reference_paths
     assert "freezone/director_control_frames/ep001/beat_03/combined.png" not in reference_paths
-
-
-def test_beat_sketch_preset_uses_current_sketch_as_primary() -> None:
-    context = {
-        "scope": "beat",
-        "episode": 1,
-        "beat": 1,
-        "primary_slot": "sketch",
-        "beat_data": {
-            "beat_number": 1,
-            "visual_description": "黑屏标题卡",
-            "keyframe_prompt": "",
-            "scene_ref": None,
-        },
-        "refs": [
-            {
-                "kind": "frame",
-                "role": "current_frame",
-                "label": "current frame",
-                "rel_path": "frames/ep001/beat_01.png",
-                "url": "/static/admin/demo/frames/ep001/beat_01.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 1},
-            },
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "label": "current sketch",
-                "rel_path": "sketches/ep001/beat_01.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_01.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 1},
-            },
-            {
-                "kind": "director",
-                "role": "selected_background",
-                "label": "selected background",
-                "rel_path": "freezone/director_control_frames/ep001/beat_01/selected_background.png",
-                "url": "/static/admin/demo/freezone/director_control_frames/ep001/beat_01/selected_background.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 1},
-            },
-        ],
-    }
-
-    payload = build_canvas_payload_from_context(
-        context=context,
-        preset_key="beat:ep001:beat001:sketch",
-        default_push_target={"kind": "sketch", "episode": 1, "beat": 1},
-    )
-    nodes = {node["id"]: node for node in payload["nodes"]}
-    edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
-
-    assert "skill_frame_from_context" not in nodes
-    assert ("skill_sketch_from_background", "ref_current_sketch_1") in edges
-    assert ("skill_sketch_from_director_combined", "ref_current_sketch_1") in edges
-    assert ("prompt_beat_visual", "ref_current_sketch_1") not in edges
-    assert "default_push_target" not in payload["metadata"]
-    assert payload["metadata"]["workbench"] == {"kind": "beat", "primary_slot": "sketch"}
-
-
-def test_beat_sketch_preset_uses_marker_prompt_not_image_refs() -> None:
-    context = {
-        "scope": "beat",
-        "episode": 1,
-        "beat": 3,
-        "primary_slot": "sketch",
-        "beat_data": {
-            "beat_number": 3,
-            "visual_description": "{{陈默_青年时期}}手里拿着一叠[[业主守则]]。",
-            "keyframe_prompt": "",
-            "scene_ref": None,
-            "detected_identities": [],
-            "detected_props": [],
-        },
-        "prop_menu": [
-            {
-                "prop_id": "业主守则",
-                "prop_type": "document",
-                "visual_prompt": "一张白色A4打印纸",
-            }
-        ],
-        "sketch_context": {
-            "sketch_colors": {"陈默_青年时期": "#00FFFF FLUORESCENT CYAN"},
-            "characters": {
-                "陈默": {
-                    "name": "陈默",
-                    "gender": "男",
-                    "body_type": "普通体型",
-                    "identities": [
-                        {
-                            "identity_id": "陈默_青年时期",
-                            "identity_name": "青年时期",
-                            "appearance_details": "深灰连帽衫",
-                        }
-                    ],
-                }
-            },
-        },
-        "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "label": "current sketch",
-                "rel_path": "sketches/ep001/beat_03.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_03.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 3},
-            },
-            {
-                "kind": "identity",
-                "role": "character_identity",
-                "label": "陈默_青年时期",
-                "rel_path": "assets/characters/陈默/identities/青年时期.png",
-                "url": "/static/admin/demo/assets/characters/陈默/identities/青年时期.png",
-                "exists": True,
-                "aspect_ratio": "1:1",
-                "meta": {"character": "陈默", "identity_id": "陈默_青年时期"},
-            },
-            {
-                "kind": "identity",
-                "role": "character_portrait",
-                "label": "陈默 portrait",
-                "rel_path": "assets/characters/陈默/portrait.png",
-                "url": "/static/admin/demo/assets/characters/陈默/portrait.png",
-                "exists": True,
-                "aspect_ratio": "1:1",
-                "meta": {"character": "陈默"},
-            },
-            {
-                "kind": "prop",
-                "role": "prop_reference",
-                "label": "业主守则",
-                "rel_path": "assets/props/业主守则/reference_3view.png",
-                "url": "/static/admin/demo/assets/props/业主守则/reference_3view.png",
-                "exists": True,
-                "aspect_ratio": "1:1",
-                "meta": {"prop_id": "业主守则"},
-            },
-            {
-                "kind": "scene",
-                "role": "scene_director_pano_360",
-                "label": "小区 director pano 360",
-                "rel_path": "director_worlds/小区/v1/pano_360.png",
-                "url": "/static/admin/demo/director_worlds/小区/v1/pano_360.png",
-                "exists": True,
-                "aspect_ratio": "2:1",
-                "meta": {
-                    "scene_id": "小区",
-                    "environment_prompt": "小区内院，白色楼房，绿化很好",
-                },
-            },
-            {
-                "kind": "director",
-                "role": "scene_3gs_pano_ply",
-                "label": "小区 3D 世界（360）",
-                "rel_path": "director_worlds/小区/v1/pano_sharp_merged.ply",
-                "url": "/static/admin/demo/director_worlds/小区/v1/pano_sharp_merged.ply",
-                "exists": True,
-                "media_type": "file",
-                "aspect_ratio": "1:1",
-                "meta": {"scene_id": "小区", "ply_kind": "pano"},
-            },
-            {
-                "kind": "director",
-                "role": "selected_background",
-                "label": "selected background",
-                "rel_path": "freezone/director_control_frames/ep001/beat_03/selected_background.png",
-                "url": "/static/admin/demo/freezone/director_control_frames/ep001/beat_03/selected_background.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 3},
-            },
-        ],
-    }
-
-    payload = build_canvas_payload_from_context(
-        context=context,
-        preset_key="beat:ep001:beat003:sketch",
-        default_push_target={"kind": "sketch", "episode": 1, "beat": 3},
-    )
-    nodes = {node["id"]: node for node in payload["nodes"]}
-    edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
-    sketch_prompt = nodes["prompt_beat_visual"]["data"]["content"]
-
-    assert ("sketch_marker_context", "prompt_beat_visual") in edges
-    assert ("skill_sketch_from_background", "ref_current_sketch_1") in edges
-    assert ("skill_sketch_from_director_combined", "ref_current_sketch_1") in edges
-    assert ("prompt_beat_visual", "ref_current_sketch_1") not in edges
-    assert "ref_current_frame_1" not in nodes
-    assert "workflow_selected_background_to_sketch" not in nodes
-    assert "workflow_background_sketch_to_frame" not in nodes
-    sketch_data = nodes["ref_current_sketch_1"]["data"]
-    assert sketch_data["preset_managed"] is True
-    assert sketch_data["slot_target"] == {"kind": "sketch", "episode": 1, "beat": 3}
-    assert "workflow_kind" not in sketch_data
-    assert "typed_backend_action" not in sketch_data
-    assert nodes["ref_character_identity_1"]["type"] == "imageGenNode"
-    assert nodes["ref_character_portrait_1"]["type"] == "imageGenNode"
-    assert nodes["ref_prop_reference_1"]["type"] == "imageGenNode"
-    assert "ref_scene_director_pano_360_1" not in nodes
-    assert "ref_scene_3gs_pano_ply_1" not in nodes
-    assert not any(node_id.startswith("prompt_scene_") for node_id in nodes)
-    assert ("ref_character_identity_1", "ref_current_sketch_1") not in edges
-    assert ("ref_character_portrait_1", "ref_current_sketch_1") not in edges
-    assert ("ref_prop_reference_1", "ref_current_sketch_1") not in edges
-    assert "REFERENCE IMAGES: none" in sketch_prompt
-    assert "reference_images: []" in nodes["sketch_marker_context"]["data"]["content"]
-    assert "FLUORESCENT CYAN (#00FFFF)" in sketch_prompt
-    assert "业主守则" in sketch_prompt
-    assert "{{陈默_青年时期}}" not in sketch_prompt
-    assert "[[" not in sketch_prompt
-
-
-def test_beat_preset_detected_refs_edge_into_frame_workflow() -> None:
-    """Phase 5: beat 的 detected_identities / detected_props 要有显式 propagating
-    edge 连到 ref_current_frame_1 (取代旧 workflow_background_sketch_to_frame),
-    跟后端 `_collect_mainline_typed_reference_urls` 实际取的图集合一致 ——
-    画布上看到的连线 = render slot 实际会用的 image refs。
-    """
-    context = {
-        "scope": "beat",
-        "episode": 1,
-        "beat": 5,
-        "primary_slot": "render",
-        "beat_data": {
-            "beat_number": 5,
-            "visual_description": "陈默拿起[[业主守则]]，走到桌前。",
-            "detected_identities": ["陈默_青年时期"],
-            "detected_props": ["业主守则"],
-        },
-        "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "rel_path": "sketches/ep001/beat_05.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_05.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 5},
-            },
-            {
-                "kind": "director",
-                "role": "selected_background",
-                "rel_path": "freezone/director_control_frames/ep001/beat_05/selected_background.png",
-                "url": "/static/admin/demo/freezone/director_control_frames/ep001/beat_05/selected_background.png",
-                "exists": True,
-                "aspect_ratio": "16:9",
-                "meta": {"episode": 1, "beat": 5},
-            },
-            {
-                "kind": "identity",
-                "role": "character_identity",
-                "label": "陈默_青年时期",
-                "rel_path": "assets/characters/陈默/identities/青年时期.png",
-                "url": "/static/admin/demo/assets/characters/陈默/identities/青年时期.png",
-                "exists": True,
-                "aspect_ratio": "1:1",
-                "meta": {"character": "陈默", "identity_id": "陈默_青年时期"},
-            },
-            {
-                "kind": "prop",
-                "role": "prop_reference",
-                "label": "业主守则",
-                "rel_path": "assets/props/业主守则/reference_3view.png",
-                "url": "/static/admin/demo/assets/props/业主守则/reference_3view.png",
-                "exists": True,
-                "aspect_ratio": "1:1",
-                "meta": {"prop_id": "业主守则"},
-            },
-        ],
-    }
-    payload = build_canvas_payload_from_context(
-        context=context,
-        preset_key="beat:ep001:beat005:render",
-        default_push_target={"kind": "frame", "episode": 1, "beat": 5},
-    )
-    edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
-    assert ("ref_character_identity_1", "skill_frame_from_context") in edges
-    assert ("ref_prop_reference_1", "skill_frame_from_context") in edges
-    assert ("skill_frame_from_context", "ref_current_frame_1") in edges
-    assert ("ref_character_identity_1", "ref_current_frame_1") not in edges
-    assert ("ref_prop_reference_1", "ref_current_frame_1") not in edges
 
 
 def test_beat_preset_selected_background_placeholder_when_file_missing() -> None:
@@ -1904,7 +1456,7 @@ def test_beat_preset_selected_background_placeholder_when_file_missing() -> None
     }
 
 
-def test_beat_render_preset_emits_missing_sketch_and_frame_placeholders() -> None:
+def test_beat_render_preset_emits_missing_frame_placeholder() -> None:
     context = {
         "scope": "beat",
         "episode": 1,
@@ -1920,15 +1472,8 @@ def test_beat_render_preset_emits_missing_sketch_and_frame_placeholders() -> Non
         default_push_target={"kind": "frame", "episode": 1, "beat": 9},
     )
     nodes = {node["id"]: node for node in payload["nodes"]}
-    edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
 
-    assert nodes["ref_current_sketch_1"]["type"] == "imageGenNode"
-    assert nodes["ref_current_sketch_1"]["data"]["imageUrl"] is None
-    assert nodes["ref_current_sketch_1"]["data"]["slot_target"] == {
-        "kind": "sketch",
-        "episode": 1,
-        "beat": 9,
-    }
+    assert "ref_current_sketch_1" not in nodes
     assert nodes["ref_current_frame_1"]["type"] == "imageGenNode"
     assert nodes["ref_current_frame_1"]["data"]["imageUrl"] is None
     assert nodes["ref_current_frame_1"]["data"]["slot_target"] == {
@@ -1936,69 +1481,6 @@ def test_beat_render_preset_emits_missing_sketch_and_frame_placeholders() -> Non
         "episode": 1,
         "beat": 9,
     }
-    assert ("skill_sketch_from_background", "ref_current_sketch_1") in edges
-    assert ("skill_sketch_from_director_combined", "ref_current_sketch_1") in edges
-    assert ("ref_current_sketch_1", "skill_frame_from_context") in edges
-    assert ("skill_frame_from_context", "ref_current_frame_1") in edges
-
-
-def test_beat_sketch_preset_current_sketch_is_canonical_source_node() -> None:
-    """D0 Skill Hub cleanup: current_sketch remains a canonical source node.
-
-    It keeps slot commit metadata for future SkillNode outputs / Push, but no
-    longer embeds mainline_slot UI or typed action dispatch payload.
-    """
-    context = {
-        "scope": "beat",
-        "episode": 1,
-        "beat": 8,
-        "primary_slot": "sketch",
-        "beat_data": {"beat_number": 8, "visual_description": "test"},
-        "refs": [
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "rel_path": "sketches/ep001/beat_08.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_08.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 8},
-            },
-            {
-                "kind": "director",
-                "role": "selected_background",
-                "rel_path": "freezone/director_control_frames/ep001/beat_08/selected_background.png",
-                "url": "/static/admin/demo/freezone/director_control_frames/ep001/beat_08/selected_background.png",
-                "exists": True,
-                "aspect_ratio": "16:9",
-                "meta": {"episode": 1, "beat": 8},
-            },
-            {
-                "kind": "director",
-                "role": "director_combined",
-                "rel_path": "freezone/director_control_frames/ep001/beat_08/combined.png",
-                "url": "/static/admin/demo/freezone/director_control_frames/ep001/beat_08/combined.png",
-                "exists": True,
-                "aspect_ratio": "16:9",
-                "meta": {"episode": 1, "beat": 8},
-            },
-        ],
-    }
-    payload = build_canvas_payload_from_context(
-        context=context,
-        preset_key="beat:ep001:beat008:sketch",
-        default_push_target={"kind": "sketch", "episode": 1, "beat": 8},
-    )
-    nodes = {node["id"]: node for node in payload["nodes"]}
-    sketch_node = nodes["ref_current_sketch_1"]
-    data = sketch_node["data"]
-    assert data["preset_managed"] is True
-    assert data["committed_slot_url"] == "/static/admin/demo/sketches/ep001/beat_08.png"
-    assert data["slot_target"] == {"kind": "sketch", "episode": 1, "beat": 8}
-    assert "workflow_kind" not in data
-    assert "typed_backend_action" not in data
-    assert "typed_action_options" not in data
-    assert "typed_action_input_refs" not in data
 
 
 def test_beat_render_preset_current_frame_is_canonical_source_node() -> None:
@@ -2019,15 +1501,6 @@ def test_beat_render_preset_current_frame_is_canonical_source_node() -> None:
                 "role": "current_frame",
                 "rel_path": "frames/ep001/beat_06.png",
                 "url": "/static/admin/demo/frames/ep001/beat_06.png",
-                "exists": True,
-                "aspect_ratio": "2:3",
-                "meta": {"episode": 1, "beat": 6},
-            },
-            {
-                "kind": "sketch",
-                "role": "current_sketch",
-                "rel_path": "sketches/ep001/beat_06.png",
-                "url": "/static/admin/demo/sketches/ep001/beat_06.png",
                 "exists": True,
                 "aspect_ratio": "2:3",
                 "meta": {"episode": 1, "beat": 6},

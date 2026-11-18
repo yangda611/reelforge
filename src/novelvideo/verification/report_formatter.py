@@ -78,47 +78,6 @@ def format_consistency_report(data: dict, episode_num: int) -> str:
     return "\n".join(lines)
 
 
-def format_color_verify_report(data: dict, episode_num: int) -> str:
-    """将颜色验证结果格式化为 markdown 表格。"""
-    beat_results = data.get("beat_results", [])
-    if not beat_results:
-        return f"## 草图颜色验证报告 (EP{episode_num})\n\n无 beat 需要检查"
-
-    lines = [
-        f"## 草图颜色验证报告 (EP{episode_num})",
-        "",
-        "| Beat | 状态 | 预期角色 | 检测到 | 缺失 | 多余 |",
-        "|------|------|----------|--------|------|------|",
-    ]
-    status_icons = {"pass": "✅", "fail": "❌", "warn": "⚠️"}
-
-    for br in beat_results:
-        beat_num = br.get("beat_number", "?")
-        status = br.get("status", "pass")
-        icon = status_icons.get(status, "?")
-        expected = ", ".join(br.get("expected", [])) or "-"
-        detected = ", ".join(br.get("detected", [])) or "-"
-        missing_names = ", ".join(m.get("identity_id", "") for m in br.get("missing", [])) or "-"
-        extra_names = ", ".join(e.get("identity_id", "") for e in br.get("extra", [])) or "-"
-        lines.append(
-            f"| {beat_num} | {icon} | {expected} | {detected} | {missing_names} | {extra_names} |"
-        )
-
-    passed = data.get("passed_beats", 0)
-    total = data.get("total_beats", 0)
-    failed = data.get("failed_beats", 0)
-    warned = data.get("warned_beats", 0)
-    failed_nums = data.get("failed_beat_numbers", [])
-    lines.append("")
-    summary_parts = [f"{passed}/{total} beats 通过"]
-    if failed:
-        summary_parts.append(f"{failed} beats 失败 {failed_nums}")
-    if warned:
-        summary_parts.append(f"{warned} beats 警告")
-    lines.append(f"总结: {', '.join(summary_parts)}")
-    return "\n".join(lines)
-
-
 def format_episode_overview_report(data: dict, episode_num: int) -> str:
     """将整集分镜总览结果格式化为 markdown。"""
     passed = data.get("overall_passed", False)
@@ -193,11 +152,9 @@ def save_verify_report(
         filename = "consistency.json"
     elif verify_type == "frame_consistency":
         filename = "frame_consistency.json"
-    elif verify_type == "sketch_colors":
-        filename = "sketch_colors.json"
     elif verify_type == "episode_overview":
         filename = "episode_overview.json"
-    elif verify_type in ("continuity", "similarity", "sketch_select"):
+    elif verify_type in ("continuity", "similarity"):
         filename = f"{verify_type}.json"
     else:
         filename = f"beat_{beat_num:02d}_{verify_type}.json"

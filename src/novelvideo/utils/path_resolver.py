@@ -192,12 +192,6 @@ def compute_director_color_ref_path(project_dir: Path, episode: int, beat_num: i
     return str(path) if path.exists() else ""
 
 
-def compute_director_sketch_ref_path(project_dir: Path, episode: int, beat_num: int) -> str:
-    """动态计算 beat 级导演线稿参考路径。"""
-    path = compute_director_ref_dir(project_dir, episode, beat_num) / "director_sketch_ref.png"
-    return str(path) if path.exists() else ""
-
-
 def compute_director_blocking_ref_path(project_dir: Path, episode: int, beat_num: int) -> str:
     """动态计算 DirectorWorld 控制图路径。"""
     path = compute_director_ref_dir(project_dir, episode, beat_num) / "director_blocking_ref.png"
@@ -318,105 +312,6 @@ def compute_scoped_grid_filename(
         raise ValueError("scoped grid filename requires mode_key and beat_numbers")
     scope = selection_scope(mode_key, normalized)
     return f"{prefix}_{scope}.{ext.lstrip('.')}"
-
-
-def resolve_render_grid_path(
-    project_dir: Path,
-    episode: int,
-    mode_key: str,
-    beat_numbers: list[int] | tuple[int, ...],
-    *,
-    grid_index: int | None = None,
-) -> Path:
-    """优先返回 scoped 唯一路径；没有则 fallback 到旧的 grid_XX.png。"""
-    mode_dir = project_dir / "grids" / f"ep{episode:03d}" / mode_key
-    scoped_path = mode_dir / compute_scoped_grid_filename(
-        mode_key,
-        beat_numbers,
-        prefix="grid",
-        ext="png",
-    )
-    if scoped_path.exists():
-        return scoped_path
-    if grid_index is not None:
-        legacy_path = mode_dir / f"grid_{grid_index + 1:02d}.png"
-        if legacy_path.exists():
-            return legacy_path
-        return scoped_path
-    return scoped_path
-
-
-def resolve_sketch_grid_path(
-    project_dir: Path,
-    episode: int,
-    mode_key: str | None,
-    beat_numbers: list[int] | tuple[int, ...] | None,
-    *,
-    grid_index: int | None = None,
-    rows: int | None = None,
-    cols: int | None = None,
-    beat_start: int | None = None,
-    beat_end: int | None = None,
-) -> Path:
-    """优先返回 scoped 草图文件；没有则 fallback 到旧 sketch_g / sketch_b。"""
-    sketch_base = project_dir / "grids" / f"ep{episode:03d}" / "sketch"
-    normalized = [int(beat) for beat in (beat_numbers or []) if beat is not None]
-    if mode_key and normalized:
-        scoped_name = compute_scoped_grid_filename(
-            mode_key,
-            normalized,
-            prefix="sketch",
-            ext="jpg",
-        )
-        scoped_path = sketch_base / scoped_name
-        if scoped_path.exists():
-            return scoped_path
-    if grid_index is not None and rows is not None and cols is not None:
-        legacy_name = f"sketch_g{grid_index}_{rows}x{cols}.jpg"
-        legacy_path = sketch_base / legacy_name
-        if legacy_path.exists():
-            return legacy_path
-    if beat_start is not None and beat_end is not None and rows is not None and cols is not None:
-        old_name = f"sketch_b{beat_start}-{beat_end}_{rows}x{cols}.jpg"
-        old_path = sketch_base / old_name
-        if old_path.exists():
-            return old_path
-    if sketch_base.exists():
-        for ratio_dir in sketch_base.iterdir():
-            if not ratio_dir.is_dir():
-                continue
-            if mode_key and normalized:
-                candidate = ratio_dir / compute_scoped_grid_filename(
-                    mode_key,
-                    normalized,
-                    prefix="sketch",
-                    ext="jpg",
-                )
-                if candidate.exists():
-                    return candidate
-            if grid_index is not None and rows is not None and cols is not None:
-                candidate = ratio_dir / f"sketch_g{grid_index}_{rows}x{cols}.jpg"
-                if candidate.exists():
-                    return candidate
-            if (
-                beat_start is not None
-                and beat_end is not None
-                and rows is not None
-                and cols is not None
-            ):
-                candidate = ratio_dir / f"sketch_b{beat_start}-{beat_end}_{rows}x{cols}.jpg"
-                if candidate.exists():
-                    return candidate
-    if mode_key and normalized:
-        return sketch_base / compute_scoped_grid_filename(
-            mode_key,
-            normalized,
-            prefix="sketch",
-            ext="jpg",
-        )
-    if beat_start is not None and beat_end is not None and rows is not None and cols is not None:
-        return sketch_base / f"sketch_b{beat_start}-{beat_end}_{rows}x{cols}.jpg"
-    return sketch_base / "sketch_unknown.jpg"
 
 
 class PathResolver:
@@ -541,13 +436,6 @@ class PathResolver:
         )
         return override or source
 
-    def sketch(self, beat_num: int) -> Path:
-        """草图图片路径（显示用，类似 frame）。"""
-        return self.output_dir / "sketches" / self._ep_str / f"beat_{beat_num:02d}.png"
-
-    def sketches_dir(self) -> Path:
-        return self.output_dir / "sketches" / self._ep_str
-
     def audio(self, beat_num: int) -> Path:
         """音频路径。"""
         return self.output_dir / "audio" / self._ep_str / f"beat_{beat_num:02d}.mp3"
@@ -617,24 +505,6 @@ class PathResolver:
         except OSError:
             return None
 
-    def clean_sketches(self) -> int:
-        """清理该集的 sketch 展示文件（sketches/epXXX/）。
-
-        grids 目录保留不动。
-
-        Returns:
-            删除的文件数
-        """
-        import shutil
-
-        sketch_dir = self.output_dir / "sketches" / self._ep_str
-        if not sketch_dir.exists():
-            return 0
-        count = sum(1 for f in sketch_dir.rglob("*") if f.is_file())
-        shutil.rmtree(sketch_dir)
-        sketch_dir.mkdir(parents=True, exist_ok=True)
-        return count
-
     # === 目录 ===
 
     def frames_dir(self) -> Path:
@@ -699,38 +569,6 @@ class PathResolver:
         """角色资源目录（不依赖 episode）。"""
         return self.output_dir / "assets" / "characters" / char_name
 
-    def sketch_dir(self) -> Path:
-        """草图目录（flat，不按 ratio 分子目录）。
-
-        Returns:
-            草图目录路径，如 grids/ep001/sketch/
-        """
-        return self.output_dir / "grids" / self._ep_str / "sketch"
-
-    def render_dir(self) -> Path:
-        """渲染图输出目录（beat 中心命名格式）。"""
-        return self.output_dir / "grids" / self._ep_str / "render"
-
-    def has_sketch(self) -> bool:
-        """检查是否存在草图文件。"""
-        d = self.sketch_dir()
-        if not d.exists():
-            return False
-        # 新格式（flat）: beat_*_t*.*
-        if list(d.glob("beat_*_t*.*")):
-            return True
-        # 整图格式: sketch_g*_*x*.*
-        if list(d.glob("sketch_g*_*x*.*")):
-            return True
-        # 旧格式: sketch_b*_*x*.*
-        if list(d.glob("sketch_b*_*x*.*")):
-            return True
-        # 兼容旧 ratio 子目录（如 sketch/1-1/beat_*）
-        for sub in d.iterdir():
-            if sub.is_dir() and list(sub.glob("beat_*_t*.*")):
-                return True
-        return False
-
     # === Phase 2: Preset 目录 + Grid 文件名 ===
 
     def episode_grids_dir(self) -> Path:
@@ -752,7 +590,7 @@ class PathResolver:
         """生成整图文件名。
 
         Args:
-            grid_type: render | sketch
+            grid_type: render
             mode_key: 如 3x3, 1x1_9-16
             beat_nums: beat 编号列表
             ts: 时间戳字符串（YYYYMMDDHHmmss）
@@ -778,13 +616,6 @@ class PathResolver:
         """
         return f"beat_{beat_num:02d}_t{ts}.png"
 
-    def pool_index_path(self) -> Path:
-        """池索引文件路径。"""
-        return resolve_state_index_path(
-            self.output_dir / "grids" / self._ep_str,
-            "pool_index.json",
-        )
-
     def find_grid_image(
         self,
         grid_type: str,
@@ -796,7 +627,7 @@ class PathResolver:
         搜索顺序：
         1. 新 preset 目录: {preset}/{type}_{mode}_{beats}_grid_{ts}.png
         2. 旧 mode_key 目录: {mode_key}/grid_*.png
-        3. 旧 render/sketch 目录: render/regen_*.png, sketch/regen_*.png
+        3. 旧 render 目录: render/regen_*.png
 
         Returns:
             找到的文件路径，或 None
@@ -827,8 +658,8 @@ class PathResolver:
             for f in sorted(mode_dir.glob("grid_*.png")):
                 return f
 
-        # 3. 旧 render/sketch 目录
-        type_dir = ep_grids / ("sketch" if grid_type == "sketch" else "render")
+        # 3. 旧 render 目录
+        type_dir = ep_grids / "render"
         if type_dir.exists():
             for f in sorted(type_dir.glob(f"regen_{mode_key}_b*.png")):
                 return f

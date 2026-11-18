@@ -7,9 +7,9 @@ import type { CanvasEdge, CanvasNode } from "@/features/canvas/domain/canvasNode
 import type { SkillDefinition } from "@/features/freezone/context/skillRoles";
 
 const skill: SkillDefinition = {
-  id: "freezone.sketch_from_context",
+  id: "freezone.set_selected_background",
   provider: "freezone_mainline",
-  display_name: "Sketch From Context",
+  display_name: "Set Selected Background",
   description: "",
   inputs: [
     {
@@ -102,12 +102,12 @@ describe("applySkillRoleBindingConnection", () => {
   });
 
   it("connects a dragged uploadNode image into a background input whose accepts use backend node-type names", () => {
-    // 复刻真实 freezone.sketch_from_context 的 background accepts：node_types 用的是
+    // 复刻真实 freezone.set_selected_background 的 background accepts：node_types 用的是
     // 后端命名（uploadImageNode/sceneNode/...），不含前端真实的 uploadNode。
     const realSkill: SkillDefinition = {
-      id: "freezone.sketch_from_context",
+      id: "freezone.set_selected_background",
       provider: "freezone_mainline",
-      display_name: "Sketch From Context",
+      display_name: "Set Selected Background",
       description: "",
       inputs: [
         {
@@ -164,9 +164,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("normalizes loose-mode drags from a skill input handle back to an uploaded image", () => {
     const realSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -236,9 +236,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("infers an unbound required image input when a plain uploaded image lands on a skill body", () => {
     const frameSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -249,8 +249,8 @@ describe("applySkillRoleBindingConnection", () => {
           cardinality: "single",
         },
         {
-          role: "sketch",
-          label: "Sketch",
+          role: "source_image",
+          label: "Source image",
           accepts: {
             node_types: [
               "imageGenNode",
@@ -262,11 +262,8 @@ describe("applySkillRoleBindingConnection", () => {
               "identityNode",
               "propNode",
             ],
-            canonical_slot_kinds: ["sketch"],
-            candidate_origin_skill_ids: [
-              "freezone.sketch_from_context",
-              "freezone.sketch_from_director_combined",
-            ],
+            canonical_slot_kinds: ["frame"],
+            candidate_origin_skill_ids: ["freezone.set_selected_background"],
             media_kinds: ["image"],
             has_field: ["image_url"],
           },
@@ -328,10 +325,10 @@ describe("applySkillRoleBindingConnection", () => {
     expect(next[0]).toMatchObject({
       source: "plain_image",
       target: "skill",
-      targetHandle: "sketch",
+      targetHandle: "source_image",
       data: {
         edgeKind: "role_binding",
-        role: "sketch",
+        role: "source_image",
       },
     });
   });
@@ -387,9 +384,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("infers beat_context when a BeatContextNode drops on a skill node body", () => {
     const beatSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -434,11 +431,11 @@ describe("applySkillRoleBindingConnection", () => {
     expect((next[0]?.data as { role?: string })?.role).toBe("beat_context");
   });
 
-  it("connects imported identity assets to dynamic identity handles on frame_from_context", () => {
+  it("connects imported identity assets to dynamic identity handles on a multi-identity skill", () => {
     const frameSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -515,9 +512,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("does not rewrite a generic identity handle to an arbitrary beat-context identity", () => {
     const frameSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -614,9 +611,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("lands a node-body identity drop on the first unbound beat-context identity handle", () => {
     const frameSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {
@@ -716,9 +713,9 @@ describe("applySkillRoleBindingConnection", () => {
 
   it("does not turn a node-body prop drop into a no-prop sentinel reference handle", () => {
     const frameSkill: SkillDefinition = {
-      id: "freezone.frame_from_context",
+      id: "freezone.scene_360",
       provider: "freezone_mainline",
-      display_name: "Frame From Context",
+      display_name: "Scene 360",
       description: "",
       inputs: [
         {

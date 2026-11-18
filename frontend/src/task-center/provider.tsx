@@ -85,15 +85,6 @@ function invalidateCompletedAssetQueries(
     return;
   }
 
-  if (task.task_type === TASK_TYPES.BEAT_VIDEO_PROMPT) {
-    if (task.episode > 0) {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.beats(projectId, task.episode),
-      });
-    }
-    return;
-  }
-
   if (task.task_type === "build_characters") {
     queryClient.invalidateQueries({ queryKey: queryKeys.characters(projectId) });
     return;

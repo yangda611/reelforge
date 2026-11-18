@@ -4,8 +4,8 @@ from novelvideo.task_identity import selection_scope
 
 
 def test_selection_scope_is_order_sensitive():
-    assert selection_scope("2x2_2-3_sketch", [1, 41, 2]) != selection_scope(
-        "2x2_2-3_sketch",
+    assert selection_scope("2x2_2-3_render", [1, 41, 2]) != selection_scope(
+        "2x2_2-3_render",
         [1, 2, 41],
     )
 
@@ -55,92 +55,6 @@ def test_video_duration_uses_estimate_after_audio_and_user_overrides():
         )
         == 6.0
     )
-
-
-def test_manual_shot_segments_only_include_missing_manual_sketches(tmp_path):
-    from novelvideo.manual_shots import missing_manual_shot_segments
-
-    def _scene(scene_id):
-        return {"scene_id": scene_id}
-
-    beats = [
-        {"beat_number": 1, "shot_order": 10, "scene_ref": _scene("地下室")},
-        {
-            "beat_number": 41,
-            "shot_order": 15,
-            "is_manual_shot": True,
-            "scene_ref": _scene("地下室"),
-        },
-        {
-            "beat_number": 44,
-            "shot_order": 17,
-            "is_manual_shot": True,
-            "scene_ref": _scene("镇口"),
-        },
-        {
-            "beat_number": 42,
-            "shot_order": 18,
-            "is_manual_shot": True,
-            "scene_ref": _scene("地下室"),
-        },
-        {"beat_number": 2, "shot_order": 20, "scene_ref": _scene("地下室")},
-        {"beat_number": 3, "shot_order": 30, "scene_ref": _scene("镇口")},
-        {
-            "beat_number": 43,
-            "shot_order": 35,
-            "is_manual_shot": True,
-            "scene_ref": _scene("镇口"),
-        },
-        {"beat_number": 4, "shot_order": 40, "scene_ref": _scene("镇口")},
-    ]
-    (tmp_path / "beat_42.png").write_bytes(b"existing")
-
-    segments = missing_manual_shot_segments(beats, tmp_path)
-
-    assert segments == [[41], [44], [43]]
-
-
-def test_storyboard_manual_sketch_beats_exclude_manual_space_maps():
-    from novelvideo.manual_shots import storyboard_beats_for_manual_sketches
-
-    beats = [
-        {"beat_number": 1, "visual_description": "普通镜头"},
-        {
-            "beat_number": 41,
-            "is_manual_shot": True,
-            "visual_description": "[space_map] 二楼平面图",
-        },
-        {
-            "beat_number": 42,
-            "is_manual_shot": True,
-            "visual_description": "手工补一个表情",
-        },
-    ]
-
-    assert [
-        beat["beat_number"] for beat in storyboard_beats_for_manual_sketches(beats)
-    ] == [
-        1,
-        42,
-    ]
-
-
-def test_manual_sketch_mode_reuses_normal_sketch_grid_split():
-    from novelvideo.generators.nanobanana_grid import (
-        sketch_scene_grid_split as sketch_location_grid_split,
-    )
-    from novelvideo.manual_shots import choose_manual_sketch_mode_key
-
-    for count in range(1, 9):
-        beats = [
-            {"beat_number": idx, "visual_description": f"手工镜头 {idx}"}
-            for idx in range(1, count + 1)
-        ]
-
-        assert (
-            choose_manual_sketch_mode_key(count)
-            == sketch_location_grid_split(beats)[0]["mode_key"]
-        )
 
 
 def test_srt_timing_advances_across_silent_manual_shots():
@@ -738,8 +652,8 @@ async def test_insert_manual_shot_does_not_reuse_existing_asset_number(tmp_path)
 
     project_dir = tmp_path / "user" / "project"
     project_dir.mkdir(parents=True)
-    (project_dir / "sketches" / "ep001").mkdir(parents=True)
-    (project_dir / "sketches" / "ep001" / "beat_03.png").write_bytes(b"stale")
+    (project_dir / "frames" / "ep001").mkdir(parents=True)
+    (project_dir / "frames" / "ep001" / "beat_03.png").write_bytes(b"stale")
     store = SQLiteStore(
         "user/project", output_dir=str(project_dir), state_dir=str(project_dir)
     )
@@ -856,43 +770,3 @@ async def test_delete_manual_shot_rejects_normal_beat(tmp_path):
         await delete_manual_shot(store, episode_number=1, beat_number=1)
 
     assert [beat["beat_number"] for beat in await store.get_beats_as_dicts(1)] == [1, 2]
-
-
-@pytest.mark.skip(
-    reason="v2.0: SketchModeStrategy 提示词模板已重写，feature 分支断言不再适用"
-)
-def test_sketch_prompt_treats_manual_panels_as_normal_visual_descriptions():
-    from novelvideo.generators.prompt_builder import (
-        GridConfig,
-        PromptComponents,
-        PromptContext,
-        PromptMode,
-        SketchModeStrategy,
-        StyleConfig,
-    )
-
-    ctx = PromptContext(
-        grid=GridConfig(rows=1, cols=2, aspect_ratio="4:3"),
-        characters={},
-        style=StyleConfig(style_keywords="test", avoid_keywords=""),
-        beats=[
-            {"beat_number": 1, "visual_description": "普通画面"},
-            {
-                "beat_number": 41,
-                "visual_description": "手工补眼神",
-                "is_manual_shot": True,
-            },
-        ],
-        mode=PromptMode.SKETCH,
-    )
-
-    prompt = SketchModeStrategy().build(ctx, PromptComponents())
-
-    assert (
-        "Read each panel's scene description, then DIRECT the shot yourself" in prompt
-    )
-    assert "Panel 1**: 普通画面" in prompt
-    assert "Panel 1** [MANDATORY SHOT DIRECTIVE]" not in prompt
-    assert "Panel 2** [MANDATORY SHOT DIRECTIVE]" not in prompt
-    assert "Panel 2**: 手工补眼神" in prompt
-    assert "DIRECT the shot yourself" in prompt

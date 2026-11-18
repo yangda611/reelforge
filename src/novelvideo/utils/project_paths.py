@@ -26,7 +26,6 @@ class ProjectPaths:
 
     LEGACY_RUNTIME_ITEMS = (
         "logs",
-        "temp_sketch_panels",
     )
 
     def __init__(self, user: str, project: str):
@@ -82,17 +81,13 @@ class ProjectPaths:
     def staging_dir(self) -> Path:
         return self.runtime_dir / "staging"
 
-    @property
-    def temp_sketch_panels_dir(self) -> Path:
-        return self.runtime_dir / "temp_sketch_panels"
-
     # ------------------------------------------------------------------ #
     # Globally shared paths (director OS foundation)                      #
     # ------------------------------------------------------------------ #
     # Definitions / training data / artifacts are shared across **all
     # users and all projects** in this installation. This is the true
     # flywheel — anyone's runs feed everyone's registry and training
-    # pool. Project facts (data.db, sketches, verify_reports) stay
+    # pool. Project facts (data.db, verify_reports) stay
     # per-project under `state/<user>/<project>/` and `output/...`.
     #
     # The old `user_shared_*` properties are kept as deprecated aliases
@@ -151,7 +146,6 @@ class ProjectPaths:
             self.runtime_dir,
             self.logs_dir,
             self.staging_dir,
-            self.temp_sketch_panels_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -186,7 +180,7 @@ class ProjectPaths:
             try:
                 if src.is_dir():
                     # Merge into dst — ensure_dirs() may have pre-created an
-                    # empty target (logs/, temp_sketch_panels/, ...).
+                    # empty target (logs/, ...).
                     cls._copy_tree(src, dst)
                 elif not dst.exists():
                     cls._copy_file(src, dst)

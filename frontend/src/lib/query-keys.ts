@@ -95,27 +95,9 @@ export const queryKeys = {
     ["projects", p, "episodes", ep, "script"] as const,
   beats: (p: string, ep: number) =>
     ["projects", p, "episodes", ep, "beats"] as const,
-  grids: (p: string, ep: number) =>
-    ["projects", p, "episodes", ep, "grids"] as const,
-  sketchRegenQueue: (p: string, ep: number) =>
-    ["projects", p, "episodes", ep, "sketch-regen-queue"] as const,
-  sketchImageUsage: (p: string, ep: number) =>
-    ["projects", p, "episodes", ep, "sketch-image-usage"] as const,
-  sketchPoseEditor: (p: string, ep: number, beat: number) =>
-    ["projects", p, "episodes", ep, "beats", beat, "sketch-pose-editor"] as const,
-  beatPanoBackgroundManifest: (p: string, ep: number, beat: number) =>
-    ["projects", p, "episodes", ep, "beats", beat, "pano-background-manifest"] as const,
-  beatDirectorStageManifest: (p: string, ep: number, beat: number) =>
-    ["projects", p, "episodes", ep, "beats", beat, "director-stage-manifest"] as const,
-  beatBackgroundAnchors: (p: string, ep: number, beat: number) =>
-    ["projects", p, "episodes", ep, "beats", beat, "background-anchors"] as const,
-  directorControlFrame: (p: string, ep: number, beat: number) =>
-    ["projects", p, "episodes", ep, "beats", beat, "director-control-frame"] as const,
   videoPool: (p: string, ep: number) =>
     ["projects", p, "episodes", ep, "video-pool"] as const,
   videoBackends: (p: string) => ["projects", p, "video-backends"] as const,
-  renderSettings: (p: string) => ["projects", p, "render-settings"] as const,
-  sketchSettings: (p: string) => ["projects", p, "sketch-settings"] as const,
   narratorVoice: (p: string) => ["projects", p, "narrator-voice"] as const,
   narratorVoiceSources: (p: string) =>
     ["projects", p, "narrator-voice", "sources"] as const,

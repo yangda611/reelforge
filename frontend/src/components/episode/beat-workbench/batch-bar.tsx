@@ -3,26 +3,10 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import {
-  Loader2,
-  Lock,
-  Mic2,
-  Palette,
-  Sparkles,
-  Wand2,
-} from "lucide-react";
+import { Loader2, Mic2 } from "lucide-react";
 
 import { useAudioBillingQuote, useGenerateAudio } from "@/lib/queries/audio";
-import {
-  useAssignColors,
-  useDetectIdentities,
-  usePlanFixedCameraLocks,
-} from "@/lib/queries/sketches";
-import {
-  useGlobalOptimize,
-  useGlobalOptimizeBillingQuote,
-  useVideoBackends,
-} from "@/lib/queries/video";
+import { useVideoBackends } from "@/lib/queries/video";
 import { useTaskController } from "@/hooks/use-task-controller";
 import { queryKeys } from "@/lib/query-keys";
 import { TASK_TYPES } from "@/lib/task-types";
@@ -31,15 +15,25 @@ import {
   backendErrorToastMessage,
   BillingRuleNotConfiguredError,
 } from "@/lib/api-errors";
-import type { SketchAspectRatio } from "@/lib/queries/sketch-settings";
-import { useGenerationCreditCost } from "@/lib/queries/generation-credit-cost";
+import type { ProjectAspectRatio } from "@/lib/aspect-ratio";
 import { CreditCostInline } from "@/components/credit-cost-inline";
 import { CreditCostPill } from "@/components/credits/credit-visual";
 import type { Beat } from "@/types/episode";
 
-import { RenderModelSelect } from "./render-settings-controls";
-import { SketchModelSelect, SketchAspectCheckbox } from "./sketch-settings-controls";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  WORKBENCH_SELECT_CONTENT_CLASS,
+  WORKBENCH_SELECT_ITEM_CLASS,
+  WORKBENCH_SELECT_TRIGGER_CLASS,
+} from "./toolbar-select-styles";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,10 +50,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-// 产品决定：这两个批量入口从工具栏下线，任何 spineTemplate 下都不给。后端路由、
+// 产品决定：整集音频入口从工具栏下线，任何 spineTemplate 下都不给。后端路由、
 // 账单口径和任务控制都原样留着（其它入口和历史任务仍要用），这里只掐掉入口。
 // 恢复时把常量翻回 true，下面原有的 spineTemplate 条件继续生效。
-const SHOW_GLOBAL_OPTIMIZE_ENTRY = false;
 const SHOW_EPISODE_AUDIO_ENTRY = false;
 
 const TOOLBAR_CONTROL_CLASS =
@@ -71,8 +64,54 @@ interface BatchBarProps {
   beats: Beat[];
   videoBackend: string;
   spineTemplate?: "drama" | "narrated";
-  sketchAspectRatio: SketchAspectRatio;
-  onSketchAspectRatioChange: (aspectRatio: SketchAspectRatio) => void;
+  aspectRatio: ProjectAspectRatio;
+  onAspectRatioChange: (aspectRatio: ProjectAspectRatio) => void;
+}
+
+function AspectRatioSelect({
+  aspectRatio,
+  onAspectRatioChange,
+}: {
+  aspectRatio: ProjectAspectRatio;
+  onAspectRatioChange: (aspectRatio: ProjectAspectRatio) => void;
+}) {
+  const { t } = useTranslation();
+  const label = t("episode.workbench.video.ratio");
+
+  return (
+    <div className="flex items-center gap-2.5 text-[11px]">
+      <Label className="whitespace-nowrap text-[11px] text-muted-foreground">
+        {label}
+      </Label>
+      <Select
+        value={aspectRatio}
+        onValueChange={(value) => {
+          if (!value) return;
+          onAspectRatioChange(value === "16:9" ? "16:9" : "2:3");
+        }}
+      >
+        <SelectTrigger
+          aria-label={label}
+          className={cn(WORKBENCH_SELECT_TRIGGER_CLASS, "w-[70px]")}
+        >
+          <SelectValue>{() => aspectRatio}</SelectValue>
+        </SelectTrigger>
+        <SelectContent
+          align="start"
+          sideOffset={8}
+          alignItemWithTrigger={false}
+          className={WORKBENCH_SELECT_CONTENT_CLASS}
+        >
+          <SelectItem value="2:3" className={WORKBENCH_SELECT_ITEM_CLASS}>
+            2:3
+          </SelectItem>
+          <SelectItem value="16:9" className={WORKBENCH_SELECT_ITEM_CLASS}>
+            16:9
+          </SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 export function BatchBar({
@@ -81,28 +120,12 @@ export function BatchBar({
   beats,
   videoBackend,
   spineTemplate = "drama",
-  sketchAspectRatio,
-  onSketchAspectRatioChange,
+  aspectRatio,
+  onAspectRatioChange,
 }: BatchBarProps) {
   const { t } = useTranslation();
 
-  const assignColors = useAssignColors(project, episode);
-  const detectIdentities = useDetectIdentities(project, episode);
-  const planFixedCamera = usePlanFixedCameraLocks(project, episode);
   const generateAudio = useGenerateAudio(project, episode);
-  const globalOptimize = useGlobalOptimize(project, episode);
-  const globalOptimizeAssetRevision = useMemo(
-    () =>
-      beats
-        .map((beat) => `${beat.beat_number}:${beat.sketch_url ? "1" : "0"}`)
-        .join(","),
-    [beats],
-  );
-  const globalOptimizeBillingQuote = useGlobalOptimizeBillingQuote(
-    project,
-    episode,
-    globalOptimizeAssetRevision,
-  );
   const episodeAudioRevision = useMemo(
     () =>
       beats
@@ -125,12 +148,6 @@ export function BatchBar({
     episodeAudioRevision,
   );
   const videoBackends = useVideoBackends(project);
-  const detectIdentitiesCost = useGenerationCreditCost("feature", "mainline.ai_identity_detection");
-  const globalOptimizeCostDisplay =
-    globalOptimizeBillingQuote.data?.data.display ??
-    (globalOptimizeBillingQuote.error instanceof BillingRuleNotConfiguredError
-      ? t("common.billingRuleNotConfiguredShort")
-      : null);
 
   const [errorDialog, setErrorDialog] = useState<{
     title: string;
@@ -147,20 +164,10 @@ export function BatchBar({
       queryKeys.pipelineStatus(project),
     ],
   });
-  const globalOptimizeTask = useTaskController({
-    key: { taskType: "global_optimize_video", project, episode },
-    invalidateKeys: [
-      queryKeys.beats(project, episode),
-      queryKeys.pipelineStatus(project),
-    ],
-    onError: (e) =>
-      showError(t("episode.workbench.batch.aiOptimizeTitle"), e || t("common.error")),
-  });
   const selectedVideoBackend = videoBackends.data?.data.find(
     (option) => option.value === videoBackend,
   );
   const audioUnavailableForVideoBackend = selectedVideoBackend?.is_seedance2 === true;
-  const showGlobalOptimize = SHOW_GLOBAL_OPTIMIZE_ENTRY && spineTemplate === "narrated";
   const episodeAudioCostDisplay =
     episodeAudioBillingQuote.data?.data.display ??
     (episodeAudioBillingQuote.error instanceof BillingRuleNotConfiguredError
@@ -168,33 +175,21 @@ export function BatchBar({
       : "");
   const episodeAudioPrereqErrors =
     episodeAudioBillingQuote.data?.data.prereq_errors ?? [];
-  const detectIdentitiesCostDisplay =
-    detectIdentitiesCost.data?.data.display ??
-    (detectIdentitiesCost.error instanceof BillingRuleNotConfiguredError
-      ? t("common.billingRuleNotConfiguredShort")
-      : null);
 
   const [confirm, setConfirm] = useState<{
     title: string;
     description: string;
     onConfirm: () => void;
-    costSource?: "episodeAudio" | "globalOptimize";
   } | null>(null);
 
   const askConfirm = (
     title: string,
     description: string,
     onConfirm: () => void,
-    costSource?: "episodeAudio" | "globalOptimize",
   ) => {
-    setConfirm({ title, description, onConfirm, costSource });
+    setConfirm({ title, description, onConfirm });
   };
-  const confirmCostDisplay =
-    confirm?.costSource === "episodeAudio"
-      ? episodeAudioCostDisplay
-      : confirm?.costSource === "globalOptimize"
-        ? globalOptimizeCostDisplay
-        : "";
+  const confirmCostDisplay = episodeAudioCostDisplay;
 
   const handleGenAllAudio = async () => {
     try {
@@ -208,102 +203,6 @@ export function BatchBar({
       toast.error(backendErrorToastMessage(error, t));
     }
   };
-  const handleGlobalOptimize = async () => {
-    try {
-      const res = await globalOptimize.mutateAsync();
-      if (res.ok === false) {
-        showError(t("episode.workbench.batch.aiOptimizeTitle"), res.error || t("common.error"));
-        return;
-      }
-      globalOptimizeTask.start();
-      toast.success(t("episode.workbench.batch.globalOptimizeStarted"));
-    } catch (error) {
-      toast.error(backendErrorToastMessage(error, t));
-    }
-  };
-  const handleAiDetect = async () => {
-    const toastId = toast.loading(
-      t("episode.workbench.batch.aiDetectRunning"),
-    );
-    try {
-      const res = await detectIdentities.mutateAsync();
-      if (!res.ok) {
-        toast.error(res.error ?? t("common.error"), { id: toastId });
-        return;
-      }
-      const {
-        total_beats,
-        total_identities,
-        total_props = 0,
-        review_message,
-      } = res.data;
-      const reviewMessage =
-        review_message || t("episode.workbench.batch.aiDetectReview");
-      if (total_identities === 0 && total_props === 0) {
-        toast.info(`${t("episode.workbench.batch.aiDetectEmpty")}\n${reviewMessage}`, {
-          id: toastId,
-        });
-        return;
-      }
-      toast.success(
-        `${t("episode.workbench.batch.aiDetectSuccess", {
-          beats: total_beats,
-          ids: total_identities,
-          props: total_props,
-        })}\n${reviewMessage}`,
-        { id: toastId },
-      );
-    } catch (error) {
-      toast.error(backendErrorToastMessage(error, t), { id: toastId });
-    }
-  };
-  const handleReassignColors = async () => {
-    try {
-      const res = await assignColors.mutateAsync({ force: true });
-      if (!res.ok) {
-        toast.error(res.error ?? t("common.error"));
-        return;
-      }
-      toast.success(
-        t("episode.workbench.batch.reassignColorsSuccess", {
-          count: res.data.count,
-          propCount: res.data.prop_count ?? 0,
-        }),
-      );
-    } catch {
-      toast.error(t("common.error"));
-    }
-  };
-  const handlePlanFixedCamera = async () => {
-    const toastId = toast.loading(
-      t("episode.workbench.batch.aiCameraLockRunning"),
-    );
-    try {
-      const res = await planFixedCamera.mutateAsync();
-      if (!res.ok) {
-        toast.error(res.error ?? t("common.error"), { id: toastId });
-        return;
-      }
-      const lockedBeats = res.data.locked_beats ?? [];
-      if (lockedBeats.length === 0) {
-        toast.info(t("episode.workbench.batch.aiCameraLockEmpty"), {
-          id: toastId,
-        });
-        return;
-      }
-      const preview = lockedBeats.slice(0, 6).map((n) => `#${n}`).join("、");
-      const suffix = lockedBeats.length > 6 ? "…" : "";
-      toast.success(
-        t("episode.workbench.batch.aiCameraLockSuccess", {
-          count: lockedBeats.length,
-          beats: `${preview}${suffix}`,
-        }),
-        { id: toastId },
-      );
-    } catch (error) {
-      toast.error(backendErrorToastMessage(error, t), { id: toastId });
-    }
-  };
 
   return (
     <div className="flex h-full w-full items-center px-3">
@@ -313,93 +212,15 @@ export function BatchBar({
         className="flex w-full min-w-0 flex-wrap items-center justify-center gap-x-7 gap-y-1.5"
       >
         <div className="flex min-w-0 flex-wrap items-center gap-5">
-          <SketchModelSelect project={project} />
-          <RenderModelSelect project={project} />
-          <SketchAspectCheckbox
-            aspectRatio={sketchAspectRatio}
-            onAspectRatioChange={onSketchAspectRatioChange}
-            flat
+          <AspectRatioSelect
+            aspectRatio={aspectRatio}
+            onAspectRatioChange={onAspectRatioChange}
           />
         </div>
 
         <span className="hidden h-5 w-px shrink-0 bg-border/75 lg:block" aria-hidden />
 
         <div className="flex min-w-0 flex-wrap items-center gap-4">
-          {showGlobalOptimize && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => askConfirm(t("episode.workbench.batch.aiOptimizeTitle"), t("episode.workbench.batch.aiOptimizeDesc"), handleGlobalOptimize, "globalOptimize")}
-              disabled={globalOptimize.isPending || globalOptimizeTask.started}
-              className={TOOLBAR_CONTROL_CLASS}
-            >
-              {globalOptimize.isPending || globalOptimizeTask.started ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Sparkles className="size-3.5" />
-              )}
-              {t("episode.workbench.batch.aiOptimize")}
-              <CreditCostInline
-                display={globalOptimizeCostDisplay}
-                promotion={globalOptimizeBillingQuote.data?.data.promotion}
-              />
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void handleAiDetect()}
-            disabled={detectIdentities.isPending}
-            className={TOOLBAR_CONTROL_CLASS}
-            title={t("episode.workbench.batch.aiDetectTooltip")}
-          >
-            {detectIdentities.isPending ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Wand2 className="size-3.5" />
-            )}
-            {t("episode.workbench.batch.aiDetect")}
-            <CreditCostInline
-              display={detectIdentitiesCostDisplay}
-              promotion={detectIdentitiesCost.data?.data.promotion}
-            />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              askConfirm(
-                t("episode.workbench.batch.reassignColorsTitle"),
-                t("episode.workbench.batch.reassignColorsDesc"),
-                () => void handleReassignColors(),
-              )
-            }
-            disabled={assignColors.isPending}
-            className={TOOLBAR_CONTROL_CLASS}
-            title={t("episode.workbench.batch.reassignColorsTooltip")}
-          >
-            {assignColors.isPending ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Palette className="size-3.5" />
-            )}
-            {t("episode.workbench.batch.reassignColors")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void handlePlanFixedCamera()}
-            disabled={planFixedCamera.isPending || beats.length < 2}
-            className={TOOLBAR_CONTROL_CLASS}
-            title={t("episode.workbench.batch.aiCameraLockTooltip")}
-          >
-            {planFixedCamera.isPending ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Lock className="size-3.5" />
-            )}
-            {t("episode.workbench.batch.aiCameraLock")}
-          </Button>
           {/* 精品剧 (spine_template === "drama") 把解说烘进渲染视频，没有独立音频阶段 —— 隐藏「生成全集音频」 */}
           {SHOW_EPISODE_AUDIO_ENTRY && spineTemplate !== "drama" && (
           <Tooltip>
@@ -423,7 +244,6 @@ export function BatchBar({
                       t("episode.workbench.batch.genAudioTitle"),
                       t("episode.workbench.batch.genAudioDesc"),
                       handleGenAllAudio,
-                      "episodeAudio",
                     );
                   }}
                   disabled={!audioUnavailableForVideoBackend && (audioTask.started || generateAudio.isPending)}
@@ -491,11 +311,7 @@ export function BatchBar({
               {t("common.confirmExecute")}
               <CreditCostInline
                 display={confirmCostDisplay}
-                promotion={
-                  confirm?.costSource === "episodeAudio"
-                    ? episodeAudioBillingQuote.data?.data.promotion
-                    : globalOptimizeBillingQuote.data?.data.promotion
-                }
+                promotion={episodeAudioBillingQuote.data?.data.promotion}
               />
             </AlertDialogAction>
           </AlertDialogFooter>

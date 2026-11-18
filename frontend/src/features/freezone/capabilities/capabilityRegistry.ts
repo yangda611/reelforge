@@ -11,7 +11,6 @@ import {
   characterMultiViewCapability,
   portraitFromRefCapability,
 } from "./portrait_from_ref";
-import { realSceneSketchRepairCapability } from "./real_scene_sketch_repair";
 
 export type CapabilityCategory = "character" | "scene" | "beat" | "video" | "utility";
 export type CapabilityParamType = "enum" | "multiselect" | "slider" | "text" | "boolean";
@@ -24,15 +23,10 @@ export interface CapabilityInputDefinition {
   descriptionKey?: string;
 }
 
-export interface CapabilityParamOption {
+interface CapabilityParamOption {
   /** 协议值：会原样拼进提示词或写进节点参数，不跟界面语言走。 */
   value: string;
   labelKey: string;
-  /**
-   * 少数能力（实景草图修复）把选项文案本身拼进提示词。那串是模型输入不是界面文案，
-   * 改动会直接改变生成结果，所以单独放一份，不跟界面语言走。
-   */
-  promptLabel?: string;
 }
 
 export interface CapabilityParamDefinition {
@@ -81,7 +75,6 @@ export interface GenerationCapability {
 }
 
 export const CAPABILITIES: GenerationCapability[] = [
-  realSceneSketchRepairCapability,
   portraitFromRefCapability,
   characterMultiViewCapability,
   sceneMasterCandidateCapability,

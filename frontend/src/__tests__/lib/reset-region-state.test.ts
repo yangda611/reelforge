@@ -8,7 +8,6 @@ import {
 } from "@/lib/reset-region-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSaveStatusStore } from "@/stores/save-status-store";
-import { useSeenPoolStore } from "@/stores/seen-pool-store";
 import { useEpisodeWorkbenchStore } from "@/stores/episode-workbench-store";
 import { useTaskCenterStore } from "@/task-center/store";
 
@@ -17,16 +16,14 @@ describe("resetRegionState", () => {
     localStorage.clear();
   });
 
-  it("calls reset() on auth, save-status, seen-pool, episode-workbench, task-center stores", () => {
+  it("calls reset() on auth, save-status, episode-workbench, task-center stores", () => {
     const authSpy = vi.spyOn(useAuthStore.getState(), "reset");
     const saveSpy = vi.spyOn(useSaveStatusStore.getState(), "reset");
-    const seenSpy = vi.spyOn(useSeenPoolStore.getState(), "reset");
     const workbenchSpy = vi.spyOn(useEpisodeWorkbenchStore.getState(), "reset");
     const taskSpy = vi.spyOn(useTaskCenterStore.getState(), "reset");
     resetRegionState({ queryClient: new QueryClient() });
     expect(authSpy).toHaveBeenCalled();
     expect(saveSpy).toHaveBeenCalled();
-    expect(seenSpy).toHaveBeenCalled();
     expect(workbenchSpy).toHaveBeenCalled();
     expect(taskSpy).toHaveBeenCalled();
   });
@@ -40,13 +37,13 @@ describe("resetRegionState", () => {
 
   it("localStorage sweep removes supertale-* and legacy episode workbench keys", () => {
     localStorage.setItem("supertale-auth", JSON.stringify({ state: {} }));
-    localStorage.setItem("supertale-seen-pools", "x");
+    localStorage.setItem("supertale-sample", "x");
     localStorage.setItem("st.episode.p1.e1.voice", "edge");
     localStorage.setItem("st.beats.toggles.p1.e1", "expanded");
     localStorage.setItem("st.beats.action-panel.sections.p1.e1", "expanded");
     resetRegionState({ queryClient: new QueryClient() });
     expect(localStorage.getItem("supertale-auth")).toBeNull();
-    expect(localStorage.getItem("supertale-seen-pools")).toBeNull();
+    expect(localStorage.getItem("supertale-sample")).toBeNull();
     expect(localStorage.getItem("st.episode.p1.e1.voice")).toBeNull();
     expect(localStorage.getItem("st.beats.toggles.p1.e1")).toBeNull();
     expect(localStorage.getItem("st.beats.action-panel.sections.p1.e1")).toBeNull();
@@ -80,10 +77,10 @@ describe("resetUserSessionState", () => {
   });
 
   it("sweeps user-scoped localStorage keys like the region reset does", () => {
-    localStorage.setItem("supertale-seen-pools", "x");
+    localStorage.setItem("supertale-sample", "x");
     localStorage.setItem("st.episode.p1.e1.voice", "edge");
     resetUserSessionState({ queryClient: new QueryClient() });
-    expect(localStorage.getItem("supertale-seen-pools")).toBeNull();
+    expect(localStorage.getItem("supertale-sample")).toBeNull();
     expect(localStorage.getItem("st.episode.p1.e1.voice")).toBeNull();
   });
 

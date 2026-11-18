@@ -27,10 +27,6 @@ _STEP_MAP = {
     "identity_plan": (None, "身份规划"),
     "identity_images": (None, "身份图生成"),
     "script": ("script_writer", "脚本生成"),
-    "sketches": ("sketch_generation", "草图生成"),
-    "coloring": (None, "配色+身份/道具检测"),
-    "global_optimize": ("global_optimize_video", "全局视频优化"),
-    "first_frames": ("selected_regen", "首帧生成"),
     "voice_setup": (None, "准备配音声线"),
     "tts": (None, "TTS 配音"),
     "video": ("single_video", "视频生成"),
@@ -233,30 +229,10 @@ async def pipeline_status(
     beats = await store.get_beats_as_dicts(target_ep)
     has_script = _all_or_empty([_beat_has_script_content(b) for b in beats])
 
-    grids_dir = project_dir / "grids" / f"ep{target_ep:03d}"
-    sketches_dir = project_dir / "sketches" / f"ep{target_ep:03d}"
-    has_sketches = bool(list(grids_dir.glob("*.png"))) or bool(list(sketches_dir.glob("*.png")))
-
-    has_coloring = has_sketches and _all_or_empty(
-        [
-            b.get("detected_identities") is not None or b.get("detected_props") is not None
-            for b in beats
-        ]
-    )
-    has_global_optimize = _all_or_empty(
-        [bool(b.get("video_mode")) and bool(b.get("video_prompt")) for b in beats]
-    )
-
     episode_status = {
         "identity_plan": has_identity_plan,
         "identity_images": has_identity_images,
         "script": has_script,
-        "sketches": has_sketches,
-        "coloring": has_coloring,
-        "global_optimize": has_global_optimize,
-        "first_frames": _beat_file_series_complete(
-            project_dir / "frames" / f"ep{target_ep:03d}", "png", beats
-        ),
         "tts": _beat_audio_series_complete(
             project_dir / "audio" / f"ep{target_ep:03d}", beats
         ),
@@ -270,10 +246,6 @@ async def pipeline_status(
         "identity_plan",
         "identity_images",
         "script",
-        "sketches",
-        "coloring",
-        "global_optimize",
-        "first_frames",
         "tts",
         "video",
     ):

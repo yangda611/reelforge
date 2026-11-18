@@ -157,7 +157,7 @@ export interface OriginDeepLink {
 export const originDeepLink = (t: TaskState): OriginDeepLink | null => {
   const stage = stageForTaskType(t.task_type);
   if (!stage) return null;
-  // stage.routeSegment already starts with "/" (e.g., "/sketches")
+  // stage.routeSegment already starts with "/" (e.g., "/video")
   return {
     to: `/projects/$project/episodes/$episode${stage.routeSegment}`,
     params: { project: t.project_id ?? t.project, episode: String(t.episode) },
