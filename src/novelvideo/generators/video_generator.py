@@ -33,6 +33,13 @@ import websockets
 from dotenv import load_dotenv
 
 from novelvideo.egress_context import ambient_egress_context
+from novelvideo.generators.lingke_media import (
+    build_lingke_video_payload,
+    extract_lingke_submit_error,
+    is_lingke_target,
+    lingke_api_path,
+    lingke_task_outcome,
+)
 from novelvideo.authz_retry import retry_authz_read
 from novelvideo.i18n_message import lmsg
 from novelvideo.ports import (
@@ -1990,6 +1997,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             self.base_url = (endpoint or gateway.base_url).rstrip("/")
         self.model = model or NEWAPI_VIDEO_MODEL
         self.request_model = self.model
+        self.direct_provider = ""
         if self.egress_context is None or not self.egress_context.is_organization:
             from novelvideo.model_gateway_settings import (
                 resolve_direct_media_gateway_target,
@@ -1997,6 +2005,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
 
             direct_target = resolve_direct_media_gateway_target(self.model, "video")
             if direct_target is not None:
+                self.direct_provider = str(getattr(direct_target, "provider", "") or "")
                 if api_key is None and direct_target.api_key:
                     self.api_key = direct_target.api_key
                 if endpoint is None and direct_target.base_url:
@@ -2744,6 +2753,11 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             value = task.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip(), False
+        result_urls = task.get("result_urls")
+        if isinstance(result_urls, list):
+            for item in result_urls:
+                if isinstance(item, str) and item.strip():
+                    return item.strip(), False
         return "", False
 
     def _resolve_result_url(self, result_url: str) -> str:
@@ -3552,6 +3566,16 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 payload, media_type="video"
             )
             payload = enforce_newapi_video_duration_contract(payload)
+            lingke_target = is_lingke_target(
+                "" if organization_request else self.direct_provider,
+                request_base_url,
+            )
+            if lingke_target:
+                payload = build_lingke_video_payload(
+                    payload,
+                    request_schema=self.request_schema,
+                    mode=requested_mode,
+                )
             reservation_id = await _reserve_video_model_call(
                 self.model,
                 source="newapi_video_generation",
@@ -3562,20 +3586,26 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 request_payload=payload,
             )
             submit_attempted = True
+            submit_url = (
+                f"{request_base_url}{lingke_api_path(request_base_url, 'media/generate')}"
+                if lingke_target
+                else f"{request_base_url}/video/generations"
+            )
             if organization_request:
                 submitted = await self._post_json(
-                    f"{request_base_url}/video/generations",
+                    submit_url,
                     payload,
                     headers=request_headers,
                 )
             else:
-                submitted = await self._post_json(
-                    f"{request_base_url}/video/generations", payload
-                )
+                submitted = await self._post_json(submit_url, payload)
             await update_current_model_call_log(
                 response_payload=submitted,
             )
-            task_id = self._task_id_from_submit_response(submitted)
+            lingke_submit_error = (
+                extract_lingke_submit_error(submitted) if lingke_target else ""
+            )
+            task_id = "" if lingke_submit_error else self._task_id_from_submit_response(submitted)
             provider_request_id = str(submitted.get("_newapi_request_id") or "").strip()
             if not task_id:
                 if organization_request:
@@ -3596,7 +3626,10 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     error=(
                         "EGRESS_OPERATION_UNKNOWN"
                         if organization_request
-                        else f"No task_id in DramaClawAPI response: {submitted}"
+                        else (
+                            lingke_submit_error
+                            or f"No task_id in DramaClawAPI response: {submitted}"
+                        )
                     ),
                 )
             if organization_request:
@@ -3623,6 +3656,12 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             log(f"任务已提交: {task_id}")
             progress(0.2)
 
+            poll_url = (
+                f"{request_base_url}"
+                f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(task_id, safe=str())}')}"
+                if lingke_target
+                else f"{request_base_url}/video/generations/{task_id}"
+            )
             for poll_count in range(max_polls):
                 if organization_request:
                     running_authority_error = None
@@ -3651,18 +3690,70 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     if running_authority_error is not None:
                         raise running_authority_error from None
                     polled = await self._get_json(
-                        f"{request_base_url}/video/generations/{task_id}",
+                        poll_url,
                         headers=request_headers,
                     )
                 else:
-                    polled = await self._get_json(
-                        f"{request_base_url}/video/generations/{task_id}"
-                    )
+                    polled = await self._get_json(poll_url)
                 task = self._task_response_data(polled)
-                status = str(task.get("status") or "").lower()
+                lingke_detail = ""
+                if lingke_target:
+                    outcome, lingke_detail = lingke_task_outcome(task)
+                    status = (
+                        lingke_detail
+                        or str(task.get("state") or task.get("status") or "").lower()
+                    )
+                else:
+                    status = str(task.get("status") or "").lower()
+                    if status in {"completed", "succeeded", "success", "done"}:
+                        outcome = "completed"
+                    elif status in {
+                        "failure",
+                        "failed",
+                        "error",
+                        "canceled",
+                        "cancelled",
+                        "expired",
+                    }:
+                        outcome = "failed"
+                    else:
+                        outcome = "pending"
                 progress(0.2 + (poll_count / max(max_polls, 1)) * 0.7)
 
-                if status in {"completed", "succeeded", "success", "done"}:
+                if outcome == "completed":
+                    if (
+                        lingke_target
+                        and str(task.get("result_type") or "video").strip().lower()
+                        != "video"
+                    ):
+                        await update_current_model_call_log(
+                            response_payload=polled,
+                        )
+                        non_video_error = (
+                            "EGRESS_OPERATION_UNKNOWN"
+                            if organization_request
+                            else "Lingke video task returned a non-video result"
+                        )
+                        if organization_request:
+                            await self._mark_operation_unknown(
+                                operation_port,
+                                operation_claim,
+                                expected_version=operation_version,
+                            )
+                            operation_terminal = True
+                        update_request_status(task_id, "failed", non_video_error)
+                        await _refund_video_model_call(
+                            reservation_id,
+                            source="newapi_video_generation",
+                            error=non_video_error,
+                            provider_request_id=provider_request_id,
+                            provider_task_id=task_id,
+                        )
+                        return VideoGenResult(
+                            status=VideoGenStatus.FAILED,
+                            error=non_video_error,
+                            task_id=task_id,
+                        )
                     await update_current_model_call_log(
                         response_payload=polled,
                     )
@@ -3942,19 +4033,13 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         duration_seconds=float(duration),
                     )
 
-                if status in {
-                    "failure",
-                    "failed",
-                    "error",
-                    "canceled",
-                    "cancelled",
-                    "expired",
-                }:
+                if outcome == "failed":
                     await update_current_model_call_log(
                         response_payload=polled,
                     )
                     error = (
-                        task.get("error")
+                        lingke_detail
+                        or task.get("error")
                         or task.get("fail_reason")
                         or "DramaClawAPI video task failed"
                     )

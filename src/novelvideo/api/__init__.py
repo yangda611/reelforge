@@ -72,6 +72,7 @@ from novelvideo.api.routes import (  # noqa: E402
     styles,
     tasks,
     voice_design,
+    web,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -114,6 +115,7 @@ api_router.include_router(openfilm.router)
 api_router.include_router(diagnostics.router, tags=["diagnostics"])
 api_router.include_router(product_surfaces.router, tags=["product-surfaces"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(web.router, tags=["web"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(piko.router, tags=["piko"])
 api_router.include_router(projects.router, tags=["projects"])

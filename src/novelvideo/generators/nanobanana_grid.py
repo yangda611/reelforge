@@ -39,6 +39,12 @@ from novelvideo.generators.huimengi import (
     extract_huimeng_result_url,
     validate_huimeng_media_download,
 )
+from novelvideo.generators.lingke_media import (
+    is_lingke_target,
+    lingke_api_path,
+    set_nested_value,
+    value_at_request_path,
+)
 from novelvideo.storage.media_relay import (
     IMAGE_TRANSFORM_AI_REFERENCE_JPEG,
     _apply_image_transform,
@@ -295,38 +301,10 @@ def _newapi_safe_request_context(
     }
 
 
-def _is_lingke_image_target(provider: str, endpoint: str) -> bool:
-    provider_name = str(provider or "").strip().lower()
-    if provider_name in {"lingke", "ai778"}:
-        return True
-    host = (urlparse(str(endpoint or "").strip()).hostname or "").lower()
-    return host in {"api.lk888.ai", "api.lingkeai.ai"}
-
-
-def _lingke_image_path(endpoint: str, suffix: str) -> str:
-    prefix = "" if str(endpoint or "").rstrip("/").lower().endswith("/v1") else "/v1"
-    return f"{prefix}/{suffix.lstrip('/')}"
-
-
-def _value_at_request_path(payload: dict[str, object], path: str) -> object:
-    value: object = payload
-    for part in path.split("."):
-        if not isinstance(value, dict):
-            return None
-        value = value.get(part)
-    return value
-
-
-def _set_nested_value(target: dict[str, object], path: str, value: object) -> None:
-    parts = path.split(".")
-    cursor = target
-    for part in parts[:-1]:
-        nested = cursor.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    cursor[parts[-1]] = value
+_is_lingke_image_target = is_lingke_target
+_lingke_image_path = lingke_api_path
+_value_at_request_path = value_at_request_path
+_set_nested_value = set_nested_value
 
 
 def _build_lingke_image_payload(

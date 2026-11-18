@@ -508,6 +508,25 @@ class FreezoneAssetCopyRequest(BaseModel):
     )
 
 
+class FreezoneRemoteImageImportRequest(BaseModel):
+    """把公网图片下载进当前项目的 `freezone/_uploads/`。
+
+    联网搜索只返回远端 URL；画布节点需要本项目静态地址才能持久化、跨成员可见，
+    因此由服务端代为下载。只允许公网地址（复用下载层的 SSRF 校验）。
+    """
+
+    url: str = Field(
+        min_length=1,
+        max_length=MAX_SOURCE_URL_LENGTH,
+        description="公网图片的 http(s) 地址，例如联网搜索返回的 image_url",
+    )
+    filename: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="可选文件名；省略时按 URL 与内容类型推断",
+    )
+
+
 class ViewerBeatContextManifest(BaseModel):
     episode: int
     beat: int

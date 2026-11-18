@@ -26,10 +26,10 @@ _log = logging.getLogger(__name__)
 DRAMACLAW_ROOT = Path(__file__).resolve().parents[3]
 STATE_ROOT = DRAMACLAW_ROOT / "state"
 DEFAULT_HERMES_SKILLS = {"dramaclaw"}
-DEFAULT_HERMES_PLUGINS = {"dramaclaw"}
+DEFAULT_HERMES_PLUGINS = {"dramaclaw", "websearch"}
 DEFAULT_HERMES_TOOLSETS = {"hermes-acp"}
 FREEZONE_HERMES_SKILLS = {"freezone", "interactive-story", "workflows"}
-FREEZONE_HERMES_PLUGINS = {"freezone"}
+FREEZONE_HERMES_PLUGINS = {"freezone", "websearch"}
 _GENERATED_WORKFLOW_SKILL_MARKER = ".dramaclaw-workflow-skill.json"
 FREEZONE_HERMES_PYTHON_HOOK_DIR = ".dramaclaw-python"
 _warned_repo_state_fallback = False
@@ -71,6 +71,7 @@ enabled_toolsets:
 plugins:
   enabled:
     - dramaclaw
+    - websearch
 
 display:
   tool_progress: verbose
@@ -117,6 +118,7 @@ enabled_toolsets:
 plugins:
   enabled:
     - freezone
+    - websearch
 
 agent:
   coding_context: "off"
@@ -1044,7 +1046,7 @@ def _ensure_director_config_policy(config_yaml: Path) -> None:
     plugins = config.get("plugins")
     if not isinstance(plugins, dict):
         plugins = {}
-    plugins["enabled"] = ["dramaclaw"]
+    plugins["enabled"] = ["dramaclaw", "websearch"]
     config["plugins"] = plugins
 
     agent = config.get("agent")
@@ -1079,7 +1081,7 @@ def _ensure_freezone_config_policy(config_yaml: Path) -> None:
     plugins = config.get("plugins")
     if not isinstance(plugins, dict):
         plugins = {}
-    plugins["enabled"] = ["freezone"]
+    plugins["enabled"] = ["freezone", "websearch"]
     config["plugins"] = plugins
 
     agent = config.get("agent")

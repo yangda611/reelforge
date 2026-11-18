@@ -4069,6 +4069,7 @@ async def _stream_home_turn(
     tool_text = ""
     tool_name = ""
     persisted = False
+    delta_gate = chat_service._StreamDeltaGate()
     send_lock = asyncio.Lock()
     disconnected = asyncio.Event()
     runtime_ids: dict[str, str | None] = {
@@ -4227,6 +4228,11 @@ async def _stream_home_turn(
                 assistant_text = chat_service._merge_stream_text(
                     assistant_text, event.text
                 )
+                # Coalesce intermediate frames: each one re-sanitizes the whole
+                # accumulated reply. ``chat.done`` below still emits the final
+                # text when the last frame was skipped.
+                if not delta_gate.allow():
+                    continue
                 display_text = chat_service._strip_replayed_chat_response(
                     assistant_text,
                     previous_assistant,

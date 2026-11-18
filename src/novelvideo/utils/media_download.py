@@ -20,11 +20,19 @@ from yarl import URL
 from novelvideo.ports.video_delivery import VideoDeliveryError, VideoDeliveryReceipt
 
 _CHUNK_SIZE = 1024 * 1024
-_PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+#: Addresses a desktop TUN proxy (Clash/Mihomo 一类) hands back for every name.
+#: 双栈机器上同一个域名会同时拿到 IPv4 与 IPv6 两个 Fake-IP：只认 IPv4 会让
+#: 「任一解析结果不是公网」成立，于是本机 CE 上每个域名都被判成非法目的地。
+#: 两个段都不是可路由到内网的地址（RFC 2544 基准测试段 / RFC 5180 基准测试段），
+#: 且放行条件与 IPv4 完全一致：仅本机 CE、非生产、name 不是 IP 字面量或 localhost。
+_PROXY_FAKE_IP_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("2001:2::/48"),
+)
 
 
 def _allow_proxy_fake_ip() -> bool:
-    """Allow RFC 2544 TUN Fake-IP DNS (e.g. Clash/Mihomo) only in local CE."""
+    """Allow RFC 2544/5180 TUN Fake-IP DNS (e.g. Clash/Mihomo) only in local CE."""
     from novelvideo.shared.runtime_env import uses_local_ce_runtime
 
     if not uses_local_ce_runtime():
@@ -41,6 +49,13 @@ def _is_ip_literal(host: str) -> bool:
         return False
 
 
+def _is_fake_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(
+        address.version == network.version and address in network
+        for network in _PROXY_FAKE_IP_NETWORKS
+    )
+
+
 def _is_allowed_resolved_address(
     host: str, address: ipaddress.IPv4Address | ipaddress.IPv6Address
 ) -> bool:
@@ -49,8 +64,7 @@ def _is_allowed_resolved_address(
     normalized_host = host.strip(".").lower()
     return bool(
         _allow_proxy_fake_ip()
-        and address.version == 4
-        and address in _PROXY_FAKE_IP_NETWORK
+        and _is_fake_ip(address)
         and normalized_host
         and normalized_host != "localhost"
         and not normalized_host.endswith(".localhost")
@@ -122,6 +136,35 @@ async def _validate_public_redirect(session, context, params) -> None:
     )
     if location:
         _validate_public_http_url(urljoin(str(params.response.url), location))
+
+
+def validate_public_http_url(url: str) -> None:
+    """Public entry point for callers that fetch a URL they did not author.
+
+    Raises ``VideoDeliveryError`` when the URL is not a public http(s)
+    destination. Sharing this instead of re-deriving the rule keeps one
+    definition of "public destination" for downloads and page reads.
+    """
+
+    _validate_public_http_url(url)
+
+
+def public_http_session_options() -> dict[str, object]:
+    """aiohttp session options that resolve, pin, and re-check public hosts.
+
+    Callers pass the result to ``aiohttp.ClientSession`` so redirects and DNS
+    answers are validated exactly as ``download_to_path(public_only=True)``
+    does.
+    """
+
+    trace = aiohttp.TraceConfig()
+    trace.on_request_redirect.append(_validate_public_redirect)
+    return {
+        "connector": aiohttp.TCPConnector(
+            resolver=_PublicResolver(), use_dns_cache=False
+        ),
+        "trace_configs": [trace],
+    }
 
 
 async def download_to_path(

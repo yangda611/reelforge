@@ -1,0 +1,5 @@
+name: websearch
+version: 0.1.0
+description: "联网搜索工具（博查搜索 + 网页正文读取 + 图片导入画布）。通过已授权的 DramaClaw API 路由访问公网，插件本身不持有搜索凭证。"
+author: "DramaClaw"
+kind: backend

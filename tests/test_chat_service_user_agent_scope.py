@@ -1237,7 +1237,8 @@ async def test_codex_stream_passes_conversation_scope_to_thread_builder(
         captured.update(kwargs)
         token_file = Path(kwargs["agent_token_file"])
         assert token_file.read_text(encoding="utf-8") == "agent-token"
-        assert token_file.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert token_file.stat().st_mode & 0o777 == 0o600
         return FakeThread()
 
     monkeypatch.setattr(
@@ -3889,7 +3890,8 @@ async def test_codex_prompt_construction_failure_cleans_turn_credentials(
     assert finished == ["failed"]
     token_root = runtime_root / "codex" / "turn_tokens"
     assert list(token_root.iterdir()) == []
-    assert token_root.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert token_root.stat().st_mode & 0o777 == 0o700
     assert not (project_state / "agents" / "codex" / "turn_tokens").exists()
 
 
@@ -3924,8 +3926,9 @@ async def test_codex_turn_token_files_are_unique_and_cleanup_is_turn_local(
     assert first != second
     assert first.read_text(encoding="utf-8") == "token-first"
     assert second.read_text(encoding="utf-8") == "token-second"
-    assert first.stat().st_mode & 0o777 == 0o600
-    assert second.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert first.stat().st_mode & 0o777 == 0o600
+        assert second.stat().st_mode & 0o777 == 0o600
 
     first.unlink()
     assert not first.exists()
@@ -4096,7 +4099,12 @@ def test_managed_skill_sync_rejects_manifest_path_traversal_and_escape_symlink(
     outside_dir.mkdir()
     (outside_dir / "keep.txt").write_text("keep\n", encoding="utf-8")
     escape_link = skills_dir / "managed-escape"
-    escape_link.symlink_to(outside_dir, target_is_directory=True)
+    try:
+        escape_link.symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevation")
+        raise
     manifest = {
         "schema_version": 1,
         "skills": {
@@ -4195,10 +4203,30 @@ def test_freezone_adds_independent_workflow_mcp_without_changing_default():
     default_servers = chat_service._dramaclaw_mcp_servers()
     freezone_servers = chat_service._dramaclaw_mcp_servers("freezone_canvas")
 
-    assert set(default_servers) == {"dramaclaw"}
+    assert set(default_servers) == {"dramaclaw", "web"}
+    assert "web MCP tools" in chat_service._CODEX_DEVELOPER_INSTRUCTIONS
+    assert "web MCP tools" in chat_service._CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS
+    assert "tools outside the configured MCP servers" in chat_service._CODEX_DEVELOPER_INSTRUCTIONS
+    assert "tools outside the configured MCP servers" in chat_service._CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS
     assert freezone_servers["dramaclaw"]["args"] == [
         *default_servers["dramaclaw"]["args"], "--exclude-interactive-story"
     ]
+    # 联网搜索是两种虾导共用的入口：默认虾导与虾画都挂同一个 web server。
+    assert freezone_servers["web"] == default_servers["web"]
+    assert default_servers["web"] == {
+        "type": "stdio",
+        "command": __import__("sys").executable,
+        "args": ["-m", "novelvideo.chat.web_mcp"],
+        "env_vars": [
+            "DRAMACLAW_API_URL",
+            "DRAMACLAW_AGENT_TOKEN_FILE",
+            "DRAMACLAW_CE_OWNER",
+            "DRAMACLAW_CE_OWNER_ALLOW_REMOTE",
+            "DRAMACLAW_LOCAL_AGENT_TRUST",
+            "DRAMACLAW_PROJECT_ID",
+            "PYTHONPATH",
+        ],
+    }
     assert freezone_servers["dramaclaw_interactive_story"] == {
         "type": "stdio",
         "command": __import__("sys").executable,
@@ -4295,6 +4323,38 @@ def test_freezone_exact_node_action_uses_one_batch_write_tool():
 
     assert set(servers) == {"dramaclaw"}
     assert servers["dramaclaw"]["enabled_tools"] == ["freezone_emit_canvas_command"]
+
+
+def test_freezone_mixed_structure_and_execution_keeps_full_toolset():
+    mixed_delete_run = chat_service._dramaclaw_mcp_servers(
+        "freezone_canvas",
+        prompt="把多余节点删除，然后运行当前工作流。",
+    )
+    assert "enabled_tools" not in mixed_delete_run["dramaclaw"]
+    assert "dramaclaw_workflows" in mixed_delete_run
+
+    mixed_create_action = chat_service._dramaclaw_mcp_servers(
+        "freezone_canvas",
+        prompt="在当前图片节点后添加一个视频节点并执行 generate_video。",
+    )
+    assert "enabled_tools" not in mixed_create_action["dramaclaw"]
+    assert "dramaclaw_workflows" in mixed_create_action
+
+
+def test_resumed_codex_freezone_prompt_omits_duplicate_assistant_instructions():
+    prompt = chat_service._prompt_with_user_context(
+        "admin",
+        "project-a",
+        "帮我优化布局",
+        tool_mode="freezone_canvas",
+        surface_context={"freezone_canvas_id": "canvas-a"},
+        include_freezone_assistant_instructions=False,
+    )
+
+    assert "[FREEZONE_CANVAS_ASSISTANT]" not in prompt
+    assert "[FREEZONE_CANVAS_CONTEXT]" in prompt
+    assert "canvas_id: canvas-a" in prompt
+    assert "帮我优化布局" in prompt
 
 
 def test_freezone_exact_audio_action_resolves_unique_node_from_canvas_summary():
@@ -4836,7 +4896,7 @@ def test_codex_gateway_overrides_use_responses_without_embedding_secret(
     assert "features.shell_tool=false" in overrides
     assert "memories.generate_memories=false" in overrides
     assert "memories.use_memories=false" in overrides
-    assert 'model_reasoning_effort="low"' in overrides
+    assert 'model_reasoning_effort="medium"' in overrides
     assert 'web_search="disabled"' in overrides
     catalog_override = next(
         item for item in overrides if item.startswith("model_catalog_json=")
@@ -4960,6 +5020,20 @@ def test_codex_gateway_reasoning_effort_is_configurable(monkeypatch):
     assert 'model_reasoning_effort="high"' in overrides
 
 
+def test_codex_gateway_reasoning_off_is_preserved(monkeypatch):
+    monkeypatch.delenv("CODEX_REASONING_EFFORT", raising=False)
+    monkeypatch.setattr(
+        "novelvideo.model_gateway_settings.get_explicit_llm_reasoning_effort",
+        lambda _feature: "off",
+    )
+
+    assert chat_service._codex_reasoning_effort() == "none"
+    overrides = chat_service._codex_gateway_config_overrides(
+        "https://gateway.example/v1"
+    )
+    assert 'model_reasoning_effort="none"' in overrides
+
+
 def test_codex_gateway_rejects_invalid_reasoning_effort(monkeypatch):
     monkeypatch.setenv("CODEX_REASONING_EFFORT", "disabled")
 
@@ -4994,8 +5068,8 @@ def test_codex_env_uses_effective_gateway_and_isolates_codex_home(
 
     assert env["NOVELVIDEO_OUTPUT_DIR"] == str(tmp_path / "authoritative-output")
     for name, server in chat_service._dramaclaw_mcp_servers("freezone_canvas").items():
-        if name == "dramaclaw_interactive_story":
-            continue  # This HTTP-only MCP has no filesystem asset tools.
+        if name in {"dramaclaw_interactive_story", "web"}:
+            continue  # These MCPs use authenticated API routes, not local output files.
         assert "NOVELVIDEO_OUTPUT_DIR" in server["env_vars"]
     assert env["CODEX_HOME"] == str(tmp_path / "state" / ".codex-app-server")
     assert env["DRAMACLAW_AGENT_SCOPE"] == "project"
@@ -5003,7 +5077,7 @@ def test_codex_env_uses_effective_gateway_and_isolates_codex_home(
     assert env["DRAMACLAW_AGENT_PROFILE"] == "main"
     assert env["DRAMACLAW_TOOL_MODE"] == "default"
     assert env["DRAMACLAW_TURN_ID"] == "turn-a"
-    assert env["DRAMACLAW_SKILLS_DIR"].endswith(
+    assert Path(env["DRAMACLAW_SKILLS_DIR"]).as_posix().endswith(
         "/agents/codex/workspaces/main-0d6e4079e367/.agents/skills"
     )
     assert "DRAMACLAW_AGENT_TOKEN" not in env
@@ -5029,7 +5103,7 @@ def test_codex_env_uses_effective_gateway_and_isolates_codex_home(
     assert Path(freezone_env["DRAMACLAW_CANVAS_COMMAND_BRIDGE_DIR"]).is_relative_to(project_state)
     assert freezone_env["DRAMACLAW_EXTERNAL_MCP"] == "1"
     assert freezone_env["DRAMACLAW_MCP_DIRECT_CANVAS_APPLY"] == "0"
-    assert freezone_env["DRAMACLAW_CANVAS_COMMAND_BRIDGE_DIR"].endswith(
+    assert Path(freezone_env["DRAMACLAW_CANVAS_COMMAND_BRIDGE_DIR"]).as_posix().endswith(
         "supertale_canvas_command_bridge/freezone_agent-2"
     )
 

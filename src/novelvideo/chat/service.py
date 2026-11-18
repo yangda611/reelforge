@@ -15,6 +15,7 @@ import sqlite3
 import stat
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,7 +193,7 @@ _MERGEABLE_MEDIA_SPEC_TYPES = presentation.MERGEABLE_MEDIA_SPEC_TYPES
 
 _CODEX_MODEL_PROVIDER = "dramaclaw_gateway"
 _DEFAULT_CODEX_MODEL = "DC-codex-agent-LLM"
-_DEFAULT_CODEX_REASONING_EFFORT = "low"
+_DEFAULT_CODEX_REASONING_EFFORT = "medium"
 _CODEX_REASONING_EFFORT_VALUES = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 )
@@ -218,8 +219,9 @@ _CODEX_DEVELOPER_INSTRUCTIONS = (
     "server for all ReelForge data reads and writes. Inspect the available scope-filtered "
     "concrete MCP tools and their schemas, then call the selected tool directly. Do not guess "
     "a tool name or argument schema. "
-    "Do not use shell commands, "
-    "local file editing, web search, or other external tools. "
+    "Use the web MCP tools for requests that need current or external public information, "
+    "and cite the sources returned by search. Do not use shell commands or local file editing, "
+    "and do not use tools outside the configured MCP servers. "
     + _MAINLINE_ASSISTANT_SCOPE_INSTRUCTIONS
 )
 _CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS = (
@@ -452,8 +454,9 @@ _CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS = (
     "freezone write tool call. Never claim that a canvas operation succeeded unless that same "
     "tool call returned a successful frontend canvas result. The built-in update_plan tool only "
     "records an internal plan and never changes the canvas: do not call it for canvas mutations "
-    "and never treat it as completion. Do not use shell commands, local file editing, web search, "
-    "or other external tools."
+    "and never treat it as completion. Use web MCP tools only for relevant public information "
+    "or reference-image lookups, citing returned sources; do not use shell commands or local file "
+    "editing, and do not use tools outside the configured MCP servers."
 )
 
 _CODEX_FMV_INTERACTIVE_STORY_INSTRUCTIONS = (
@@ -1143,6 +1146,13 @@ def _freezone_canvas_write_requested(prompt: str | None) -> bool:
     )
 
 
+_FREEZONE_MIXED_CANVAS_STRUCTURE_RE = re.compile(
+    r"(?:创建|新建|添加|追加|插入|删除|移除|清空|连接|连线|分组|成组|建组|打组|取消分组|布局|整理|移动|"
+    r"\b(?:create|add|insert|delete|remove|clear|connect|group|ungroup|layout|move)\b)",
+    re.IGNORECASE,
+)
+
+
 def _freezone_existing_execution_requested(prompt: str | None) -> bool:
     """Select the small tool surface for executing an object already on canvas."""
 
@@ -1151,6 +1161,8 @@ def _freezone_existing_execution_requested(prompt: str | None) -> bool:
         return False
     intent_text = _FREEZONE_CANVAS_WRITE_NEGATION_RE.sub("", user_text)
     intent_text = _FREEZONE_DEFERRED_EXECUTION_RE.sub("", intent_text)
+    if _FREEZONE_MIXED_CANVAS_STRUCTURE_RE.search(intent_text):
+        return False
     return bool(
         _FREEZONE_EXISTING_EXECUTION_ACTION_RE.search(intent_text)
         and _FREEZONE_EXISTING_EXECUTION_TARGET_RE.search(intent_text)
@@ -1164,6 +1176,8 @@ def _freezone_exact_node_action_requested(prompt: str | None) -> bool:
     if not user_text:
         return False
     intent_text = _FREEZONE_CANVAS_WRITE_NEGATION_RE.sub("", user_text)
+    if _FREEZONE_MIXED_CANVAS_STRUCTURE_RE.search(intent_text):
+        return False
     return bool(
         _FREEZONE_EXISTING_EXECUTION_ACTION_RE.search(intent_text)
         and _FREEZONE_EXISTING_EXECUTION_TARGET_RE.search(intent_text)
@@ -2079,6 +2093,7 @@ def _prompt_with_user_context(
     route_prompt: str | None = None,
     turn_id: str | None = None,
     require_generation_parameter_preflight: bool = False,
+    include_freezone_assistant_instructions: bool = True,
 ) -> str:
     user_message, execution_context = _route_prompt_with_execution_context(
         prompt,
@@ -2151,8 +2166,13 @@ def _prompt_with_user_context(
         if tool_mode == "freezone_canvas"
         else ""
     )
-    surface_instructions = (
+    assistant_instructions_block = (
         f"\n\n{_FREEZONE_CANVAS_ASSISTANT_INSTRUCTIONS}"
+        if include_freezone_assistant_instructions
+        else ""
+    )
+    surface_instructions = (
+        f"{assistant_instructions_block}"
         f"{_freezone_skill_studio_context(username, route_prompt if route_prompt is not None else prompt)}"
         f"{canvas_context}"
         if tool_mode == "freezone_canvas"
@@ -2315,14 +2335,11 @@ def _codex_reasoning_effort() -> str | None:
                 f"Unsupported CODEX_REASONING_EFFORT={env_value!r}; expected one of: {supported}"
             )
         return env_value
-    from novelvideo.model_gateway_settings import (
-        REASONING_EFFORT_OFF,
-        get_explicit_llm_reasoning_effort,
-    )
+    from novelvideo.model_gateway_settings import get_explicit_llm_reasoning_effort
 
     explicit = get_explicit_llm_reasoning_effort("HERMES")
     if explicit is not None:
-        return None if explicit == REASONING_EFFORT_OFF else explicit
+        return "none" if explicit == "off" else explicit
     return _DEFAULT_CODEX_REASONING_EFFORT
 
 
@@ -2837,6 +2854,37 @@ async def _emit_chat_event_best_effort(on_event, event: dict[str, Any]) -> bool:
         return True
     except Exception:
         return False
+
+
+# Assistant text frames carry the whole accumulated reply, and each one is
+# re-sanitized and re-serialized before it leaves the process. Upstream emits
+# chunks as fast as the model produces tokens, so a long reply costs one full
+# scan of the growing text per chunk — quadratic in the reply length. One frame
+# per window is all a human can read; the intermediate ones are discarded.
+_STREAM_DELTA_MIN_INTERVAL_SECONDS = 0.05
+
+
+class _StreamDeltaGate:
+    """Coalesce accumulated assistant text into at most one frame per window.
+
+    Every emitted frame still carries the full accumulated text, so a caller
+    that skips frames keeps the wire contract; only the intermediate states
+    disappear. ``allow`` reports whether this chunk should be sent now.
+    """
+
+    def __init__(self, min_interval: float = _STREAM_DELTA_MIN_INTERVAL_SECONDS):
+        self._min_interval = min_interval
+        self._last_emit: float | None = None
+
+    def allow(self, now: float | None = None) -> bool:
+        current = time.monotonic() if now is None else now
+        if (
+            self._last_emit is not None
+            and current - self._last_emit < self._min_interval
+        ):
+            return False
+        self._last_emit = current
+        return True
 
 
 def _log_json_render_error(error: ValueError, body: str) -> None:
@@ -3451,15 +3499,12 @@ def _write_codex_turn_token(
     if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
         raise RuntimeError(f"Unsafe Codex turn-token directory: {token_root}")
     token_root.chmod(0o700)
-    scope_digest = hashlib.sha256(scope_key.encode("utf-8")).hexdigest()
-    normalized_turn_id = str(business_turn_id or "").strip() or "turn"
-    turn_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", normalized_turn_id).strip("-._")
-    turn_digest = hashlib.sha256(normalized_turn_id.encode("utf-8")).hexdigest()[:12]
+    turn_scope_digest = hashlib.sha256(
+        f"{scope_key}\0{business_turn_id}".encode("utf-8")
+    ).hexdigest()[:12]
     unique_suffix = uuid.uuid4().hex
-    token_file = token_root / (
-        f"{scope_digest}.{(turn_slug or 'turn')[:40]}.{turn_digest}.{unique_suffix}.token"
-    )
-    temporary_token_file = token_root / f".{token_file.name}.{uuid.uuid4().hex}.tmp"
+    token_file = token_root / f"{turn_scope_digest}.{unique_suffix}.token"
+    temporary_token_file = token_root / f".{uuid.uuid4().hex}.tmp"
     try:
         temporary_token_file.touch(mode=0o600, exist_ok=False)
         temporary_token_file.write_text(token, encoding="utf-8")
@@ -4004,6 +4049,24 @@ def _dramaclaw_mcp_servers(
             "command": sys.executable,
             "args": ["-m", "novelvideo.chat.workflow_mcp"],
             "env_vars": ["DRAMACLAW_USERNAME", "NOVELVIDEO_OUTPUT_DIR", "PYTHONPATH"],
+        }
+    # 联网搜索挂在常规对话路径；聚焦执行（exact node action / focused execution）
+    # 刻意收窄工具面，不挂 web server，避免把模型注意力拉离受保护的单批写入。
+    # exact_audio_action_plan 在 _build_codex_thread 里直接传空 servers，不经这里。
+    if not exact_node_action and not focused_execution:
+        servers["web"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "novelvideo.chat.web_mcp"],
+            "env_vars": [
+                "DRAMACLAW_API_URL",
+                "DRAMACLAW_AGENT_TOKEN_FILE",
+                "DRAMACLAW_CE_OWNER",
+                "DRAMACLAW_CE_OWNER_ALLOW_REMOTE",
+                "DRAMACLAW_LOCAL_AGENT_TRUST",
+                "DRAMACLAW_PROJECT_ID",
+                "PYTHONPATH",
+            ],
         }
     return servers
 
@@ -4931,6 +4994,7 @@ async def _stream_assistant_reply_hermes(
     persisted_message: dict[str, Any] | None = None
     seen_display_calls: set[str] = set()
     seen_tool_chat_errors: set[str] = set()
+    delta_gate = _StreamDeltaGate()
     turn_agent_product_operations = _TurnAgentProductOperationTracker()
 
     # One claim per business turn, settled exactly once at this boundary. The
@@ -5223,6 +5287,12 @@ async def _stream_assistant_reply_hermes(
                 continue
             if event.type == "assistant_delta":
                 assistant_text = _merge_stream_text(assistant_text, event.text)
+                # Drop the intermediate frames before paying for sanitizing and
+                # serializing the whole accumulated reply. The turn's final
+                # text still reaches the client through ``assistant_message``
+                # and ``done``, which carry the persisted message.
+                if not delta_gate.allow():
+                    continue
                 streamed_text = _strip_replayed_chat_response(
                     assistant_text,
                     previous_assistant,
@@ -5482,6 +5552,7 @@ async def _stream_assistant_reply_claude(
         agent_prompt = _prompt_with_user_context(username, project, prompt)
         assistant_text = ""
         tool_text = ""
+        delta_gate = _StreamDeltaGate()
         async for event in thread.stream(agent_prompt):
             if event.type == "thread_started":
                 thread_id = str(event.thread_id or "").strip() or None
@@ -5493,6 +5564,8 @@ async def _stream_assistant_reply_claude(
                 continue
             if event.type == "assistant_delta":
                 assistant_text = _merge_stream_text(assistant_text, event.text)
+                if not delta_gate.allow():
+                    continue
                 streamed_text = _redact_local_filesystem_paths(assistant_text)
                 await on_event(
                     {
@@ -5683,6 +5756,7 @@ async def _stream_assistant_reply_codex(
 ) -> dict[str, Any]:
     assistant_text = ""
     tool_text = ""
+    delta_gate = _StreamDeltaGate()
     structured_canvas_reply = str(tool_mode or "").strip() == "freezone_canvas"
     exact_audio_action_target = (
         _freezone_exact_audio_action_target(prompt, route_prompt=route_prompt)
@@ -5801,6 +5875,7 @@ async def _stream_assistant_reply_codex(
             request_prompt=route_prompt or prompt,
             exact_audio_action_plan=exact_audio_action_target is not None,
         )
+        is_resumed_codex_thread = bool(getattr(thread, "id", None))
         agent_prompt = _prompt_with_user_context(
             username,
             project,
@@ -5810,6 +5885,7 @@ async def _stream_assistant_reply_codex(
             route_prompt=route_prompt,
             turn_id=business_turn_id,
             require_generation_parameter_preflight=tool_mode == "freezone_canvas",
+            include_freezone_assistant_instructions=not is_resumed_codex_thread,
         )
         if tool_mode == "freezone_canvas":
             agent_prompt += await _canvas_background_result_context_for_scope(
@@ -5881,7 +5957,7 @@ async def _stream_assistant_reply_codex(
                 continue
             if event.type == "assistant_delta":
                 assistant_text = _merge_stream_text(assistant_text, event.text)
-                if not structured_canvas_reply:
+                if not structured_canvas_reply and delta_gate.allow():
                     streamed_text = _redact_local_filesystem_paths(assistant_text)
                     await on_event(
                         {

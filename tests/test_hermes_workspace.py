@@ -205,7 +205,7 @@ def test_freezone_profile_uses_isolated_workspace(
     parsed = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
     assert parsed["enabled_toolsets"] == ["hermes-acp", "freezone-acp", "memory"]
     assert parsed["tools"]["tool_search"]["enabled"] == "auto"
-    assert parsed["plugins"]["enabled"] == ["freezone"]
+    assert parsed["plugins"]["enabled"] == ["freezone", "websearch"]
     assert parsed["tools"]["skill_manage"]["enabled"] == "off"
     assert parsed["agent"]["coding_context"] == "off"
     assert "dramaclaw-acp" in parsed["disabled_toolsets"]
@@ -1382,7 +1382,7 @@ def test_existing_config_syncs_endpoint_without_persisting_rotated_key(
     hw.ensure_user_hermes_workspace("admin")
     reparsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert reparsed["enabled_toolsets"] == ["hermes-acp", "memory"]
-    assert reparsed["plugins"]["enabled"] == ["dramaclaw"]
+    assert reparsed["plugins"]["enabled"] == ["dramaclaw", "websearch"]
     assert reparsed["agent"]["max_turns"] == 4
 
 
@@ -1558,7 +1558,7 @@ def test_existing_plugin_block_gets_missing_freezone_plugin(
     hw.ensure_user_hermes_workspace("admin")
 
     parsed = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-    assert set(parsed["plugins"]["enabled"]) == {"dramaclaw"}
+    assert set(parsed["plugins"]["enabled"]) == {"dramaclaw", "websearch"}
     assert "freezone-acp" not in parsed["enabled_toolsets"]
     assert parsed["model"]["provider"] == "custom:dramaclaw"
     assert _dramaclaw_provider(parsed)["key_env"] == "NEWAPI_API_KEY"

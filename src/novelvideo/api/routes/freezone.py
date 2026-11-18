@@ -77,6 +77,7 @@ from novelvideo.api.schemas import (
     FreezoneAnalyzeShotsRequest,
     FreezoneAnalyzeVideoStoryRequest,
     FreezoneAssetCopyRequest,
+    FreezoneRemoteImageImportRequest,
     FreezoneAssetLibraryFolderPatchRequest,
     FreezoneAssetLibraryFolderRequest,
     FreezoneAssetLibraryItemPatchRequest,
@@ -4657,6 +4658,91 @@ async def freezone_three_d_viewer_screenshot(
             "size": len(payload),
         },
     }
+
+
+@router.post(
+    "/projects/{project}/freezone/remote-image-import", tags=[TAG_FREEZONE_MEDIA]
+)
+async def freezone_remote_image_import(
+    project: str,
+    body: FreezoneRemoteImageImportRequest,
+    user: dict = Depends(get_api_user),
+):
+    """把一张公网图片下载进本项目 `freezone/_uploads/`，返回同源静态地址。
+
+    联网搜索给的是远端 URL，画布节点要的是本项目静态地址（跨项目引用会被
+    画布媒体作用域守卫拒绝、也会在其他成员那里 403）。下载走
+    `download_to_path(public_only=True)`：只允许公网地址，重定向同样校验。
+    """
+
+    ctx, _username, _project_name, project_dir, _output_dir = (
+        await _resolve_freezone_project(project, user)
+    )
+    from novelvideo.ports.video_delivery import VideoDeliveryError
+    from novelvideo.utils.media_download import download_to_path
+
+    remote = body.url.strip()
+    parsed = urlsplit(remote)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, "url must be an absolute http(s) URL")
+
+    target_dir = uploads_dir(project_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = safe_upload_filename(
+        body.filename or Path(unquote(parsed.path)).name or "remote-image"
+    )
+    target = target_dir / filename
+    try:
+        receipt = await download_to_path(
+            remote,
+            str(target),
+            public_only=True,
+            headers={"Accept": "image/*"},
+        )
+    except VideoDeliveryError as exc:
+        if exc.code == "VIDEO_DOWNLOAD_URL_INVALID":
+            raise HTTPException(400, "只允许下载公网图片地址") from exc
+        raise HTTPException(502, f"下载远端图片失败：{exc.code}") from exc
+    if not _looks_like_image(target):
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "远端地址返回的不是图片")
+
+    rel = target.relative_to(project_dir).as_posix()
+    logger.info(
+        "remote image imported into project=%s bytes=%s source_host=%s",
+        ctx.project_id,
+        receipt.size,
+        parsed.hostname or "",
+    )
+    return {
+        "ok": True,
+        "data": {
+            "url": make_static_url_for_context(ctx, rel, local_path=target),
+            "rel_path": rel,
+            "filename": filename,
+            "size": receipt.size,
+            "source_url": remote,
+            "media_type": "image",
+        },
+    }
+
+
+def _looks_like_image(path: Path) -> bool:
+    """Sniff common image signatures so an HTML error page is never imported."""
+
+    try:
+        head = path.read_bytes()[:16]
+    except OSError:
+        return False
+    if head.startswith(b"\x89PNG\r\n\x1a\n") or head.startswith(b"\xff\xd8\xff"):
+        return True
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return True
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return True
+    if head.startswith(b"BM"):
+        return True
+    return head[:4] in {b"II*\x00", b"MM\x00*"}
 
 
 @router.post(

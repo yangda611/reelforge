@@ -49,6 +49,16 @@ python agent-kit/scripts/launch_mcp.py workflows
 - `workflows`：Workflow Skill/Recipe 查询、验证与只读编译。
 - `tools` 中的 `dramaclaw_{create,get,patch,validate}_interactive_story`：互动故事结构化创建、读取、增量修改与校验。
 
+联网搜索是独立入口，不在这两个 server 里（见
+[虾导联网搜索](web-search.md)）：
+
+```bash
+python -m novelvideo.chat.web_mcp
+```
+
+`web_search` / `web_page_read` / `web_image_import` 三个工具通过 API 进程访问
+博查；`BOCHA_API_KEY` 不需要写进 MCP 配置。
+
 `tools` 底层复用 `.hermes/plugins/reelforge` 和 `.hermes/plugins/freezone` 的现有工具实现。
 
 默认环境会自动补齐：

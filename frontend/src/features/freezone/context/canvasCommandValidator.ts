@@ -212,6 +212,115 @@ export function validateCanvasChatCommandEnvelopes(
 
   const isKnownNodeRef = (id: string): boolean => nodeIds.has(id) || clientIds.has(id);
   const isKnownDeleteRef = (id: string): boolean => isKnownNodeRef(id) || edgeIds.has(id);
+  const applyVirtualNodeDeletion = (requestedIds: Iterable<string>): void => {
+    const deletionRoots = [...new Set(requestedIds)].filter((id) => {
+      const node = nodeById.get(id);
+      return Boolean(node && !isPresetManagedNode(node));
+    });
+    const deletedNodeIds = new Set(deletionRoots);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const node of nodeById.values()) {
+        if (!node.parentId || deletedNodeIds.has(node.id)) continue;
+        if (deletedNodeIds.has(node.parentId)) {
+          deletedNodeIds.add(node.id);
+          changed = true;
+        }
+      }
+    }
+    for (const node of nodeById.values()) {
+      if (deletedNodeIds.has(node.id) && isPresetManagedNode(node)) {
+        deletedNodeIds.delete(node.id);
+      }
+    }
+
+    let remainingNodes = [...nodeById.values()]
+      .filter((node) => !deletedNodeIds.has(node.id))
+      .map((node) => (
+        node.parentId && deletedNodeIds.has(node.parentId)
+          ? { ...node, parentId: undefined }
+          : node
+      ));
+    const removedNodeIds = new Set(deletedNodeIds);
+    let changedGroups = true;
+    while (changedGroups) {
+      changedGroups = false;
+      const parentIds = new Set(
+        remainingNodes
+          .map((node) => node.parentId)
+          .filter((parentId): parentId is string => Boolean(parentId)),
+      );
+      const emptyGroupIds = new Set(
+        remainingNodes
+          .filter((node) => (
+            node.type === CANVAS_NODE_TYPES.group
+            && !deletionRoots.includes(node.id)
+            && !isPresetManagedNode(node)
+            && !parentIds.has(node.id)
+          ))
+          .map((node) => node.id),
+      );
+      if (emptyGroupIds.size > 0) {
+        changedGroups = true;
+        emptyGroupIds.forEach((id) => removedNodeIds.add(id));
+        remainingNodes = remainingNodes.filter((node) => !emptyGroupIds.has(node.id));
+      }
+    }
+
+    for (const id of removedNodeIds) {
+      nodeIds.delete(id);
+      clientIds.delete(id);
+      nodeById.delete(id);
+    }
+    for (const node of remainingNodes) {
+      if (nodeById.has(node.id)) nodeById.set(node.id, node);
+    }
+    for (const edge of edges) {
+      if (removedNodeIds.has(edge.source) || removedNodeIds.has(edge.target)) {
+        edgeIds.delete(edge.id);
+      }
+    }
+  };
+  const applyVirtualProjectionRemoval = (projectionKey: string): void => {
+    const removedNodeIds = new Set<string>();
+    for (const node of nodeById.values()) {
+      const data = node.data as {
+        projection_key?: unknown;
+        projection_archived?: unknown;
+        source_projection_key?: unknown;
+        user_spawned?: unknown;
+      };
+      if (
+        (data.user_spawned !== true && data.projection_key === projectionKey) ||
+        (data.projection_archived === true && data.source_projection_key === projectionKey)
+      ) {
+        removedNodeIds.add(node.id);
+      }
+    }
+    const removedEdgeIds = new Set<string>();
+    for (const edge of edges) {
+      const data = edge.data as { projection_key?: unknown; user_spawned?: unknown } | undefined;
+      if (
+        removedNodeIds.has(edge.source) ||
+        removedNodeIds.has(edge.target) ||
+        (data?.user_spawned !== true && data?.projection_key === projectionKey)
+      ) {
+        removedEdgeIds.add(edge.id);
+      }
+    }
+    for (const id of removedNodeIds) {
+      nodeIds.delete(id);
+      clientIds.delete(id);
+      nodeById.delete(id);
+    }
+    for (const [id, node] of nodeById) {
+      if (node.parentId && removedNodeIds.has(node.parentId)) {
+        nodeById.set(id, { ...node, parentId: undefined, extent: undefined });
+      }
+    }
+    for (const id of removedEdgeIds) edgeIds.delete(id);
+  };
 
   envelopes.forEach((envelope, envelopeIndex) => {
     envelope.commands.forEach((command, commandIndex) => {
@@ -232,8 +341,14 @@ export function validateCanvasChatCommandEnvelopes(
           break;
         }
         case "clear_canvas":
-          // The executor resolves the current canvas contents at approval
-          // time, so there are no ids to validate in the command payload.
+          // Match deleteNodesOrEdges(): keep mainline projection nodes while
+          // applying cascading deletion and ordinary empty-group pruning.
+          applyVirtualNodeDeletion(
+            [...nodeById.values()]
+              .filter((node) => !isPresetManagedNode(node) && !isSystemManagedNodeData(node.data))
+              .map((node) => node.id),
+          );
+          edgeIds.clear();
           break;
         case "create_node": {
           const data = normalizeCanvasCommandCreateNodeData(command.node_type, command.data);
@@ -374,6 +489,7 @@ export function validateCanvasChatCommandEnvelopes(
         }
         case "delete_nodes": {
           const projectionNodeIdsByKey = new Map<string, Set<string>>();
+          const requestedNodeIds = new Set<string>();
           for (const id of command.node_ids) {
             if (!isKnownDeleteRef(id)) addIssue(issues, path, `node or edge not found: ${id}`);
             const target = nodeById.get(id);
@@ -390,6 +506,11 @@ export function validateCanvasChatCommandEnvelopes(
               }
               ids.add(id);
             }
+            if (isKnownNodeRef(id)) {
+              requestedNodeIds.add(id);
+            } else {
+              edgeIds.delete(id);
+            }
           }
           for (const [projectionKey, requestedIds] of projectionNodeIdsByKey) {
             const allProjectionNodeIds = [...nodeById.values()]
@@ -403,8 +524,13 @@ export function validateCanvasChatCommandEnvelopes(
                 path,
                 `node is mainline projection managed and cannot be deleted directly: ${firstRequestedId}`,
               );
+            } else {
+              applyVirtualProjectionRemoval(projectionKey);
             }
           }
+          // Mirror canvasStore.deleteNodes() so subsequent commands see the
+          // same descendant cascade, protected-node retention and empty-group pruning.
+          applyVirtualNodeDeletion(requestedNodeIds);
           break;
         }
         case "delete_edges": {
@@ -460,11 +586,61 @@ export function validateCanvasChatCommandEnvelopes(
           break;
         }
         case "group_nodes": {
+          let hasMissingRef = false;
+          for (const id of command.node_ids) {
+            if (!isKnownNodeRef(id)) {
+              hasMissingRef = true;
+              addIssue(issues, path, missingNodeMessage(id));
+            }
+          }
+          const uniqueIds = Array.from(
+            new Set(command.node_ids.filter((id) => id.trim().length > 0 && isKnownNodeRef(id))),
+          );
+          const selectedSet = new Set(uniqueIds);
+          // Mirror canvasStore.groupNodes() ancestor exclusion: passing both a group and
+          // its descendants drops the descendants and can leave fewer than two members.
+          const effectiveMemberIds = uniqueIds.filter((nodeId) => {
+            let currentParentId = nodeById.get(nodeId)?.parentId;
+            const visited = new Set<string>();
+            while (currentParentId && !visited.has(currentParentId)) {
+              if (selectedSet.has(currentParentId)) {
+                return false;
+              }
+              visited.add(currentParentId);
+              currentParentId = nodeById.get(currentParentId)?.parentId;
+            }
+            return true;
+          });
           if (command.node_ids.length < 2) {
             addIssue(issues, path, "group requires at least two nodes");
-          }
-          for (const id of command.node_ids) {
-            if (!isKnownNodeRef(id)) addIssue(issues, path, missingNodeMessage(id));
+          } else if (!hasMissingRef && uniqueIds.length < 2) {
+            addIssue(
+              issues,
+              path,
+              "group requires at least two distinct nodes (duplicate node_ids were provided)",
+            );
+          } else if (!hasMissingRef && effectiveMemberIds.length < 2) {
+            addIssue(
+              issues,
+              path,
+              "group requires at least two independent existing nodes (do not include both a group and its children in node_ids)",
+            );
+          } else if (!hasMissingRef) {
+            const virtualGroupId = `__validate_group__:${envelopeIndex}:${commandIndex}`;
+            const virtualGroup = {
+              id: virtualGroupId,
+              type: CANVAS_NODE_TYPES.group,
+              position: { x: 0, y: 0 },
+              data: { label: command.label ?? "" },
+            } as CanvasNode;
+            nodeIds.add(virtualGroupId);
+            nodeById.set(virtualGroupId, virtualGroup);
+            for (const memberId of effectiveMemberIds) {
+              const member = nodeById.get(memberId);
+              if (member) {
+                nodeById.set(memberId, { ...member, parentId: virtualGroupId });
+              }
+            }
           }
           break;
         }

@@ -11665,3 +11665,13 @@ def test_expired_existing_card_does_not_consume_new_preflight_proof(preflight_mo
     assert result["clarification_status"] == "pending_user_input"
     assert len(messages) == 1
     assert not plugin._PENDING_SERVER_VIDEO_MODEL_CLARIFICATIONS
+
+
+def test_group_nodes_rejects_duplicate_single_node_locally():
+    plugin = _load_plugin_module()
+
+    result = plugin._handle_group_nodes({"node_ids": ["node-1", "node-1"]})
+
+    assert result["ok"] is False
+    assert result["status"] == "node_ids_required"
+    assert "distinct" in result["error"]

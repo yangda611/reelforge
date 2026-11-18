@@ -6147,7 +6147,30 @@ def _create_group_node(
     node_ids: list[str],
     label: str,
 ) -> str | None:
-    members = [nodes_by_id[node_id] for node_id in node_ids if node_id in nodes_by_id]
+    unique_ids = list(
+        dict.fromkeys(
+            str(node_id or "").strip()
+            for node_id in node_ids
+            if str(node_id or "").strip() and str(node_id or "").strip() in nodes_by_id
+        )
+    )
+    selected_set = set(unique_ids)
+
+    def _has_selected_ancestor(node_id: str) -> bool:
+        current_parent = str((nodes_by_id.get(node_id) or {}).get("parentId") or "").strip()
+        visited: set[str] = set()
+        while current_parent and current_parent not in visited:
+            if current_parent in selected_set:
+                return True
+            visited.add(current_parent)
+            current_parent = str((nodes_by_id.get(current_parent) or {}).get("parentId") or "").strip()
+        return False
+
+    members = [
+        nodes_by_id[node_id]
+        for node_id in unique_ids
+        if not _has_selected_ancestor(node_id)
+    ]
     if len(members) < 2:
         return None
     min_x = min(float((node.get("position") or {}).get("x") or 0) for node in members)
@@ -9319,7 +9342,7 @@ def _handle_layout_nodes(args: dict[str, Any], **_: Any) -> str:
 
 def _handle_group_nodes(args: dict[str, Any], **_: Any) -> str:
     node_ids = args.get("node_ids")
-    if not isinstance(node_ids, list) or len(node_ids) < 2:
+    if not isinstance(node_ids, list):
         return tool_result(
             {
                 "ok": False,
@@ -9327,7 +9350,22 @@ def _handle_group_nodes(args: dict[str, Any], **_: Any) -> str:
                 "error": "node_ids must contain at least two nodes",
             }
         )
-    command: dict[str, Any] = {"type": "group_nodes", "node_ids": node_ids}
+    unique_ids = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in node_ids
+            if isinstance(item, str) and item.strip()
+        )
+    )
+    if len(unique_ids) < 2:
+        return tool_result(
+            {
+                "ok": False,
+                "status": "node_ids_required",
+                "error": "node_ids must contain at least two distinct nodes",
+            }
+        )
+    command: dict[str, Any] = {"type": "group_nodes", "node_ids": unique_ids}
     label = str(args.get("label") or "").strip()
     if label:
         command["label"] = label

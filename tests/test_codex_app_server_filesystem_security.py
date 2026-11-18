@@ -163,7 +163,13 @@ def test_canvas_business_tools_are_exposed_only_by_required_mcp_servers():
     overrides = service._codex_mcp_config_overrides(servers)
     rendered = "\n".join(overrides)
 
-    assert set(servers) == {"dramaclaw", "dramaclaw_workflows", "dramaclaw_interactive_story"}
+    assert set(servers) == {
+        "dramaclaw",
+        "dramaclaw_workflows",
+        "dramaclaw_interactive_story",
+        # 联网搜索是独立 server：它只读公网，不接管任何业务写入边界。
+        "web",
+    }
     assert "mcp_servers.dramaclaw.required=true" in rendered
     assert "mcp_servers.dramaclaw_workflows.required=true" in rendered
     assert "mcp_servers.dramaclaw_interactive_story.required=true" in rendered
@@ -173,3 +179,4 @@ def test_canvas_business_tools_are_exposed_only_by_required_mcp_servers():
         'mcp_servers.dramaclaw_workflows.default_tools_approval_mode="approve"'
         in rendered
     )
+    assert "mcp_servers.web.required=true" in rendered

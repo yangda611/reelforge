@@ -1060,4 +1060,97 @@ describe("node-specific mode command validation", () => {
     expect(result.ok).toBe(false);
     expect(result.issues[0].path).toContain("commands[1]");
   });
+
+  it("rejects group_nodes referencing a node deleted earlier in the same batch", () => {
+    const a = node({ id: "node-a", type: CANVAS_NODE_TYPES.textAnnotation });
+    const b = node({ id: "node-b", type: CANVAS_NODE_TYPES.textAnnotation });
+    const result = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "delete_nodes", node_ids: ["node-a"] },
+        { type: "group_nodes", node_ids: ["node-a", "node-b"], label: "分组" },
+      ],
+    }], [a, b], []);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.path.includes("commands[1]") && issue.message.includes("node not found: node-a"))).toBe(true);
+  });
+
+  it("removes a fully deleted projection from the remaining batch validation state", () => {
+    const projectionKey = "asset:scene:master";
+    const first = node({
+      id: "projection-a",
+      type: CANVAS_NODE_TYPES.group,
+      data: { projection_key: projectionKey },
+    });
+    const second = node({
+      id: "projection-b",
+      type: CANVAS_NODE_TYPES.textAnnotation,
+      data: { projection_key: projectionKey },
+    });
+    const unrelated = node({ id: "node-c", type: CANVAS_NODE_TYPES.textAnnotation });
+    const result = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "delete_nodes", node_ids: ["projection-a", "projection-b"] },
+        { type: "group_nodes", node_ids: ["projection-a", "node-c"], label: "移除后的节点" },
+      ],
+    }], [first, second, unrelated], []);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => (
+      issue.path.includes("commands[1]") && issue.message.includes("node not found: projection-a")
+    ))).toBe(true);
+  });
+
+  it("rejects grouping an ordinary group after its last child is deleted", () => {
+    const group = node({ id: "group-1", type: CANVAS_NODE_TYPES.group });
+    const child = { ...node({ id: "child-1", type: CANVAS_NODE_TYPES.textAnnotation }), parentId: "group-1" } as CanvasNode;
+    const other = node({ id: "node-b", type: CANVAS_NODE_TYPES.textAnnotation });
+    const result = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "delete_nodes", node_ids: ["child-1"] },
+        { type: "group_nodes", node_ids: ["group-1", "node-b"], label: "外层分组" },
+      ],
+    }], [group, child, other], []);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => (
+      issue.path.includes("commands[1]") && issue.message.includes("node not found: group-1")
+    ))).toBe(true);
+  });
+
+  it("mirrors clear_canvas before validating later commands", () => {
+    const a = node({ id: "node-a", type: CANVAS_NODE_TYPES.textAnnotation });
+    const b = node({ id: "node-b", type: CANVAS_NODE_TYPES.textAnnotation });
+    const result = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "clear_canvas" },
+        { type: "group_nodes", node_ids: ["node-a", "node-b"], label: "已清空节点" },
+      ],
+    }], [a, b], []);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.path.includes("commands[1]") && issue.message.includes("node not found"))).toBe(true);
+  });
+
+  it("rejects group_nodes with duplicate ids or parent-child group overlap", () => {
+    const group = node({ id: "group-1", type: CANVAS_NODE_TYPES.group });
+    const child = { ...node({ id: "child-1", type: CANVAS_NODE_TYPES.textAnnotation }), parentId: "group-1" } as CanvasNode;
+
+    const duplicateResult = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [{ type: "group_nodes", node_ids: ["child-1", "child-1"], label: "重复" }],
+    }], [group, child], []);
+    expect(duplicateResult.ok).toBe(false);
+    expect(duplicateResult.issues[0].message).toContain("duplicate node_ids");
+
+    const overlapResult = validateCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [{ type: "group_nodes", node_ids: ["group-1", "child-1"], label: "父子重叠" }],
+    }], [group, child], []);
+    expect(overlapResult.ok).toBe(false);
+    expect(overlapResult.issues[0].message).toContain("independent existing nodes");
+  });
 });

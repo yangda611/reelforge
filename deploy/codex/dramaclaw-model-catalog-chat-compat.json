@@ -5,8 +5,9 @@
       "base_instructions": "You are Codex, the DramaClaw agent. Follow the developer instructions and use the available MCP tools to perform project and canvas work.",
       "display_name": "DramaClaw Codex Agent",
       "description": "DramaClaw Gateway alias using concrete MCP tools for Responses-to-Chat compatibility.",
-      "default_reasoning_level": "low",
+      "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
+        {"effort": "none", "description": "No additional reasoning"},
         {"effort": "low", "description": "Fast responses with lighter reasoning"},
         {"effort": "medium", "description": "Balances speed and reasoning depth"},
         {"effort": "high", "description": "Greater reasoning depth for complex problems"},
@@ -56,8 +57,9 @@
       "base_instructions": "You are Codex, the DramaClaw agent. Follow the developer instructions and use the available MCP tools to perform project and canvas work.",
       "display_name": "BrainClaw",
       "description": "RelayClaw BrainClaw route selected in Custom mode; same Codex agent metadata as the gateway alias.",
-      "default_reasoning_level": "low",
+      "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
+        {"effort": "none", "description": "No additional reasoning"},
         {"effort": "low", "description": "Fast responses with lighter reasoning"},
         {"effort": "medium", "description": "Balances speed and reasoning depth"},
         {"effort": "high", "description": "Greater reasoning depth for complex problems"},
