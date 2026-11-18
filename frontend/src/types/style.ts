@@ -16,6 +16,8 @@ export interface Style {
   label?: string;
   type?: "preset" | "custom";
   is_preset?: boolean;
+  style_family?: "live_action" | "animation" | string;
+  animation_subtype?: string | null;
   base?: string | null;
   // Top-level config fields (returned by single GET).
   style_instructions?: string;

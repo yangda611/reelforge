@@ -783,6 +783,12 @@ def _add_scene_refs(
         "base_scene_id": str(scene_info.get("base_scene_id") or "").strip(),
         "base_master_url": str(scene_info.get("base_master_url") or "").strip(),
         "base_master_rel_path": str(scene_info.get("base_master_rel_path") or "").strip(),
+        "base_reverse_master_url": str(
+            scene_info.get("base_reverse_master_url") or ""
+        ).strip(),
+        "base_reverse_master_rel_path": str(
+            scene_info.get("base_reverse_master_rel_path") or ""
+        ).strip(),
         "base_environment_prompt": str(scene_info.get("base_environment_prompt") or "").strip(),
         "base_description": str(scene_info.get("base_description") or "").strip(),
         "base_scene_type": str(scene_info.get("base_scene_type") or "").strip(),
@@ -2009,6 +2015,7 @@ def _scene_reference_prompt_content(
     *,
     kind: str,
     has_master_reference: bool = False,
+    has_base_reverse_reference: bool = False,
 ) -> str:
     scene = _scene_from_prompt_meta(scene_id, meta)
     return build_scene_reference_prompt(
@@ -2018,6 +2025,7 @@ def _scene_reference_prompt_content(
         style_prompt=str(meta.get("style_prompt") or "").strip(),
         avoid_instructions=str(meta.get("avoid_instructions") or "").strip(),
         has_master_reference=has_master_reference,
+        has_base_reverse_reference=has_base_reverse_reference,
         base_scene=_base_scene_from_prompt_meta(meta),
     )
 
@@ -2177,14 +2185,65 @@ def _append_scene_asset_workflow(
             for idx, role in enumerate(SCENE_PLY_WORKFLOW_ROLES):
                 _ensure_ply_workflow_node(role, x=1460, y=460 + scene_y + idx * 320)
 
+        def _wire_base_scene_dependency(
+            *,
+            target_node_id: str,
+            meta: dict[str, Any],
+            node_id_prefix: str,
+            role: str,
+            label_suffix: str,
+            url_key: str,
+            rel_path_key: str,
+            edge_kind: str,
+            pos_x: int,
+            pos_y: int,
+        ) -> bool:
+            dep_base_scene_id = str(
+                meta.get("base_scene_id") or prompt_meta.get("base_scene_id") or ""
+            ).strip()
+            dep_url = str(meta.get(url_key) or prompt_meta.get(url_key) or "").strip()
+            if not (dep_base_scene_id and dep_base_scene_id != scene_id and dep_url):
+                return False
+            dep_node_id = f"{node_id_prefix}_{safe_scene}"
+            if not any(node.get("id") == dep_node_id for node in nodes):
+                dep_rel_path = str(
+                    meta.get(rel_path_key) or prompt_meta.get(rel_path_key) or ""
+                ).strip()
+                dep_ref = {
+                    "kind": "scene",
+                    "role": role,
+                    "label": f"{dep_base_scene_id} {label_suffix}",
+                    "rel_path": dep_rel_path or None,
+                    "url": dep_url,
+                    "exists": True,
+                    "media_type": "image",
+                    "aspect_ratio": "16:9",
+                    "meta": {
+                        **meta,
+                        "scene_id": dep_base_scene_id,
+                        "derived_scene_id": scene_id,
+                        "base_for_scene_id": scene_id,
+                    },
+                }
+                nodes.append(_asset_image_node(dep_node_id, pos_x, pos_y, dep_ref))
+            edges.append(
+                _edge(
+                    f"edge_{dep_node_id}_to_{_safe_id(target_node_id)}",
+                    dep_node_id,
+                    target_node_id,
+                    {"edgeKind": edge_kind},
+                )
+            )
+            return True
+
         if master_node:
             master_prompt_id = f"prompt_scene_{safe_scene}_master"
+            master_meta = (
+                role_to_ref.get("scene_master", {}).get("meta")
+                if isinstance(role_to_ref.get("scene_master", {}).get("meta"), dict)
+                else prompt_meta
+            )
             if not any(node.get("id") == master_prompt_id for node in nodes):
-                master_meta = (
-                    role_to_ref.get("scene_master", {}).get("meta")
-                    if isinstance(role_to_ref.get("scene_master", {}).get("meta"), dict)
-                    else prompt_meta
-                )
                 nodes.append(
                     _prompt_text_node(
                         master_prompt_id,
@@ -2211,55 +2270,40 @@ def _append_scene_asset_workflow(
                     master_node,
                 )
             )
-            base_scene_id = str(prompt_meta.get("base_scene_id") or "").strip()
-            base_master_url = str(prompt_meta.get("base_master_url") or "").strip()
-            if base_scene_id and base_master_url:
-                base_master_node_id = f"ref_scene_base_master_{safe_scene}"
-                if not any(node.get("id") == base_master_node_id for node in nodes):
-                    base_master_rel_path = str(
-                        prompt_meta.get("base_master_rel_path") or ""
-                    ).strip()
-                    base_ref = {
-                        "kind": "scene",
-                        "role": "scene_base_master",
-                        "label": f"{base_scene_id} base master",
-                        "rel_path": base_master_rel_path or None,
-                        "url": base_master_url,
-                        "exists": True,
-                        "media_type": "image",
-                        "aspect_ratio": "16:9",
-                        "meta": {
-                            **prompt_meta,
-                            "scene_id": base_scene_id,
-                            "derived_scene_id": scene_id,
-                            "base_for_scene_id": scene_id,
-                        },
-                    }
-                    nodes.append(
-                        _asset_image_node(
-                            base_master_node_id,
-                            master_prompt_pos[0],
-                            master_prompt_pos[1] + 300,
-                            base_ref,
-                        )
-                    )
-                edges.append(
-                    _edge(
-                        f"edge_{base_master_node_id}_to_{_safe_id(master_node)}",
-                        base_master_node_id,
-                        master_node,
-                        {"edgeKind": "scene_base_master_dependency"},
-                    )
-                )
+            _wire_base_scene_dependency(
+                target_node_id=master_node,
+                meta=master_meta,
+                node_id_prefix="ref_scene_base_master",
+                role="scene_base_master",
+                label_suffix="base master",
+                url_key="base_master_url",
+                rel_path_key="base_master_rel_path",
+                edge_kind="scene_base_master_dependency",
+                pos_x=master_prompt_pos[0],
+                pos_y=master_prompt_pos[1] + 300,
+            )
 
         if reverse_node:
             reverse_prompt_id = f"prompt_scene_{safe_scene}_reverse_master"
+            reverse_meta = (
+                role_to_ref.get("scene_reverse_master", {}).get("meta")
+                if isinstance(role_to_ref.get("scene_reverse_master", {}).get("meta"), dict)
+                else prompt_meta
+            )
+            base_reverse_scene_id = str(
+                reverse_meta.get("base_scene_id") or prompt_meta.get("base_scene_id") or ""
+            ).strip()
+            base_reverse_url = str(
+                reverse_meta.get("base_reverse_master_url")
+                or prompt_meta.get("base_reverse_master_url")
+                or ""
+            ).strip()
+            has_base_reverse_reference = bool(
+                base_reverse_scene_id
+                and base_reverse_scene_id != scene_id
+                and base_reverse_url
+            )
             if not any(node.get("id") == reverse_prompt_id for node in nodes):
-                reverse_meta = (
-                    role_to_ref.get("scene_reverse_master", {}).get("meta")
-                    if isinstance(role_to_ref.get("scene_reverse_master", {}).get("meta"), dict)
-                    else prompt_meta
-                )
                 nodes.append(
                     _prompt_text_node(
                         reverse_prompt_id,
@@ -2271,6 +2315,7 @@ def _append_scene_asset_workflow(
                             reverse_meta,
                             kind="reverse_master",
                             has_master_reference=bool(master_node),
+                            has_base_reverse_reference=has_base_reverse_reference,
                         ),
                         source_meta={
                             "kind": "scene_prompt",
@@ -2291,6 +2336,22 @@ def _append_scene_asset_workflow(
                         reverse_node,
                     )
                 )
+            _wire_base_scene_dependency(
+                target_node_id=reverse_node,
+                meta=reverse_meta,
+                node_id_prefix="ref_scene_base_reverse_master",
+                role="scene_base_reverse_master",
+                label_suffix="base reverse master",
+                url_key="base_reverse_master_url",
+                rel_path_key="base_reverse_master_rel_path",
+                edge_kind="scene_base_reverse_master_dependency",
+                pos_x=reverse_prompt_pos[0],
+                pos_y=(
+                    reverse_prompt_pos[1] - 300
+                    if layout_style != "beat"
+                    else reverse_prompt_pos[1] + 300
+                ),
+            )
             edges.append(
                 _edge(
                     f"edge_{reverse_prompt_id}_to_{_safe_id(reverse_node)}",
@@ -3175,16 +3236,22 @@ async def build_asset_preset_context(
             scene_info["base_scene_type"] = str(
                 base_scene_info.get("scene_type") or ""
             ).strip()
-            if base_scene_id:
-                base_master_path = canonical_scene_master_path(project_dir, base_scene_id)
-                if base_master_path.exists():
-                    base_master_rel_path = _rel(project_dir, base_master_path)
-                    scene_info["base_master_rel_path"] = base_master_rel_path
-                    scene_info["base_master_url"] = _make_url(
-                        project_id,
-                        project_dir,
-                        base_master_rel_path,
-                    )
+            if base_scene_id and base_scene_id != scene_name:
+                for key_prefix, base_path in (
+                    ("base_master", canonical_scene_master_path(project_dir, base_scene_id)),
+                    (
+                        "base_reverse_master",
+                        canonical_scene_reverse_master_path(project_dir, base_scene_id),
+                    ),
+                ):
+                    if base_path.exists():
+                        rel_path = _rel(project_dir, base_path)
+                        scene_info[f"{key_prefix}_rel_path"] = rel_path
+                        scene_info[f"{key_prefix}_url"] = _make_url(
+                            project_id,
+                            project_dir,
+                            rel_path,
+                        )
         scene_info = {**scene_info, **_project_style_meta(username, project, project_dir)}
         _add_scene_refs(
             refs,

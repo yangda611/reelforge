@@ -571,6 +571,87 @@ def test_derived_scene_asset_preset_projects_base_master_dependency() -> None:
     assert ("prompt_scene_bathroom_leak_master", "ref_scene_master_1") in edges
 
 
+def test_derived_scene_asset_preset_projects_base_reverse_master_dependency() -> None:
+    context = {
+        "scope": "asset",
+        "asset_kind": "scene",
+        "asset_id": "bathroom_leak",
+        "refs": [
+            {
+                "kind": "scene",
+                "role": "scene_master",
+                "label": "bathroom_leak master",
+                "rel_path": "assets/scenes/bathroom_leak/master.png",
+                "url": "/static/admin/demo/assets/scenes/bathroom_leak/master.png",
+                "exists": True,
+                "aspect_ratio": "16:9",
+                "meta": {
+                    "scene_id": "bathroom_leak",
+                    "base_scene_id": "bathroom",
+                    "variant_id": "leak",
+                    "variant_prompt": "地面积水，天花板持续滴水。",
+                    "base_master_url": "/static/admin/demo/assets/scenes/bathroom/master.png",
+                    "base_master_rel_path": "assets/scenes/bathroom/master.png",
+                    "base_reverse_master_url": "/static/admin/demo/assets/scenes/bathroom/reverse_master.png",
+                    "base_reverse_master_rel_path": "assets/scenes/bathroom/reverse_master.png",
+                    "base_environment_prompt": "白瓷砖墙面，正面是洗手台，背面是淋浴间。",
+                },
+            },
+            {
+                "kind": "scene",
+                "role": "scene_reverse_master",
+                "label": "bathroom_leak reverse master",
+                "rel_path": "assets/scenes/bathroom_leak/reverse_master.png",
+                "url": "/static/admin/demo/assets/scenes/bathroom_leak/reverse_master.png",
+                "exists": False,
+                "aspect_ratio": "16:9",
+                "meta": {
+                    "scene_id": "bathroom_leak",
+                    "base_scene_id": "bathroom",
+                    "variant_id": "leak",
+                    "variant_prompt": "地面积水，天花板持续滴水。",
+                    "base_master_url": "/static/admin/demo/assets/scenes/bathroom/master.png",
+                    "base_master_rel_path": "assets/scenes/bathroom/master.png",
+                    "base_reverse_master_url": "/static/admin/demo/assets/scenes/bathroom/reverse_master.png",
+                    "base_reverse_master_rel_path": "assets/scenes/bathroom/reverse_master.png",
+                    "base_environment_prompt": "白瓷砖墙面，正面是洗手台，背面是淋浴间。",
+                },
+            },
+        ],
+    }
+
+    payload = build_canvas_payload_from_context(
+        context=context,
+        preset_key="asset:scene:::bathroom_leak",
+        default_push_target={"kind": "scene_master", "scene_id": "bathroom_leak"},
+    )
+    nodes = {node["id"]: node for node in payload["nodes"]}
+    reverse_incoming = [
+        edge["source"]
+        for edge in payload["edges"]
+        if edge["target"] == "ref_scene_reverse_master_1"
+    ]
+
+    base_reverse_node_id = "ref_scene_base_reverse_master_bathroom_leak"
+    assert nodes[base_reverse_node_id]["type"] == "imageGenNode"
+    assert (
+        nodes[base_reverse_node_id]["data"]["displayName"]
+        == "bathroom base reverse master"
+    )
+    assert nodes[base_reverse_node_id]["data"]["imageUrl"].endswith(
+        "assets/scenes/bathroom/reverse_master.png"
+    )
+    assert reverse_incoming == [
+        "ref_scene_master_1",
+        base_reverse_node_id,
+        "prompt_scene_bathroom_leak_reverse_master",
+    ]
+    reverse_prompt = nodes["prompt_scene_bathroom_leak_reverse_master"]["data"][
+        "content"
+    ]
+    assert "REFERENCE 2 = the BASE SCENE's canonical REVERSE-FACING" in reverse_prompt
+
+
 def test_scene_asset_preset_folds_existing_3gs_sources_into_director_world() -> None:
     context = {
         "scope": "asset",

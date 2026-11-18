@@ -520,8 +520,9 @@ class NanoBananaCharacterGenerator:
                 f"[NanoBanana Character] 基于基准图生成 {character_name} 身份图（reference sheet）..."
             )
 
-            # 构建 Identity Locked Prompt（4 面板: 全脸 + 正面 + 45° 三分 + 背面）
+            # 构建 Identity Locked Prompt（写实真人采用竖版 9:16 2x2 四宫格，动画采用 4 面板横向）
             has_costume_ref = bool(costume_image_path and os.path.exists(costume_image_path))
+            has_identity_ref = bool(reference_image_path and os.path.exists(reference_image_path))
             prompt = self._build_identity_locked_prompt(
                 character_name=character_name,
                 character_prompt=identity_prompt,
@@ -534,6 +535,7 @@ class NanoBananaCharacterGenerator:
                 state_dir=state_dir,
                 ethnicity=ethnicity,
                 has_costume_reference=has_costume_ref,
+                has_identity_reference=has_identity_ref,
             )
 
             # 保存 prompt 到文件（审计用）
@@ -607,15 +609,14 @@ class NanoBananaCharacterGenerator:
                     costume_image_bytes = f.read()
                 print(f"[NanoBanana Character] 已加载服装参考图: {costume_image_path}")
 
-            # 统一流程：生成 body 到临时文件 → 拼接 portrait → 删 temp
-            aspect_ratio = "16:9"
             image_size = self._resolved_image_size()
             family, _ = StyleService.get_style_branch(
                 style or IMAGE_DEFAULT_STYLE,
                 project_dir=project_dir or None,
                 state_dir=state_dir or None,
             )
-            body_label = "4面板 reference sheet" if family == "animation" else "3栏定妆三联图"
+            aspect_ratio = "16:9" if family == "animation" else "9:16"
+            body_label = "4面板 reference sheet" if family == "animation" else "竖版9:16四宫格定妆图"
 
             temp_body_path = output_path.replace(".png", "_body_temp.png")
             print(f"[NanoBanana Character] 生成{body_label}到临时文件: {temp_body_path}")
@@ -1044,25 +1045,9 @@ A second reference image is provided showing the target costume/clothing.
         state_dir: str = "",
         ethnicity: str = "Chinese",
         has_costume_reference: bool = False,
+        has_identity_reference: bool = True,
     ) -> str:
-        """构建 4 面板 reference sheet Prompt（全脸特写 + 正面全身 + 45° 三分全身 + 背面全身）。
-
-        使用参考图作为身份锚点，一次性生成包含面部特写、正面全身、三分视角全身和背面全身的 sheet，
-        零拼接、天然一致。
-
-        Args:
-            character_name: 角色名称
-            character_prompt: 角色外貌描述
-            character_tag: 角色唯一标签
-            target_view: 目标视角
-            style_keywords: 风格关键词
-            negative_keywords: 负面关键词
-            ethnicity: 角色种族（默认 "Chinese"）
-            full_body: 是否生成全身像（默认 True）
-
-        Returns:
-            4-panel reference sheet Prompt
-        """
+        """构建角色定妆参考表 Prompt（真人实拍采用竖版 9:16 2x2 四宫格，动画采用横向 4 面板）。"""
         family, _ = StyleService.get_style_branch(
             style_name or IMAGE_DEFAULT_STYLE,
             project_dir=project_dir or None,
@@ -1116,38 +1101,78 @@ STRICT REQUIREMENTS (MUST AVOID):
             return prompt.strip()
 
         skill_directives = get_live_action_character_sheet_skill_directives()
-        prompt = f"""Create ONE landscape 16:9 live-action costume-fitting character reference sheet photograph for {character_tag} ({character_name}).
-NEUTRAL STUDIO SETUP: seamless warm-off-white or light neutral gray background ONLY — NO environment, NO scenery, NO props, NO text, NO borders, NO thick divider lines.
+        if has_identity_reference:
+            task_header = (
+                f"IMAGE TASK: Convert the attached identity reference image (Reference 1) "
+                f"for {character_tag} ({character_name}) into a vertical portrait 9:16 "
+                f"4-panel live-action character sheet."
+            )
+            preservation_block = (
+                f"CRITICAL PRESERVATION OVERRIDE: Reference 1 is the authoritative identity "
+                f"source for {character_tag} ({character_name}). Preserve EXACTLY in Panel 1 "
+                "(FACE FRONT) and Panel 2 (FACE SIDE): facial structure, bone structure, "
+                "eyes, nose, mouth shape, hairline and hairstyle, age, skin tone and skin "
+                "texture (age- and distance-appropriate real pores, any natural stubble or "
+                "facial hair, subtle eye-area detail, slight local colour variation). NO "
+                "beautification, NO face slimming, NO enlarged eyes, NO style drift, NO "
+                "\"improving\" the face. Do NOT preserve beauty-filter smoothing, wax/plastic "
+                "skin, or conflicting colour grading from any reference. Preserve the same "
+                "adult actor's hair, build, skin tone, and wardrobe across all four panels — "
+                "CRITICAL PANEL 3 EXCEPTION: in Panel 3 (BODY FRONT, bottom-left), do NOT "
+                "copy eyes, eyebrows, nose, or mouth from Reference 1; keep Panel 3's face "
+                "intentionally blurred out and completely featureless as specified below. "
+                "Where Reference 1 does not show a view, extend conservatively without adding "
+                "unrequested patterns or accessories."
+            )
+        else:
+            task_header = (
+                f"IMAGE TASK: Create one vertical portrait 9:16 4-panel live-action "
+                f"costume-fitting character sheet photograph for {character_tag} ({character_name})."
+            )
+            preservation_block = (
+                f"IDENTITY CONSISTENCY: Depict one fictional adult actor for {character_tag} "
+                f"({character_name}) consistently across all four panels (same build, age, "
+                "skin tone, hairline, hairstyle, and wardrobe; sharp detailed face ONLY in "
+                "Panels 1 and 2, while Panel 3 BODY FRONT keeps its face intentionally "
+                "blurred out and featureless).\n"
+                f"DEFAULT ETHNICITY (FALLBACK ONLY): {_default_ethnicity_instruction(ethnicity)}"
+            )
+
+        prompt = f"""{task_header}
 {style_keywords}
 
-Using Reference 1 as the IDENTITY ANCHOR for {character_tag} ({character_name}), arrange the same real actor in EXACTLY THREE adjacent non-overlapping zones from LEFT to RIGHT (unless the character description or reference explicitly specifies a different framing or masked/hooded state):
+{preservation_block}
 
-- Zone 1 (LEFT 28%): STRAIGHT FRONTAL COSTUME VIEW — natural relaxed standing pose facing camera, cropped by the top edge of this frame from the collarbones/base of neck down to the soles of both shoes. The actor's head is naturally outside the upper photographic crop (this is a living actor cropped by the camera, with clothing visible at the upper edge — never depict a severed neck, flat cut surface, or mannequin). Both hands (empty) and both shoes are fully visible, arms naturally lowered with a small gap from the torso, parallel feet.
-- Zone 2 (MIDDLE 28%): COMPLETE REAR VIEW — exact same actor rotated strictly 180 degrees, showing complete head crown, hair back, and down to the soles of both shoes, facing away from camera (no head turn, no front face visible). Match shoulder, waist, knee, and shoe-baseline scale with Zone 1.
-- Zone 3 (RIGHT 44%): ENLARGED FRONTAL HEAD-AND-SHOULDERS PORTRAIT — complete head crown and hairstyle visible, eyes level with the camera (~85mm portrait perspective), collar/neckline visible, face as the visual anchor.
+OUTPUT FORMAT: single portrait 9:16 image, 2x2 grid of four equal panels, thin light gutters, no decorative borders or thick divider bars, and one small white sans-serif label in the top-left corner of each panel: "FACE FRONT", "FACE SIDE", "BODY FRONT", "BACK".
 
-IDENTITY & COSTUME LOCKING (CRITICAL):
-Preserve the facial structure, bone structure, eye shape/spacing/color, nose shape, lip shape, skin tone, age impression, hair identity, and overall likeness of {character_tag} EXACTLY as in Reference 1.
-- Preserve natural human skin with age- and distance-appropriate pores, fine facial hair, subtle eye-area detail, slight local colour variation and natural sheen, without beauty retouching.
-- Do NOT preserve beauty-filter smoothing, wax/plastic skin, or conflicting grading from any reference.
-- Lock asymmetrical garment overlaps, fasteners, belts, and accessories by the character's ANATOMICAL left/right (viewer-left in Zone 1 corresponds to viewer-right in Zone 2 — never mirror asymmetrically).
+PANEL 1, TOP LEFT, FACE FRONT: head-and-shoulders close-up, face directly toward the camera at eye level (~85mm portrait perspective), calm neutral expression, eyes engaged but relaxed, complete hair crown and collar/neckline visible.
+PANEL 2, TOP RIGHT, FACE SIDE: same head-and-shoulders scale and eye-level perspective, clean 90-degree pure profile facing frame-left (not three-quarter), same expression and same hair behaviour.
+PANEL 3, BOTTOM LEFT, BODY FRONT (FEATURELESS / BLURRED FACE REQUIRED): full-body natural relaxed standing pose, front view, weight natural, arms relaxed at sides with a small gap from the torso, empty hands, parallel feet; full figure fills roughly 90% of panel height with both hands, both shoes, and all outer garment edges inside the frame. FACE RULE FOR PANEL 3 ONLY: Unless a full-face mask or hood is explicitly required in character details or reference, the face in Panel 3 MUST be intentionally blurred and completely featureless — a smooth matte skin-toned blank oval with NO eyes, NO eyebrows, NO nose, NO mouth, and NO recognizable facial features, softly blurred inside the face oval only (reserved for later editing), while hair, hairline, neck, collar, garments, hands, and shoes stay sharp and crisp as in Panel 1.
+PANEL 4, BOTTOM RIGHT, BACK: full-body standing pose, strict 180-degree rear view (no head turn, no front face visible), complete hair crown and hair back down to both shoes, garment back seams and heel height clearly visible, same standing spot, same height, and same shoe baseline as Panel 3; full figure fills roughly 90% of panel height with all outer garment edges inside the frame.
 
 CHARACTER & WARDROBE DETAILS (CRITICAL - apply to garments, hair, and equipment):
 {character_prompt}
 {self._costume_reference_block(has_costume_reference)}
-PHOTOGRAPHY & MATERIALITY:
-- Broad soft diffuse daylight from slightly above and in front, gentle facial modelling, small natural eye catchlights, and soft contact shadows below shoes.
-- Neutral white balance, faithful skin colour, moderate contrast, and readable cloth weave, garment weight, seams, and weight-bearing folds.
+- Lock asymmetrical garment overlaps, fasteners, belts, and accessories by the character's ANATOMICAL left/right (viewer-left in Panel 3 corresponds to viewer-right in Panel 4 — never mirror asymmetrically).
 - Describe wear locally per material (cuff edges, shoe soles, metal edges) rather than global gritty noise across skin and garments.
+
+STUDIO SETUP (all four panels identical):
+- Seamless neutral mid-grey studio background with clear value separation from garments — NO environment, NO set dressing, NO props.
+- A single soft-edged key light at 45 degrees camera-left, neutral light colour, NO fill light, NO rim light, NO ambient colour spill, NO visible studio lighting fixtures.
+- Only natural contact shadows on the floor under shoes in Panels 3 and 4, and small natural eye catchlights in Panels 1 and 2.
+
+QUALITY:
+- Photographic live-action film production costume-fitting character sheet, neutral white balance, even readable exposure, faithful skin colour, accurate fabric weight and weave, matte natural skin in Panels 1 and 2 and visible hands (real pores, fine facial hair, no gloss).
 
 {skill_directives}
 
-STRICT REQUIREMENTS (MUST AVOID):
+AVOID:
 {negative_keywords}
-- Do not allow ANY facial feature drift or age/identity drift from Reference 1.
-- Do not add a 4th panel, side profile, extra views, text labels, panel numbers, or decorative frames.
-- Do not include multiple characters or environment scenery.
-- Do NOT create beauty-retouched, glamorized, cosmetic-ad, fashion-editorial, CG, or 3D-render output.
+- FACE (Panels 1 and 2): no beauty-filter skin, no glossy TV-drama complexion, no idol makeup, no plastic/wax skin, no face slimming, no enlarged eyes, no skin smoothing, no identity drift.
+- FACE (Panel 3 BODY FRONT only): NO sharp face, NO detailed face, NO recognizable facial features, NO eyes, NO eyebrows, NO nose, NO mouth inside bottom-left Panel 3 (unless covered by an explicit mask/hood); NO blur leaking onto hair, hairline, neck, or clothing.
+- BODY (Panels 3 and 4): no pose change, no height or shoe-baseline mismatch, no cropped hands/shoes/garment edges, no mirrored or added accessories.
+- LIGHT & RENDER: no ambient colour spill, no rim-light drama, no CG or 3D-render look.
+- TEXT & LAYOUT: no text other than the four corner labels ("FACE FRONT", "FACE SIDE", "BODY FRONT", "BACK"), no extra panels or views, no multiple characters.
 """
         return prompt.strip()
 
@@ -1258,19 +1283,22 @@ STRICT REQUIREMENTS (MUST AVOID):
                     raise RuntimeError(error_detail)
             elif self.provider == "newapi":
                 print(f"[NanoBanana Character] 调用 DramaClawAPI ({self.model}) 生成图像...")
+                request_schema = self._resolved_request_schema()
+                newapi_image_config = {
+                    "aspect_ratio": aspect_ratio,
+                    "image_size": image_size,
+                    "quality": normalize_openai_quality(
+                        self.openai_image_quality, default="medium"
+                    ),
+                }
+                if request_schema:
+                    newapi_image_config["request_schema"] = request_schema
                 image_bytes, _text_response, error_detail = await _call_newapi_image_api(
                     api_key=self.api_key,
                     model=self.model,
                     prompt=prompt,
                     reference_images=None,
-                    image_config={
-                        "aspect_ratio": aspect_ratio,
-                        "image_size": image_size,
-                        "quality": normalize_openai_quality(
-                            self.openai_image_quality, default="medium"
-                        ),
-                        "request_schema": self._resolved_request_schema(),
-                    },
+                    image_config=newapi_image_config,
                     base_url=self.base_url,
                     delivery_path=output_path,
                     delivery_state=(image_delivery_state := {}),
@@ -1529,19 +1557,22 @@ STRICT REQUIREMENTS (MUST AVOID):
                                 additional_names[idx] if idx < len(additional_names) else "",
                             )
                         )
+                request_schema = self._resolved_request_schema()
+                newapi_image_config = {
+                    "aspect_ratio": aspect_ratio,
+                    "image_size": image_size,
+                    "quality": normalize_openai_quality(
+                        self.openai_image_quality, default="medium"
+                    ),
+                }
+                if request_schema:
+                    newapi_image_config["request_schema"] = request_schema
                 image_bytes, _text_response, error_detail = await _call_newapi_image_api(
                     api_key=self.api_key,
                     model=self.model,
                     prompt=prompt,
                     reference_images=ref_images or None,
-                    image_config={
-                        "aspect_ratio": aspect_ratio,
-                        "image_size": image_size,
-                        "quality": normalize_openai_quality(
-                            self.openai_image_quality, default="medium"
-                        ),
-                        "request_schema": self._resolved_request_schema(),
-                    },
+                    image_config=newapi_image_config,
                     base_url=self.base_url,
                     delivery_path=output_path,
                     delivery_state=(image_delivery_state := {}),

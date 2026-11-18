@@ -127,7 +127,7 @@ def _master_references(
     """Refs for derived/time plate master generation: base scene master if present."""
 
     base_scene_id = str(getattr(scene, "base_scene_id", "") or "").strip()
-    if not base_scene_id:
+    if not base_scene_id or base_scene_id == scene.name:
         return []
     base_ref = _reference_tuple_from_path(_scene_dir(project_dir, base_scene_id) / "master.png")
     if base_ref is None:
@@ -138,19 +138,41 @@ def _master_references(
 def _reverse_master_references(
     *,
     project_dir: Path,
-    scene_name: str,
-) -> list[tuple[str, bytes, str]]:
-    """Refs for reverse_master generation: master ONLY (sole style/identity/lighting anchor).
+    scene: NovelScene,
+    base_scene: NovelScene | None = None,
+) -> tuple[list[tuple[str, bytes, str]], bool]:
+    """Refs for reverse_master generation: scene master, plus base reverse_master if derived.
 
     Intentionally NOT using spatial_layout: its black-line orthographic style would
     pollute the panorama's visual coherence with master.
     """
-    scene_dir = _scene_dir(project_dir, scene_name)
+    scene_dir = _scene_dir(project_dir, scene.name)
     refs: list[tuple[str, bytes, str]] = []
     master_ref = _reference_tuple_from_path(scene_dir / "master.png")
-    if master_ref is not None:
-        refs.append((f"scene_master_{master_ref[0]}", master_ref[1], master_ref[2]))
-    return refs
+    if master_ref is None:
+        return [], False
+    refs.append((f"scene_master_{master_ref[0]}", master_ref[1], master_ref[2]))
+
+    has_base_reverse_reference = False
+    base_scene_id = str(
+        getattr(scene, "base_scene_id", "")
+        or (getattr(base_scene, "name", "") if base_scene is not None else "")
+        or ""
+    ).strip()
+    if base_scene_id and base_scene_id != scene.name:
+        base_reverse_ref = _reference_tuple_from_path(
+            _scene_dir(project_dir, base_scene_id) / "reverse_master.png"
+        )
+        if base_reverse_ref is not None:
+            refs.append(
+                (
+                    f"base_scene_reverse_master_{base_reverse_ref[0]}",
+                    base_reverse_ref[1],
+                    base_reverse_ref[2],
+                )
+            )
+            has_base_reverse_reference = True
+    return refs, has_base_reverse_reference
 
 
 def _style_context(
@@ -392,6 +414,7 @@ def _reverse_master_prompt(
     style_prompt: str = "",
     avoid_instructions: str = "",
     has_master_reference: bool = False,
+    has_base_reverse_reference: bool = False,
     base_scene: NovelScene | None = None,
     style_family: str = "",
 ) -> str:
@@ -425,7 +448,59 @@ def _reverse_master_prompt(
     back_word = "back side / opposite side of the location" if is_exterior else "back wall"
     side_word = "flanking environment" if is_exterior else "side walls"
 
-    if has_master_reference:
+    if has_master_reference and has_base_reverse_reference:
+        header_block = f"""Generate ONE reverse-angle establishing image of the SAME {location_word}.
+
+This is the reverse view of REFERENCE 1 (the current plate's front view), anchored in spatial
+layout by REFERENCE 2 (the base scene's canonical reverse view): stand where REFERENCE 1's
+camera stood and yaw-rotate 180 degrees to face the {back_word}, preserving REFERENCE 2's
+physical geometry and fixtures while rendering in REFERENCE 1's exact lighting, weather,
+style, and plate state."""
+        input_block = f"""INPUT IMAGES:
+- REFERENCE 1 = the scene's FRONT-FACING master establishing view of this {space_word}.
+- REFERENCE 1 covers the front-facing half: front center + roughly half of the left side
+  + roughly half of the right side. It does NOT show the back-facing half.
+- REFERENCE 1 is the SOLE source of truth for TARGET art style, materials, color palette,
+  linework, texture quality, lighting mood, lighting color temperature, exposure, weather,
+  time-of-day, surface treatment, ground/floor finish, and this plate's visual state.
+- REFERENCE 2 = the BASE SCENE's canonical REVERSE-FACING establishing view (before-state
+  spatial & architectural anchor for the back-facing half).
+- REFERENCE 2 defines the exact physical geometry behind REFERENCE 1's camera: camera
+  position, perspective, walls, openings (doors/windows), aisles, shelves, counters, and
+  fixed fixture layout.
+- Preserve REFERENCE 2's spatial structure, framing, architectural openings, and fixture
+  placement UNLESS VARIANT DELTA PROMPT explicitly declares physical alterations (such as
+  structural damage, debris, floodwater, snow, or added/removed set dressing).
+- DO NOT copy REFERENCE 2's old lighting, time-of-day, or weather; re-light and re-render
+  REFERENCE 2's back-facing space to match REFERENCE 1's exact lighting, weather, color
+  temperature, exposure, and moment in time.
+- DO NOT copy REFERENCE 1's composition / camera angle / front-center content into the
+  output — you are showing what is BEHIND REFERENCE 1's camera (anchored by REFERENCE 2),
+  which is NOT visible in REFERENCE 1 except for side overlap zones."""
+        center_block = f"""CENTER REGION — ANCHORED BY BASE REVERSE (REFERENCE 2):
+- The central region of this reverse shows what is BEHIND REFERENCE 1's camera (the {back_word}
+  and surrounding back-side environment), anchored directly by REFERENCE 2's physical layout.
+- Keep REFERENCE 2's back-wall architecture, doorways, windows, aisles, shelves, counters, and
+  fixed fixtures in the same positions and perspective, while applying REFERENCE 1's lighting,
+  weather, atmosphere, and any explicitly requested VARIANT DELTA PROMPT / TARGET TIME-OF-DAY
+  PLATE changes.
+- Do NOT invent a different back-side layout or rearrange REFERENCE 2's fixed fixtures."""
+        base_reverse_style_note = (
+            "\n- Lighting, weather, and plate state come from REFERENCE 1, NEVER from REFERENCE 2: "
+            "even if REFERENCE 2 was lit for a different time-of-day or weather, re-light "
+            "REFERENCE 2's space into REFERENCE 1's exact lighting and state."
+        )
+        closed_world_fixture_line = (
+            "- Fixture identity and placement MUST stay faithful to REFERENCE 2's back-facing "
+            "layout and REFERENCE 1's visual vocabulary (applying only explicit changes declared "
+            "in VARIANT DELTA PROMPT / TARGET TIME-OF-DAY PLATE)."
+        )
+    elif has_master_reference:
+        header_block = f"""Generate ONE reverse-angle establishing image of the SAME {location_word}.
+
+This is the reverse view of REFERENCE 1: stand where REFERENCE 1's camera stood, then
+yaw-rotate 180 degrees to face the {back_word}. The two views are the SAME {space_word}
+at the SAME moment, sharing identical light, identical materials, identical fixtures."""
         input_block = f"""INPUT IMAGE:
 - REFERENCE 1 = the scene's FRONT-FACING master establishing view of this {space_word}.
 - REFERENCE 1 covers the front-facing half: front center + roughly half of the left side
@@ -438,15 +513,70 @@ def _reverse_master_prompt(
 - DO NOT copy REFERENCE 1's composition / camera angle / front-center content into the
   output — you are showing what is BEHIND REFERENCE 1's camera, which is NOT visible
   in REFERENCE 1 except for side overlap zones."""
-    else:
-        input_block = """INPUT:
-- No reference attached. Build the scene from the SCENE DESCRIPTION text only."""
+        center_block = f"""CENTER REGION — NEW CONTENT:
+- The central region of this reverse shows what is BEHIND master's camera (the {back_word}
+  and surrounding back-side environment). This content is NOT visible in REFERENCE 1.
+- Fill the center from the SCENE DESCRIPTION's 背面 / back-side notes, while keeping
+  master's exact style / lighting / material vocabulary.
+- Do NOT invent objects absent from both master and the SCENE DESCRIPTION just to "make
+  the reverse different". If the back side has nothing notable, show a quiet open
+  back-facing view consistent with master's style."""
+        base_reverse_style_note = ""
+        closed_world_fixture_line = (
+            "- Fixture identity MUST match REFERENCE 1's vocabulary (if master shows wooden furniture,\n"
+            "  reverse stays with wooden furniture; if master shows urban architecture, reverse stays\n"
+            "  with urban architecture; etc.). Do not invent fixture styles that don't appear anywhere\n"
+            "  in master's visual vocabulary or the SCENE DESCRIPTION."
+        )
+    elif has_base_reverse_reference:
+        header_block = f"""Generate ONE reverse-angle establishing image of the SAME {location_word}.
 
-    return f"""Generate ONE reverse-angle establishing image of the SAME {location_word}.
+This reverse view is anchored in spatial layout by REFERENCE 1 (the base scene's canonical
+reverse view): preserve its physical geometry and fixtures while rendering the target plate
+state and project style."""
+        input_block = f"""INPUT IMAGE:
+- REFERENCE 1 = the BASE SCENE's canonical REVERSE-FACING establishing view (before-state
+  spatial & architectural anchor for the back-facing half of this {space_word}).
+- Preserve REFERENCE 1's exact physical geometry, camera position, perspective, walls,
+  openings (doors/windows), aisles, shelves, counters, and fixed fixture layout UNLESS
+  VARIANT DELTA PROMPT explicitly declares physical alterations.
+- Apply the PROJECT STYLE PRESET and any VARIANT DELTA PROMPT / TARGET TIME-OF-DAY PLATE
+  lighting, weather, and state changes cleanly onto REFERENCE 1's layout."""
+        center_block = f"""CENTER REGION — ANCHORED BY BASE REVERSE (REFERENCE 1):
+- Keep REFERENCE 1's back-wall architecture, doorways, windows, aisles, shelves, counters, and
+  fixed fixtures in the same positions and perspective, while applying the target plate's
+  lighting, weather, atmosphere, and any explicitly requested VARIANT DELTA PROMPT / TARGET
+  TIME-OF-DAY PLATE changes."""
+        base_reverse_style_note = ""
+        closed_world_fixture_line = (
+            "- Fixture identity and placement MUST stay faithful to REFERENCE 1's back-facing layout "
+            "(applying only explicit changes declared in VARIANT DELTA PROMPT / TARGET TIME-OF-DAY PLATE)."
+        )
+    else:
+        header_block = f"""Generate ONE reverse-angle establishing image of the SAME {location_word}.
 
 This is the reverse view of REFERENCE 1: stand where REFERENCE 1's camera stood, then
 yaw-rotate 180 degrees to face the {back_word}. The two views are the SAME {space_word}
-at the SAME moment, sharing identical light, identical materials, identical fixtures.
+at the SAME moment, sharing identical light, identical materials, identical fixtures."""
+        input_block = """INPUT:
+- No reference attached. Build the scene from the SCENE DESCRIPTION text only."""
+        center_block = f"""CENTER REGION — NEW CONTENT:
+- The central region of this reverse shows what is BEHIND master's camera (the {back_word}
+  and surrounding back-side environment). This content is NOT visible in REFERENCE 1.
+- Fill the center from the SCENE DESCRIPTION's 背面 / back-side notes, while keeping
+  master's exact style / lighting / material vocabulary.
+- Do NOT invent objects absent from both master and the SCENE DESCRIPTION just to "make
+  the reverse different". If the back side has nothing notable, show a quiet open
+  back-facing view consistent with master's style."""
+        base_reverse_style_note = ""
+        closed_world_fixture_line = (
+            "- Fixture identity MUST match REFERENCE 1's vocabulary (if master shows wooden furniture,\n"
+            "  reverse stays with wooden furniture; if master shows urban architecture, reverse stays\n"
+            "  with urban architecture; etc.). Do not invent fixture styles that don't appear anywhere\n"
+            "  in master's visual vocabulary or the SCENE DESCRIPTION."
+        )
+
+    return f"""{header_block}
 
 {input_block}
 
@@ -483,14 +613,7 @@ REQUIRED EDGE OVERLAP (HARD RULE):
 - This overlap is NOT optional and NOT decorative — it is what makes the two views
   co-registerable for downstream geometry reconstruction.
 
-CENTER REGION — NEW CONTENT:
-- The central region of this reverse shows what is BEHIND master's camera (the {back_word}
-  and surrounding back-side environment). This content is NOT visible in REFERENCE 1.
-- Fill the center from the SCENE DESCRIPTION's 背面 / back-side notes, while keeping
-  master's exact style / lighting / material vocabulary.
-- Do NOT invent objects absent from both master and the SCENE DESCRIPTION just to "make
-  the reverse different". If the back side has nothing notable, show a quiet open
-  back-facing view consistent with master's style.
+{center_block}
 
 STRICT STYLE LOCK — REFERENCE 1 IS THE ONLY VISUAL ANCHOR:
 - Match REFERENCE 1's art style EXACTLY: same linework density, same texture quality,
@@ -501,7 +624,7 @@ STRICT STYLE LOCK — REFERENCE 1 IS THE ONLY VISUAL ANCHOR:
 - Match REFERENCE 1's surface materials exactly (wall/floor/ground/ceiling/exterior trim).
   The reverse view is the SAME {space_word}, so the same surface treatment MUST appear
   at the meets of {side_word} and ground.
-- Do NOT shift the time of day. If REFERENCE 1 looks like day, reverse must look like day.
+- Do NOT shift the time of day. If REFERENCE 1 looks like day, reverse must look like day.{base_reverse_style_note}
 
 IGNORE TEXT DESCRIPTORS THAT WOULD BREAK STYLE LOCK:
 - IGNORE any mood / time-of-day descriptors in the SCENE DESCRIPTION (深夜 / 昏暗 / 光晕 /
@@ -509,10 +632,7 @@ IGNORE TEXT DESCRIPTORS THAT WOULD BREAK STYLE LOCK:
 - The only visual ground truth for lighting & style is REFERENCE 1's pixels.
 
 CLOSED-WORLD CONSTRAINT:
-- Fixture identity MUST match REFERENCE 1's vocabulary (if master shows wooden furniture,
-  reverse stays with wooden furniture; if master shows urban architecture, reverse stays
-  with urban architecture; etc.). Do not invent fixture styles that don't appear anywhere
-  in master's visual vocabulary or the SCENE DESCRIPTION.
+{closed_world_fixture_line}
 - Use the SCENE DESCRIPTION ONLY to know what objects/fixtures sit on the back side.
   Do NOT use it to override REFERENCE 1's style or lighting.
 - No people, no characters, no temporary story props.
@@ -535,6 +655,7 @@ def build_scene_reference_prompt(
     style_prompt: str = "",
     avoid_instructions: str = "",
     has_master_reference: bool = False,
+    has_base_reverse_reference: bool = False,
     base_scene: NovelScene | None = None,
     style_family: str = "",
 ) -> str:
@@ -560,6 +681,7 @@ def build_scene_reference_prompt(
             style_prompt=style_prompt,
             avoid_instructions=avoid_instructions,
             has_master_reference=has_master_reference,
+            has_base_reverse_reference=has_base_reverse_reference,
             base_scene=base_scene,
             style_family=style_family,
         )
@@ -684,6 +806,7 @@ async def generate_scene_reference_image(
 
     references: list[tuple[str, bytes, str]] = []
     has_master_reference = False
+    has_base_reverse_reference = False
     if kind == "spatial_layout":
         references = _spatial_layout_references(
             project_dir=project_dir,
@@ -695,9 +818,10 @@ async def generate_scene_reference_image(
             )
         has_master_reference = True
     elif kind == "reverse_master":
-        references = _reverse_master_references(
+        references, has_base_reverse_reference = _reverse_master_references(
             project_dir=project_dir,
-            scene_name=scene.name,
+            scene=scene,
+            base_scene=base_scene,
         )
         if not references:
             raise RuntimeError(
@@ -718,6 +842,7 @@ async def generate_scene_reference_image(
         style_prompt=style_prompt,
         avoid_instructions=avoid_instructions,
         has_master_reference=has_master_reference,
+        has_base_reverse_reference=has_base_reverse_reference,
         base_scene=base_scene,
         style_family=style_family,
     )

@@ -412,6 +412,9 @@ async def generate_seedance2_prompt_for_panel(
             title=str(beat.get("segment_title") or (s9_meta.segment_title if s9_meta else "") or ""),
             planned_duration_seconds=planned_dur,
             story_beat=str((s9_meta.story_beat if s9_meta else "") or beat.get("visual_description") or ""),
+            entry_state=str(getattr(s9_meta, "entry_state", "") or ""),
+            exit_state=str(getattr(s9_meta, "exit_state", "") or ""),
+            scene_layout=str(getattr(s9_meta, "scene_layout", "") or ""),
             shots=subshots,
         )
 
@@ -424,6 +427,9 @@ async def generate_seedance2_prompt_for_panel(
                 title=str(adj_beat.get("segment_title") or (adj_meta.segment_title if adj_meta else "") or ""),
                 planned_duration_seconds=int((adj_meta.planned_duration_seconds if adj_meta else 0) or 15),
                 story_beat=str((adj_meta.story_beat if adj_meta else "") or adj_beat.get("visual_description") or ""),
+                entry_state=str(getattr(adj_meta, "entry_state", "") or ""),
+                exit_state=str(getattr(adj_meta, "exit_state", "") or ""),
+                scene_layout=str(getattr(adj_meta, "scene_layout", "") or ""),
                 shots=adj_sub,
             )
 

@@ -15,6 +15,10 @@ const buildCharactersMutationMock = vi.hoisted(() => vi.fn());
 const taskStreamOptionsMock = vi.hoisted(() => vi.fn());
 const updateCharacterMutationMock = vi.hoisted(() => vi.fn());
 const updateIdentityMutationMock = vi.hoisted(() => vi.fn());
+const projectStyleState = vi.hoisted(() => ({
+  visualStyle: "ink",
+  styles: [] as Array<{ id: string; name: string; style_family?: string }>,
+}));
 
 vi.mock("@/lib/runtime-config", () => ({
   isCeRuntime: () => runtimeState.isCeRuntime,
@@ -81,13 +85,20 @@ vi.mock("@/lib/queries/projects", () => ({
     data: {
       ok: true,
       data: {
-        visual_style: "ink",
+        visual_style: projectStyleState.visualStyle,
         spine_template: "drama",
         narration_style: "third_person",
       },
     },
   }),
   useUpdateProject: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/lib/queries/styles", () => ({
+  useStyles: () => ({
+    data: { ok: true, data: projectStyleState.styles },
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/lib/queries/character-image-selection", () => ({
@@ -524,5 +535,33 @@ describe("character and identity rename confirmation", () => {
     expect(within(confirmation).getByText("修改名称会改变资产 ID。已有规划、分镜及生成结果不会自动迁移，保存后可能需要重新规划并生成。是否继续？")).toBeInTheDocument();
     expect(updateCharacterMutationMock).not.toHaveBeenCalled();
     await userEvent.click(within(confirmation).getByRole("button", { name: "取消" }));
+  });
+
+  it("uses a 9:16 identity preview box for live_action styles and 4:3 for animation", async () => {
+    const heroEmptyText = i18n.t("characters.identities.heroEmpty");
+    projectStyleState.visualStyle = "realistic";
+    projectStyleState.styles = [];
+    const first = renderCharactersPage();
+    const [livePlaceholder] = await screen.findAllByText(heroEmptyText);
+    expect(livePlaceholder.closest("div")).toHaveClass("aspect-[9/16]");
+    first.unmount();
+
+    projectStyleState.visualStyle = "anime";
+    const second = renderCharactersPage();
+    const [animePlaceholder] = await screen.findAllByText(heroEmptyText);
+    expect(animePlaceholder.closest("div")).toHaveClass("aspect-[4/3]");
+    second.unmount();
+
+    projectStyleState.visualStyle = "custom_live";
+    projectStyleState.styles = [
+      { id: "custom_live", name: "Custom Live", style_family: "live_action" },
+    ];
+    const third = renderCharactersPage();
+    const [customLivePlaceholder] = await screen.findAllByText(heroEmptyText);
+    expect(customLivePlaceholder.closest("div")).toHaveClass("aspect-[9/16]");
+    third.unmount();
+
+    projectStyleState.visualStyle = "ink";
+    projectStyleState.styles = [];
   });
 });

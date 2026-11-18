@@ -125,12 +125,13 @@ def _ensure_s9_profile() -> None:
     if "s9_segment" not in VIDEO_PROMPT_STYLE_PROFILES:
         VIDEO_PROMPT_STYLE_PROFILES["s9_segment"] = VideoPromptStyleProfile(
             key="s9_segment",
-            label="s9 大段连续分镜",
+            label="YD 连续分镜",
             default_min_duration=4,
             default_max_duration=30,
             system_directive=(
-                "Follow s9 continuous multi-shot segment choreography with 【参考职责】, "
-                "【全局光影画风】, 【注意事项】, 【角色声音】, and timed 分镜 blocks."
+                "Follow YD分镜skills (yd-cinematic-storyboard) continuous multi-shot segment choreography with "
+                "【参考职责】, 【全局光影画风】, optional 【场景布局】, 【注意事项】, 【角色声音】, "
+                "and tight-paced timed 分镜 blocks with explicit acting & exit_state handoff."
             ),
         )
 

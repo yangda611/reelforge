@@ -169,6 +169,11 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.replicate.com",
     },
     "codex": {"label": "Codex", "type": 57, "base_url": "https://chatgpt.com"},
+    "lingke": {
+        "label": "Lingke",
+        "type": 1,
+        "base_url": "https://api.lk888.ai",
+    },
 }
 
 
@@ -1364,6 +1369,7 @@ _BUILTIN_CHANNEL_CAPABILITIES: dict[str, list[str]] = {
     "comfyui": ["image", "video"],
     "anthropic": ["text", "vision"],
     "claude": ["text", "vision"],
+    "lingke": ["text", "vision", "embedding", "image", "video", "audio"],
 }
 
 

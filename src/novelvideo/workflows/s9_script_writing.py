@@ -134,7 +134,7 @@ class S9ScriptWritingWorkflow:
         effective_backend = video_backend or str(proj_cfg.get("video_backend") or "")
         effective_output_dir = self.output_dir or (str(Path(state_dir).parent) if state_dir else "")
 
-        report_progress(0.08, f"s9 分镜：准备第 {episode_num} 集正文与资产清单")
+        report_progress(0.08, f"YD 分镜：准备第 {episode_num} 集正文与资产清单")
         episode = self.cognee_store.get_episode(episode_num)
         if episode is None and hasattr(self.cognee_store, "get_episode_from_graph"):
             episode = await self.cognee_store.get_episode_from_graph(episode_num)
@@ -177,11 +177,11 @@ class S9ScriptWritingWorkflow:
         max_audios = int(limits["max_audios"])
 
         log(
-            f"开始按 s9 规则拆分第 {episode_num} 集：单段上限 {cap} 秒，"
+            f"开始按 YD 分镜（紧凑节奏）拆分第 {episode_num} 集：单段上限 {cap} 秒（非凑满目标），"
             f"画风 {style_context.style_label}（{style_context.aspect_ratio}），"
             f"尾帧锚点={'开启' if tail_anchor else '关闭'}"
         )
-        report_progress(0.22, f"Stage 1：按 ≤{cap}秒 拆分大段并构建【简易预览版分镜】")
+        report_progress(0.22, f"Stage 1：按 YD 紧凑节奏（≤{cap}秒）拆分大段并构建分镜预览")
         raw_plan = await run_s9_stage1_plan(
             source_text=resolved_text,
             episode_num=episode_num,
@@ -223,7 +223,7 @@ class S9ScriptWritingWorkflow:
             include_first_frame=False,
         )
 
-        report_progress(0.85, "持久化 s9 预览与 Seedance2.0 主体提示词")
+        report_progress(0.85, "持久化 YD 分镜预览与 Seedance2.0 主体提示词")
         beats: list[VisualBeat] = []
         for idx, segment in enumerate(plan.segments):
             slots: list[S9SegmentAssetSlot] = per_segment_slots[idx]
@@ -254,6 +254,9 @@ class S9ScriptWritingWorkflow:
                 planned_duration_seconds=planned_dur,
                 max_segment_seconds=cap,
                 story_beat=segment.story_beat,
+                entry_state=segment.entry_state,
+                exit_state=segment.exit_state,
+                scene_layout=segment.scene_layout,
                 tail_anchor=bool(tail_anchor),
                 include_first_frame=False,
                 segment_asset_slots=slots,
@@ -335,7 +338,7 @@ class S9ScriptWritingWorkflow:
         self.last_review_issues = []
         self.last_degraded_lines = []
         self.last_review_summary = (
-            f"s9 分段完成：共 {len(beats)} 个大段（单段上限 {cap} 秒），"
+            f"YD 分镜分段完成：共 {len(beats)} 个大段（单段上限 {cap} 秒），"
             f"预计总长 {int(script.total_duration_seconds)} 秒"
         )
         report_progress(1.0, self.last_review_summary)

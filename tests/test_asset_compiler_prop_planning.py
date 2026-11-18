@@ -233,3 +233,47 @@ async def test_short_block_reuses_prior_episode_prop_without_ai_reanalysis(monke
         "  道具[1]: 笔记本 [本集局部]",
         "  道具[2]: 笔记本 [本集复用]",
     ]
+
+
+def test_filter_background_props_keeps_interactive_and_closeup_props():
+    from novelvideo.agents.asset_compiler import AssetCompiler, PropRequirement
+
+    block_text = "\n".join(
+        [
+            "△【特写】收银台后的二手显示器屏幕，漆黑背景上绿色代码飞速滚动。",
+            "△【特写】显示屏突然切换到店铺收银界面。",
+            "△ 林默手指在机械键盘上快速敲击。",
+            "△【特写】黑衣男人抬手将一张皱巴巴的百元钞票拍在台面上。",
+            "△ 黑衣男人单手拉开冰美式拉环，仰头灌了一大口。",
+            "△【特写】挂钟指针稳稳停在两点三十五分。",
+            "△ 墙上挂着数字显示屏广告，货架摆在角落，桌子一动不动。",
+        ]
+    )
+    candidates = [
+        PropRequirement(prop_name="二手显示器", visual_prompt="老旧黑色显示器"),
+        PropRequirement(prop_name="显示屏", visual_prompt="屏幕显示绿色代码"),
+        PropRequirement(prop_name="机械键盘", visual_prompt="黑色机械键盘"),
+        PropRequirement(prop_name="百元钞票", visual_prompt="皱巴巴的百元钞票"),
+        PropRequirement(prop_name="冰美式", visual_prompt="易拉罐装冰美式"),
+        PropRequirement(prop_name="挂钟", visual_prompt="圆形白色挂钟"),
+        PropRequirement(prop_name="易拉罐", visual_prompt="黑色咖啡易拉罐"),
+        PropRequirement(prop_name="货架", visual_prompt="便利店金属货架"),
+        PropRequirement(prop_name="数字显示屏", visual_prompt="墙上的广告显示屏"),
+        PropRequirement(prop_name="桌子", visual_prompt="普通木桌"),
+        PropRequirement(prop_name="电影字幕", visual_prompt="白色字幕"),
+    ]
+
+    kept = AssetCompiler._filter_background_props(candidates, block_text)
+    kept_names = [item.prop_name for item in kept]
+
+    assert "二手显示器" in kept_names
+    assert "显示屏" in kept_names
+    assert "机械键盘" in kept_names
+    assert "百元钞票" in kept_names
+    assert "冰美式" in kept_names
+    assert "挂钟" in kept_names
+    assert "货架" not in kept_names
+    assert "数字显示屏" not in kept_names
+    assert "桌子" not in kept_names
+    assert "电影字幕" not in kept_names
+

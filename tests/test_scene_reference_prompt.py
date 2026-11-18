@@ -90,3 +90,32 @@ async def test_scene_reference_newapi_uses_normalized_gateway_base_url(monkeypat
     )
 
     assert captured["base_url"] == "https://relayclaw.cdnfg.com/v1"
+
+
+def test_reverse_master_prompt_anchors_geometry_with_base_reverse_reference():
+    base_scene = NovelScene(
+        name="便利店",
+        scene_type="interior",
+        environment_prompt="正面：收银台与玻璃自动门。背面：店铺深处为窄通道，通向后场门与固定补货架。",
+    )
+    variant_scene = NovelScene(
+        name="便利店_暴雨夜霓虹版",
+        scene_type="interior",
+        base_scene_id="便利店",
+        variant_id="暴雨夜霓虹版",
+        variant_prompt="窗外暴雨倾盆，霓虹灯反射在地面与玻璃上，室内冷白荧光灯光线。",
+    )
+
+    prompt = build_scene_reference_prompt(
+        "reverse_master",
+        variant_scene,
+        has_master_reference=True,
+        has_base_reverse_reference=True,
+        base_scene=base_scene,
+    )
+
+    assert "REFERENCE 1 = the scene's FRONT-FACING master" in prompt
+    assert "REFERENCE 2 = the BASE SCENE's canonical REVERSE-FACING establishing view" in prompt
+    assert "Preserve REFERENCE 2's spatial structure, framing, architectural openings" in prompt
+    assert "DO NOT copy REFERENCE 2's old lighting, time-of-day, or weather" in prompt
+    assert "ANCHORED BY BASE REVERSE (REFERENCE 2)" in prompt

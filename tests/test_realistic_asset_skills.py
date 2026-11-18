@@ -35,7 +35,7 @@ def test_bundled_realistic_asset_skills_validate() -> None:
     report = validate_realistic_asset_skills()
     assert CHARACTER_SKILL_ID in report
     assert SCENE_SKILL_ID in report
-    assert "默认版式：遵守画面含义而非“三视图”字面" in report[CHARACTER_SKILL_ID]
+    assert "默认版式：竖版9:16四宫格" in report[CHARACTER_SKILL_ID]
     assert "六个生成模型" in report[SCENE_SKILL_ID]
 
 
@@ -84,7 +84,7 @@ def test_realistic_asset_skills_hot_reload_on_file_update(
         "post_apocalyptic",
     ],
 )
-def test_live_action_styles_use_3_panel_character_sheet_and_portrait_skill(
+def test_live_action_styles_use_9_16_four_panel_character_sheet_and_portrait_skill(
     style_id: str,
 ) -> None:
     gen = NanoBananaCharacterGenerator.__new__(NanoBananaCharacterGenerator)
@@ -111,12 +111,33 @@ def test_live_action_styles_use_3_panel_character_sheet_and_portrait_skill(
         style_keywords="natural realism",
         negative_keywords="no anime",
     )
-    assert "EXACTLY THREE adjacent non-overlapping zones" in sheet_prompt
-    assert "Zone 1 (LEFT 28%)" in sheet_prompt
-    assert "Zone 2 (MIDDLE 28%)" in sheet_prompt
-    assert "Zone 3 (RIGHT 44%)" in sheet_prompt
-    assert "4-panel" not in sheet_prompt
+    assert "single portrait 9:16 image, 2x2 grid of four equal panels" in sheet_prompt
+    assert "FACE FRONT" in sheet_prompt
+    assert "FACE SIDE" in sheet_prompt
+    assert "BODY FRONT" in sheet_prompt
+    assert "BACK" in sheet_prompt
+    assert "smooth matte skin-toned blank oval" in sheet_prompt
+    assert "intentionally blurred and completely featureless" in sheet_prompt
     assert "LIVE-ACTION CHARACTER SHEET SKILL DIRECTIVES" in sheet_prompt
+    assert "same face, age," not in sheet_prompt
+    assert "方案B：无头" not in sheet_prompt
+    assert "露出完整脸时" not in sheet_prompt
+    assert "[交付前检查]" not in sheet_prompt
+
+    sheet_prompt_with_ref = gen._build_identity_locked_prompt(
+        character_name="林默",
+        character_prompt="浅灰棉麻衬衫，深蓝长裤，黑布鞋",
+        character_tag="[林默_a1b2]",
+        target_view="front",
+        style_name=style_id,
+        project_dir="",
+        style_keywords="natural realism",
+        negative_keywords="no anime",
+        has_identity_reference=True,
+    )
+    assert "CRITICAL PANEL 3 EXCEPTION" in sheet_prompt_with_ref
+    assert "Preserve EXACTLY in Panel 1" in sheet_prompt_with_ref
+    assert "smooth matte skin-toned blank oval" in sheet_prompt_with_ref
 
 
 @pytest.mark.parametrize("style_id", ["anime", "guoman_fantasy"])
@@ -308,5 +329,137 @@ async def test_character_and_scene_assets_send_4k_for_4k_model(
     assert len(recorded_calls) == 3
     assert recorded_calls[0]["image_config"]["image_size"] == "4K"
     assert recorded_calls[1]["image_config"]["image_size"] == "4K"
+    assert recorded_calls[1]["image_config"]["aspect_ratio"] == "9:16"
     assert recorded_calls[1]["ref_count"] == 1
     assert recorded_calls[2]["image_config"]["image_size"] == "4K"
+
+    anime_identity_path = tmp_path / "char" / "identities" / "动漫.png"
+    anime_res = await gen.generate_identity_with_reference(
+        character_name="林默",
+        identity_prompt="青色长袍",
+        reference_image_path=portrait_res.primary_reference,
+        output_path=str(anime_identity_path),
+        style="anime",
+    )
+    assert anime_res.success
+    assert recorded_calls[3]["image_config"]["aspect_ratio"] == "16:9"
+
+
+@pytest.mark.asyncio
+async def test_third_party_newapi_relay_sends_size_and_resolution_for_4k_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+
+    posted: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"b64_json": "aW1hZ2U="}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            posted["url"] = url
+            posted["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    image_bytes, _text, error = await nanobanana_grid._call_newapi_image_api(
+        api_key="test-key",
+        model="gpt-image-2.6-4k",
+        prompt="3-panel sheet",
+        reference_images=[("portrait.png", b"png-bytes", "image/png")],
+        image_config={
+            "aspect_ratio": "16:9",
+            "image_size": "4K",
+            "quality": "medium",
+            "reference_image_format": "data-url",
+        },
+        base_url="https://zeroshell.top/v1",
+    )
+
+    assert image_bytes == b"image"
+    assert error == ""
+    assert posted["url"] == "https://zeroshell.top/v1/images/edits"
+    assert posted["json"]["width"] == 3840
+    assert posted["json"]["height"] == 2160
+    assert posted["json"]["size"] == "3840x2160"
+    assert posted["json"]["resolution"] == "4K"
+    assert posted["json"]["metadata"] == {"ratio": "16:9", "resolution": "4k"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("aspect_ratio", "requested_size", "model_name", "expected_size", "expected_res"),
+    [
+        ("3:4", "1K", "gpt-image-2.6-4k", "2496x3328", "4K"),
+        ("9:16", "2K", "gpt-image-2.6-4k", "2160x3840", "4K"),
+        ("1:1", "1K", "gpt-image-2.6-4k", "2880x2880", "4K"),
+        ("16:9", "1K", "seedream-4.5", "2048x1152", "2K"),
+        ("16:9", "4K", "seedream-5.0-pro", "2048x1152", "2K"),
+        ("auto", "1K", "gpt-image-2.6-4k", "4K", "4K"),
+    ],
+)
+async def test_newapi_image_api_clamps_unsupported_resolutions_across_ratios(
+    monkeypatch: pytest.MonkeyPatch,
+    aspect_ratio: str,
+    requested_size: str,
+    model_name: str,
+    expected_size: str,
+    expected_res: str,
+) -> None:
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+
+    posted: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"b64_json": "aW1hZ2U="}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            posted["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    image_bytes, _text, error = await nanobanana_grid._call_newapi_image_api(
+        api_key="test-key",
+        model=model_name,
+        prompt="test prompt",
+        image_config={"aspect_ratio": aspect_ratio, "image_size": requested_size},
+        base_url="https://zeroshell.top/v1",
+    )
+
+    assert image_bytes == b"image"
+    assert error == ""
+    assert posted["json"]["size"] == expected_size
+    assert posted["json"]["resolution"] == expected_res
+    assert posted["json"]["metadata"]["resolution"] == expected_res.lower()

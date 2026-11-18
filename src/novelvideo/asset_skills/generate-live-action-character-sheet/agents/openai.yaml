@@ -1,7 +1,7 @@
 interface:
   display_name: 真人电影角色三视图
-  short_description: 用于真人实拍角色定妆、正背面衣装与头像特写的三联资产图生成
-  default_prompt: 请使用 $generate-live-action-character-sheet 生成真人演员定妆三联图，保留自然皮肤与衣料细节；优先遵从我的描述及认可参考图的取景和穿戴状态，无参考时采用左侧无头正面衣装、中间完整背面、右侧正面头像。
+  short_description: 用于真人实拍角色定妆的竖版9:16四宫格设定图：面部正面、面部侧面、全身正面、全身背面
+  default_prompt: 请使用 $generate-live-action-character-sheet 生成竖版9:16的真人演员定妆四宫格：左上面部正面、右上面部侧面、左下全身正面、右下全身背面；保留自然皮肤与衣料细节，上传人物参考图时精确保留其五官与衣装；左下格的脸做成无五官的平滑空白脸，做不到时改为无头取景。
   icon_small: assets/icon.svg
   icon_large: assets/icon.svg
 policy:

@@ -165,6 +165,10 @@ def test_from_preset_scene_asset_includes_derived_base_master_input(
     base_master_path = project_dir / "assets" / "scenes" / "城市街道" / "master.png"
     base_master_path.parent.mkdir(parents=True)
     base_master_path.write_bytes(b"fake image")
+    base_reverse_path = (
+        project_dir / "assets" / "scenes" / "城市街道" / "reverse_master.png"
+    )
+    base_reverse_path.write_bytes(b"fake reverse image")
 
     class Store:
         async def get_scene(self, scene_id: str):
@@ -219,3 +223,12 @@ def test_from_preset_scene_asset_includes_derived_base_master_input(
     assert base_nodes[0]["data"]["imageUrl"]
     edges = {(edge["source"], edge["target"]) for edge in payload["edges"]}
     assert (base_nodes[0]["id"], "ref_scene_master_1") in edges
+
+    base_reverse_nodes = [
+        node
+        for node in payload["nodes"]
+        if node.get("data", {}).get("displayName") == "城市街道 base reverse master"
+    ]
+    assert len(base_reverse_nodes) == 1
+    assert base_reverse_nodes[0]["data"]["imageUrl"]
+    assert (base_reverse_nodes[0]["id"], "ref_scene_reverse_master_1") in edges

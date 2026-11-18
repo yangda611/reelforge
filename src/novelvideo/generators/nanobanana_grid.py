@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from novelvideo.config import get_grid_generation_config
 from novelvideo.ports import get_usage_meter, update_current_model_call_log
@@ -240,6 +240,8 @@ def _newapi_request_id_from_headers(headers: Any) -> str:
 
 
 NEWAPI_IMAGE_HTTP_TIMEOUT_SECONDS = 1800.0
+_LINGKE_IMAGE_POLL_INTERVAL_SECONDS = 5.0
+_LINGKE_IMAGE_MAX_REFERENCES = 10
 
 
 def _newapi_safe_header_summary(headers: Any) -> dict[str, str]:
@@ -262,7 +264,11 @@ def _newapi_safe_request_context(
     payload: dict[str, object],
     prompt: str,
 ) -> dict[str, object]:
-    reference_images = payload.get("image") or payload.get("images")
+    media_params = payload.get("params")
+    media_params = media_params if isinstance(media_params, dict) else {}
+    reference_images = (
+        payload.get("image") or payload.get("images") or media_params.get("images")
+    )
     reference_image_count = len(reference_images) if isinstance(reference_images, list) else 0
     raw_metadata = payload.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
@@ -271,6 +277,11 @@ def _newapi_safe_request_context(
         for key in ("ratio", "aspect_ratio", "resolution")
         if key in metadata
     }
+    if not geometry_metadata:
+        if media_params.get("aspect_ratio"):
+            geometry_metadata["ratio"] = media_params["aspect_ratio"]
+        if media_params.get("size"):
+            geometry_metadata["resolution"] = str(media_params["size"]).lower()
     return {
         "endpoint": f"{endpoint}{request_path}",
         "model": model,
@@ -282,6 +293,148 @@ def _newapi_safe_request_context(
         "prompt_chars": len(prompt or ""),
         "prompt_sha256": hashlib.sha256((prompt or "").encode("utf-8")).hexdigest()[:16],
     }
+
+
+def _is_lingke_image_target(provider: str, endpoint: str) -> bool:
+    provider_name = str(provider or "").strip().lower()
+    if provider_name in {"lingke", "ai778"}:
+        return True
+    host = (urlparse(str(endpoint or "").strip()).hostname or "").lower()
+    return host in {"api.lk888.ai", "api.lingkeai.ai"}
+
+
+def _lingke_image_path(endpoint: str, suffix: str) -> str:
+    prefix = "" if str(endpoint or "").rstrip("/").lower().endswith("/v1") else "/v1"
+    return f"{prefix}/{suffix.lstrip('/')}"
+
+
+def _value_at_request_path(payload: dict[str, object], path: str) -> object:
+    value: object = payload
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _set_nested_value(target: dict[str, object], path: str, value: object) -> None:
+    parts = path.split(".")
+    cursor = target
+    for part in parts[:-1]:
+        nested = cursor.get(part)
+        if not isinstance(nested, dict):
+            nested = {}
+            cursor[part] = nested
+        cursor = nested
+    cursor[parts[-1]] = value
+
+
+def _build_lingke_image_payload(
+    payload: dict[str, object],
+    *,
+    request_schema: dict[str, object],
+    aspect_ratio: str,
+    image_size: str,
+) -> dict[str, object]:
+    params: dict[str, object] = {}
+    size = str(image_size or "").strip().upper()
+    ratio = str(aspect_ratio or "").strip().lower()
+    if size:
+        params["size"] = size
+    if ratio not in {"", "auto", "adaptive"}:
+        params["aspect_ratio"] = ratio
+    output_format = str(payload.get("output_format") or "").strip().lower()
+    if output_format:
+        params["output_format"] = output_format
+
+    image_values = payload.get("images") or payload.get("image")
+    if isinstance(image_values, list):
+        normalized_images: list[object] = []
+        for item in image_values:
+            if isinstance(item, dict):
+                image_url = item.get("image_url")
+                if image_url:
+                    normalized_images.append(image_url)
+            elif item:
+                normalized_images.append(item)
+        if len(normalized_images) > _LINGKE_IMAGE_MAX_REFERENCES:
+            raise ValueError(
+                f"Lingke accepts at most {_LINGKE_IMAGE_MAX_REFERENCES} reference images"
+            )
+        if normalized_images:
+            params["images"] = normalized_images
+
+    transport_fields = {
+        "model",
+        "prompt",
+        "n",
+        "response_format",
+        "watermark",
+        "metadata",
+        "width",
+        "height",
+        "quality",
+        "input_fidelity",
+        "image",
+        "images",
+        "output_format",
+    }
+    for definition in request_schema.get("parameters") or []:
+        if not isinstance(definition, dict):
+            continue
+        path = str(definition.get("requestPath") or "").strip()
+        if not path:
+            continue
+        value = _value_at_request_path(payload, path)
+        if value is None:
+            continue
+        relative_path = path.removeprefix("params.")
+        root = relative_path.split(".", 1)[0]
+        if root in transport_fields:
+            continue
+        if root == "ratio":
+            relative_path = "aspect_ratio" + relative_path[len("ratio") :]
+        elif root == "resolution":
+            relative_path = "size" + relative_path[len("resolution") :]
+        _set_nested_value(params, relative_path, value)
+
+    return {
+        "model": payload.get("model"),
+        "prompt": payload.get("prompt"),
+        "params": params,
+    }
+
+
+async def _poll_lingke_image_result(
+    client: Any,
+    *,
+    endpoint: str,
+    api_key: str,
+    task_id: str,
+) -> dict[str, object]:
+    status_path = _lingke_image_path(
+        endpoint,
+        f"skills/task-status?task_id={quote(task_id, safe='')}",
+    )
+    headers = {"Authorization": f"Bearer {api_key}"}
+    deadline = time.monotonic() + NEWAPI_IMAGE_HTTP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        await asyncio.sleep(_LINGKE_IMAGE_POLL_INTERVAL_SECONDS)
+        response = await client.get(f"{endpoint}{status_path}", headers=headers)
+        response.raise_for_status()
+        response_data = response.json()
+        if not isinstance(response_data, dict):
+            raise ValueError("Lingke task status response must be an object")
+        nested = response_data.get("data")
+        result = nested if isinstance(nested, dict) else response_data
+        if result.get("is_final") is not True:
+            continue
+        state = str(result.get("state") or "").strip().lower()
+        if state in {"success", "succeeded"}:
+            return result
+        detail = str(result.get("error") or result.get("status") or state or "unknown")
+        raise RuntimeError(f"Lingke image task failed: {detail}")
+    raise TimeoutError("Lingke image task timed out")
 
 
 def _newapi_context_for_error(context: dict[str, object]) -> str:
@@ -1454,6 +1607,35 @@ async def _call_openai_image_api(
         return None, "", f"请求异常: {detail}"
 
 
+def _should_include_third_party_newapi_size_fields(
+    *,
+    endpoint: str,
+    direct_target_used: bool,
+    is_organization: bool,
+) -> bool:
+    """Return True when calling a third-party OneAPI/NewAPI relay directly.
+
+    DramaClaw's own RelayClaw and local proxy read ``width``/``height`` and
+    ``metadata.resolution``, whereas standard third-party OneAPI/NewAPI relays
+    (such as ``zeroshell.top``) parse OpenAI ``size`` and/or top-level
+    ``resolution`` on ``/images/generations`` and ``/images/edits`` and
+    default to ``1K`` when neither is present.
+    """
+    if is_organization:
+        return False
+    if direct_target_used:
+        return True
+    parsed = urlparse(str(endpoint or "").strip())
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "127.0.0.1", "newapi", "relayclaw.cdnfg.com"}:
+        return False
+    if host.endswith((".test", ".invalid", ".example", ".local")):
+        return False
+    return True
+
+
 async def _call_newapi_image_api(
     *,
     api_key: str,
@@ -1475,6 +1657,8 @@ async def _call_newapi_image_api(
     import httpx
 
     context = _validate_egress_context(egress_context)
+    direct_target_used = False
+    direct_provider = ""
     if context is None or not context.is_organization:
         from novelvideo.model_gateway_settings import (
             resolve_direct_media_gateway_target,
@@ -1482,6 +1666,8 @@ async def _call_newapi_image_api(
 
         direct_target = resolve_direct_media_gateway_target(model, "image")
         if direct_target is not None:
+            direct_target_used = True
+            direct_provider = getattr(direct_target, "provider", "")
             if direct_target.api_key:
                 api_key = direct_target.api_key
             if direct_target.base_url:
@@ -1500,6 +1686,9 @@ async def _call_newapi_image_api(
         return None, "", "Unsupported reference image format; use dc-media, images, or data-url"
     aspect_ratio = str(image_config.get("aspect_ratio") or "1:1").strip().lower() or "1:1"
     image_size = normalize_image_size(str(image_config.get("image_size") or "1K"), "newapi")
+    from novelvideo.generators.image_resolution import clamp_image_size_for_model
+
+    image_size = clamp_image_size_for_model("newapi", model, image_size)
     request_schema = image_config.get("request_schema") or {}
     from novelvideo.media_model_request_schema import normalize_media_resolution_value
 
@@ -1558,6 +1747,13 @@ async def _call_newapi_image_api(
         from novelvideo.config import get_effective_newapi_gateway_config
 
         endpoint = get_effective_newapi_gateway_config().base_url.rstrip("/")
+    lingke_target = _is_lingke_image_target(direct_provider, endpoint)
+    if lingke_target and len(reference_images or []) > _LINGKE_IMAGE_MAX_REFERENCES:
+        return (
+            None,
+            "",
+            f"Lingke accepts at most {_LINGKE_IMAGE_MAX_REFERENCES} reference images",
+        )
 
     relayed_urls: list[str] = []
     used_data_uri_references = False
@@ -1629,6 +1825,28 @@ async def _call_newapi_image_api(
         image_config.get("model_params") or {},
     )
     payload = enforce_newapi_media_geometry_contract(payload, media_type="image")
+    if lingke_target:
+        try:
+            payload = _build_lingke_image_payload(
+                payload,
+                request_schema=request_schema,
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+            )
+        except ValueError as exc:
+            return None, "", str(exc)
+        request_path = _lingke_image_path(endpoint, "media/generate")
+    elif _should_include_third_party_newapi_size_fields(
+        endpoint=endpoint,
+        direct_target_used=direct_target_used,
+        is_organization=bool(context is not None and context.is_organization),
+    ):
+        if "width" in payload and "height" in payload:
+            payload.setdefault("size", f"{payload['width']}x{payload['height']}")
+        elif image_size:
+            payload.setdefault("size", str(image_size).upper())
+        if image_size:
+            payload.setdefault("resolution", str(image_size).upper())
 
     request_context = _newapi_safe_request_context(
         endpoint=endpoint,
@@ -1745,6 +1963,7 @@ async def _call_newapi_image_api(
                     if (
                         reference_images
                         and not used_data_uri_references
+                        and not lingke_target
                         and _is_upstream_reference_fetch_failure(
                             exc.response.status_code,
                             body,
@@ -1792,6 +2011,58 @@ async def _call_newapi_image_api(
                 or str(result.get("request_id") or result.get("requestId") or "").strip()
             )
             response_id = str(result.get("id") or "").strip()
+            if lingke_target:
+                submitted_data = result.get("data")
+                submitted_data = (
+                    submitted_data if isinstance(submitted_data, dict) else {}
+                )
+                task_id = str(
+                    submitted_data.get("task_id") or result.get("task_id") or ""
+                ).strip()
+                if not task_id:
+                    raise ValueError("Lingke image response missing task_id")
+                provider_request_id = provider_request_id or task_id
+                response_id = task_id
+                _record_trace(
+                    provider_request_id=provider_request_id,
+                    response_id=response_id,
+                )
+                await _mark_paid_image_attempt_accepted(
+                    provider_request_id=provider_request_id,
+                    response_id=response_id,
+                )
+                task_result = await _poll_lingke_image_result(
+                    client,
+                    endpoint=endpoint,
+                    api_key=api_key,
+                    task_id=task_id,
+                )
+                await update_current_model_call_log(
+                    response_payload={"submission": result, "task_status": task_result},
+                )
+                if str(task_result.get("result_type") or "image").strip().lower() != "image":
+                    raise ValueError("Lingke image task returned a non-image result")
+                image_url = str(task_result.get("result_url") or "").strip()
+                if not image_url:
+                    raise ValueError("Lingke image task completed without result_url")
+                if image_url.startswith("data:image"):
+                    _, b64_data = image_url.split(",", 1)
+                    image_bytes = base64.b64decode(b64_data)
+                else:
+                    logger.info("Lingke image result download start")
+                    async with httpx.AsyncClient(
+                        timeout=60.0,
+                        follow_redirects=True,
+                    ) as fetch:
+                        image_response = await fetch.get(image_url)
+                    image_response.raise_for_status()
+                    image_bytes = image_response.content
+                await _confirm(
+                    reservation_id,
+                    provider_request_id=provider_request_id,
+                    response_id=response_id,
+                )
+                return image_bytes, "", ""
             _record_trace(provider_request_id=provider_request_id, response_id=response_id)
             await _mark_paid_image_attempt_accepted(
                 provider_request_id=provider_request_id,

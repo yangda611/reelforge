@@ -44,3 +44,15 @@ def test_first_provider_sync_creates_empty_channel(monkeypatch, accepted):
     assert result["action"] == "create"
     assert result["channelId"] == (7 if accepted else None)
     assert ("POST", "/api/channel/") in requests
+
+
+def test_lingke_provider_preset_uses_api_base_url():
+    channel = provisioner.build_channel_payload(
+        provider="lingke",
+        upstream_key="lingke-upstream-key",
+        model_mapping={
+            "doubao-seedream-5-5-261028": "doubao-seedream-5-5-261028"
+        },
+    )
+
+    assert channel["channel"]["base_url"] == "https://api.lk888.ai"

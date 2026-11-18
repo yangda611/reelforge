@@ -19,8 +19,29 @@ export const BUILTIN_VISUAL_STYLES: readonly { value: string; labelKey: string }
   { value: "republican_era_drama", labelKey: "ingest.visualStyles.republicanEraDrama" },
 ];
 
+import type { Style } from "@/types/style";
+
 export const BUILTIN_STYLE_LABEL_KEYS: Record<string, string> = Object.fromEntries(
   BUILTIN_VISUAL_STYLES.map((style) => [style.value, style.labelKey]),
 );
 
 export const DEFAULT_VISUAL_STYLE = BUILTIN_VISUAL_STYLES[0].value;
+
+const ANIMATION_STYLE_IDS = new Set(["anime", "guoman_fantasy"]);
+
+export function isLiveActionStyle(
+  styleId: string | undefined | null,
+  styles?: readonly Style[],
+): boolean {
+  const cleanId = (styleId ?? "").trim();
+  const matched = cleanId
+    ? styles?.find((style) => style.id === cleanId)
+    : undefined;
+  if (matched?.style_family) {
+    return matched.style_family === "live_action";
+  }
+  if (!cleanId) {
+    return true;
+  }
+  return !ANIMATION_STYLE_IDS.has(cleanId);
+}

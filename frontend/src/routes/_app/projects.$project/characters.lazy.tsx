@@ -66,6 +66,8 @@ import {
 } from "@/lib/api-errors";
 import { useCharacterImageSelection } from "@/lib/queries/character-image-selection";
 import { useProject } from "@/lib/queries/projects";
+import { useStyles } from "@/lib/queries/styles";
+import { isLiveActionStyle } from "@/lib/visual-styles";
 import { useGenerationCreditCost } from "@/lib/queries/generation-credit-cost";
 import { isCeRuntime } from "@/lib/runtime-config";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -1345,6 +1347,7 @@ function IdentityCard({
   characterName,
   characterAgeGroup,
   imageModel,
+  isLiveAction = true,
   ageLabel,
   roleLabel,
   onAttempt,
@@ -1354,6 +1357,7 @@ function IdentityCard({
   characterName: string;
   characterAgeGroup?: string;
   imageModel?: string;
+  isLiveAction?: boolean;
   ageLabel: string;
   roleLabel: string;
   onAttempt: () => void;
@@ -1704,18 +1708,38 @@ function IdentityCard({
       </div>
 
       {/* Hero row: identity image (left) + appearance editor (right) */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[200px_minmax(0,1fr)]">
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-4",
+          isLiveAction
+            ? "md:grid-cols-[140px_minmax(0,1fr)] xl:grid-cols-[156px_minmax(0,1fr)]"
+            : "md:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[200px_minmax(0,1fr)]",
+        )}
+      >
         {/* Identity image preview */}
-        <div className="relative">
+        <div
+          className={cn(
+            "relative",
+            isLiveAction && "mx-auto w-full max-w-[180px] md:mx-0 md:max-w-none",
+          )}
+        >
           {identity.image_url ? (
             <LightboxImage
               src={resolveMediaUrl(identity.image_url) ?? ""}
               alt={identity.identity_name}
-              className="aspect-[4/3] w-full rounded-[8px] bg-white/[0.025]"
+              className={cn(
+                "w-full rounded-[8px] bg-white/[0.025]",
+                isLiveAction ? "aspect-[9/16]" : "aspect-[4/3]",
+              )}
               fit="contain"
             />
           ) : (
-            <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1 rounded-[8px] border border-dashed border-border bg-background/40 text-muted-foreground/50">
+            <div
+              className={cn(
+                "flex w-full flex-col items-center justify-center gap-1 rounded-[8px] border border-dashed border-border bg-background/40 text-muted-foreground/50",
+                isLiveAction ? "aspect-[9/16]" : "aspect-[4/3]",
+              )}
+            >
               <UserSquare2 className="size-8" />
               <span className="text-xs">
                 {t("characters.identities.heroEmpty")}
@@ -2384,11 +2408,13 @@ function IdentitiesGridSection({
   character,
   project,
   imageModel,
+  isLiveAction,
   onAttempt,
 }: {
   character: Character;
   project: string;
   imageModel?: string;
+  isLiveAction: boolean;
   onAttempt: () => void;
 }) {
   const { t } = useTranslation();
@@ -2492,6 +2518,7 @@ function IdentitiesGridSection({
                 characterName={character.name}
                 characterAgeGroup={character.age_group}
                 imageModel={imageModel}
+                isLiveAction={isLiveAction}
                 ageLabel={ageLabel}
                 roleLabel={roleLabel}
                 onAttempt={onAttempt}
@@ -2615,6 +2642,7 @@ function DetailPanel({
   character,
   project,
   imageModel,
+  isLiveAction,
   attemptCount,
   mainCopy,
   onAttempt,
@@ -2624,6 +2652,7 @@ function DetailPanel({
   character: Character | null;
   project: string;
   imageModel?: string;
+  isLiveAction: boolean;
   attemptCount: number;
   mainCopy: CharacterMainCopy;
   onAttempt: () => void;
@@ -2691,6 +2720,7 @@ function DetailPanel({
           character={character}
           project={project}
           imageModel={imageModel}
+          isLiveAction={isLiveAction}
           onAttempt={onAttempt}
         />
       </div>
@@ -2951,6 +2981,7 @@ function CharactersSplit({
   characters,
   totalCharacters,
   imageModel,
+  isLiveAction,
   mainCopy,
   searchQuery,
   onSearchQueryChange,
@@ -2974,6 +3005,7 @@ function CharactersSplit({
   characters: Character[];
   totalCharacters: number;
   imageModel?: string;
+  isLiveAction: boolean;
   mainCopy: CharacterMainCopy;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
@@ -3133,6 +3165,7 @@ function CharactersSplit({
       character={selectedChar}
       project={project}
       imageModel={imageModel}
+      isLiveAction={isLiveAction}
       attemptCount={selectedChar ? (attempts[selectedChar.name] ?? 0) : 0}
       mainCopy={mainCopy}
       onAttempt={() => selectedChar && handleAttempt(selectedChar.name)}
@@ -3174,6 +3207,7 @@ function CharactersPageContent() {
   const charactersVisible = assetTab === "characters" || assetTab === "voices";
   const { data: charsRes, isLoading } = useCharacters(project, charactersVisible);
   const { data: projectRes } = useProject(project);
+  const { data: stylesRes } = useStyles(project);
   const { data: imageSelectionRes } = useCharacterImageSelection(
     project,
     assetTab === "characters",
@@ -3223,6 +3257,10 @@ function CharactersPageContent() {
 
   const characters = charsRes?.data ?? [];
   const projectConfig = projectRes?.data;
+  const isLiveAction = isLiveActionStyle(
+    projectConfig?.visual_style,
+    stylesRes?.data,
+  );
   const savedImageModel =
     imageSelectionRes?.data.character_image_selection ?? "";
   const narratorMain = useMemo(
@@ -3351,6 +3389,7 @@ function CharactersPageContent() {
             characters={filteredCharacters}
             totalCharacters={characters.length}
             imageModel={imageModel}
+            isLiveAction={isLiveAction}
             mainCopy={mainCopy}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}

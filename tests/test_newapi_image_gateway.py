@@ -377,6 +377,307 @@ def test_newapi_image_call_sends_gpt_image2_params(monkeypatch):
     assert "extra_fields" not in posted["json"]
 
 
+def test_lingke_image_model_uses_media_generate_and_polls_result(monkeypatch):
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+    from novelvideo import model_gateway_settings
+
+    calls = []
+    submit_result = {
+        "code": 200,
+        "msg": "任务创建成功",
+        "data": {"task_id": 123456},
+    }
+    task_result = {
+        "task_id": 123456,
+        "state": "success",
+        "is_final": True,
+        "result_url": "https://cdn.example.com/output.png",
+        "result_type": "image",
+        "error": "",
+    }
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        content = b"lingke-image"
+
+        def __init__(self, body=None):
+            self.body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.body
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.poll_count = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            calls.append(("post", url, headers, json))
+            return FakeResponse(submit_result)
+
+        async def get(self, url, *, headers=None):
+            calls.append(("get", url, headers))
+            if "task-status" in url:
+                self.poll_count += 1
+                if self.poll_count == 1:
+                    return FakeResponse(
+                        {
+                            "task_id": 123456,
+                            "state": "running",
+                            "is_final": False,
+                            "result_url": "",
+                        }
+                    )
+                return FakeResponse(task_result)
+            return FakeResponse()
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        model_gateway_settings,
+        "resolve_direct_media_gateway_target",
+        lambda *_args: SimpleNamespace(
+            api_key="lingke-key",
+            base_url="https://api.lk888.ai/v1",
+            upstream_model="doubao-seedream-5-5-261028",
+            provider="lingke",
+        ),
+    )
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="doubao-seedream-5-5-261028",
+            prompt="a cinematic mountain landscape",
+            image_config={
+                "aspect_ratio": "16:9",
+                "image_size": "2K",
+                "output_format": "png",
+            },
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes == b"lingke-image"
+    assert error == ""
+    assert calls[0][0:2] == (
+        "post",
+        "https://api.lk888.ai/v1/media/generate",
+    )
+    assert calls[0][2]["Authorization"] == "Bearer lingke-key"
+    assert calls[0][3] == {
+        "model": "doubao-seedream-5-5-261028",
+        "prompt": "a cinematic mountain landscape",
+        "params": {
+            "aspect_ratio": "16:9",
+            "size": "2K",
+            "output_format": "png",
+        },
+    }
+    assert calls[1] == (
+        "get",
+        "https://api.lk888.ai/v1/skills/task-status?task_id=123456",
+        {"Authorization": "Bearer lingke-key"},
+    )
+    assert calls[2] == calls[1]
+    assert calls[3] == ("get", "https://cdn.example.com/output.png", None)
+
+
+def test_lingke_image_request_maps_custom_params_and_references(monkeypatch):
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+    from novelvideo import model_gateway_settings
+
+    posted = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        content = b"lingke-image"
+
+        def __init__(self, body=None):
+            self.body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.body
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            posted.update(url=url, headers=headers, json=json)
+            return FakeResponse({"data": {"task_id": "task-1"}})
+
+        async def get(self, url, *, headers=None):
+            if "task-status" in url:
+                return FakeResponse({
+                    "data": {
+                        "task_id": "task-1",
+                        "state": "success",
+                        "is_final": True,
+                        "result_url": "https://cdn.example.com/output.png",
+                    }
+                })
+            return FakeResponse()
+
+    async def fake_relay(*_args, **_kwargs):
+        return ["https://relay.example/image.png"]
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        model_gateway_settings,
+        "resolve_direct_media_gateway_target",
+        lambda *_args: SimpleNamespace(
+            api_key="lingke-key",
+            base_url="https://api.lk888.ai",
+            upstream_model="doubao-seedream-5-5-261028",
+            provider="lingke",
+        ),
+    )
+    monkeypatch.setattr(nanobanana_grid, "_relay_reference_images_for_newapi", fake_relay)
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="doubao-seedream-5-5-261028",
+            prompt="edit this image",
+            reference_images=[b"reference-image"],
+            image_config={
+                "aspect_ratio": "4:3",
+                "image_size": "1.5K",
+                "request_schema": {
+                    "endpoint": "images/generations",
+                    "parameters": [
+                        {
+                            "key": "custom_option",
+                            "requestPath": "custom_option",
+                            "control": "switch",
+                            "default": False,
+                        }
+                    ],
+                },
+                "model_params": {"custom_option": True},
+            },
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes == b"lingke-image"
+    assert error == ""
+    assert posted["url"] == "https://api.lk888.ai/v1/media/generate"
+    assert posted["json"] == {
+        "model": "doubao-seedream-5-5-261028",
+        "prompt": "edit this image",
+        "params": {
+            "size": "1.5K",
+            "aspect_ratio": "4:3",
+            "images": ["https://relay.example/image.png"],
+            "custom_option": True,
+        },
+    }
+
+
+def test_lingke_failed_task_returns_provider_error(monkeypatch):
+    import httpx
+    from novelvideo import model_gateway_settings
+    from novelvideo.generators import nanobanana_grid
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        content = b""
+
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.body
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            return FakeResponse({"data": {"task_id": "task-failed"}})
+
+        async def get(self, url, *, headers=None):
+            assert "task-status" in url
+            return FakeResponse(
+                {
+                    "data": {
+                        "task_id": "task-failed",
+                        "state": "failed",
+                        "is_final": True,
+                        "error": "upstream capacity exhausted",
+                    }
+                }
+            )
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        model_gateway_settings,
+        "resolve_direct_media_gateway_target",
+        lambda *_args: SimpleNamespace(
+            api_key="lingke-key",
+            base_url="https://api.lk888.ai/v1",
+            upstream_model="doubao-seedream-5-5-261028",
+            provider="lingke",
+        ),
+    )
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="doubao-seedream-5-5-261028",
+            prompt="prompt",
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes is None
+    assert "Lingke image task failed: upstream capacity exhausted" in error
+
+
 def test_newapi_image_auto_ratio_keeps_resolution_without_dimensions(monkeypatch):
     import httpx
     from novelvideo.generators import nanobanana_grid
@@ -1110,7 +1411,7 @@ def test_newapi_scene_master_uses_text_only_nanobanana2(monkeypatch, tmp_path):
     assert captured["reference_images"] is None
     assert captured["image_config"] == {
         "aspect_ratio": "16:9",
-        "image_size": "1K",
+        "image_size": "4K",
         "output_format": "png",
     }
     assert "SCENE NAME: 古董店" in captured["prompt"]
@@ -1300,7 +1601,7 @@ def test_newapi_reverse_master_uses_master_reference_nanobanana2(monkeypatch, tm
     ]
     assert captured["image_config"] == {
         "aspect_ratio": "16:9",
-        "image_size": "1K",
+        "image_size": "4K",
         "output_format": "png",
     }
     assert "REFERENCE 1 = the scene's FRONT-FACING master" in captured["prompt"]
@@ -1354,10 +1655,142 @@ def test_newapi_reverse_master_can_use_gpt_image2_quality_medium(monkeypatch, tm
     ]
     assert captured["image_config"] == {
         "aspect_ratio": "16:9",
-        "image_size": "1K",
+        "image_size": "4K",
         "output_format": "png",
         "quality": "medium",
     }
+
+
+def test_newapi_derived_scene_reverse_master_passes_base_reverse_reference(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    from novelvideo.generators import scene_reference_images
+    from novelvideo.models import NovelScene
+
+    captured = {}
+
+    async def fake_call_newapi_image_api(**kwargs):
+        captured.update(kwargs)
+        return b"derived-scene-reverse", "", ""
+
+    derived_master_path = (
+        tmp_path / "assets" / "scenes" / "便利店_暴雨夜霓虹版" / "master.png"
+    )
+    derived_master_path.parent.mkdir(parents=True)
+    derived_master_path.write_bytes(b"derived-master-bytes")
+
+    base_reverse_path = (
+        tmp_path / "assets" / "scenes" / "便利店" / "reverse_master.png"
+    )
+    base_reverse_path.parent.mkdir(parents=True)
+    base_reverse_path.write_bytes(b"base-reverse-bytes")
+
+    monkeypatch.setattr(
+        scene_reference_images,
+        "_call_newapi_image_api",
+        fake_call_newapi_image_api,
+    )
+    _patch_scene_newapi_gateway(monkeypatch)
+    monkeypatch.setattr(
+        scene_reference_images, "SCENE_REVERSE_MASTER_IMAGE_PROVIDER", "newapi"
+    )
+    monkeypatch.setattr(
+        scene_reference_images,
+        "SCENE_REVERSE_MASTER_IMAGE_MODEL",
+        "LingShan-NB-2",
+    )
+
+    base_scene = NovelScene(
+        name="便利店",
+        scene_type="interior",
+        environment_prompt="正面：收银台。背面：窄通道与后场门。",
+    )
+    derived_scene = NovelScene(
+        name="便利店_暴雨夜霓虹版",
+        base_scene_id="便利店",
+        variant_id="暴雨夜霓虹版",
+        variant_prompt="窗外暴雨倾盆，霓虹反射。",
+        scene_type="interior",
+    )
+
+    output_path = run_async(
+        scene_reference_images.generate_scene_reference_image(
+            project_dir=tmp_path,
+            scene=derived_scene,
+            kind="reverse_master",
+            base_scene=base_scene,
+        )
+    )
+
+    assert (
+        output_path
+        == tmp_path / "assets" / "scenes" / "便利店_暴雨夜霓虹版" / "reverse_master.png"
+    )
+    assert output_path.read_bytes() == b"derived-scene-reverse"
+    assert captured["reference_images"] == [
+        ("scene_master_master.png", b"derived-master-bytes", "image/png"),
+        (
+            "base_scene_reverse_master_reverse_master.png",
+            b"base-reverse-bytes",
+            "image/png",
+        ),
+    ]
+    assert "REFERENCE 2 = the BASE SCENE's canonical REVERSE-FACING" in captured["prompt"]
+    assert "ANCHORED BY BASE REVERSE (REFERENCE 2)" in captured["prompt"]
+
+
+def test_newapi_derived_scene_reverse_master_falls_back_when_base_reverse_missing(
+    monkeypatch, tmp_path
+):
+    _isolate_settings_db(monkeypatch, tmp_path)
+    from novelvideo.generators import scene_reference_images
+    from novelvideo.models import NovelScene
+
+    captured = {}
+
+    async def fake_call_newapi_image_api(**kwargs):
+        captured.update(kwargs)
+        return b"derived-scene-reverse", "", ""
+
+    derived_master_path = tmp_path / "assets" / "scenes" / "便利店_夜晚" / "master.png"
+    derived_master_path.parent.mkdir(parents=True)
+    derived_master_path.write_bytes(b"derived-master-bytes")
+
+    monkeypatch.setattr(
+        scene_reference_images,
+        "_call_newapi_image_api",
+        fake_call_newapi_image_api,
+    )
+    _patch_scene_newapi_gateway(monkeypatch)
+    monkeypatch.setattr(
+        scene_reference_images, "SCENE_REVERSE_MASTER_IMAGE_PROVIDER", "newapi"
+    )
+    monkeypatch.setattr(
+        scene_reference_images,
+        "SCENE_REVERSE_MASTER_IMAGE_MODEL",
+        "LingShan-NB-2",
+    )
+
+    derived_scene = NovelScene(
+        name="便利店_夜晚",
+        base_scene_id="便利店",
+        time_of_day="夜晚",
+        scene_type="interior",
+    )
+
+    run_async(
+        scene_reference_images.generate_scene_reference_image(
+            project_dir=tmp_path,
+            scene=derived_scene,
+            kind="reverse_master",
+        )
+    )
+
+    assert captured["reference_images"] == [
+        ("scene_master_master.png", b"derived-master-bytes", "image/png"),
+    ]
+    assert "REFERENCE 2" not in captured["prompt"]
 
 
 def test_newapi_prop_reference_gpt_image2_sends_quality_medium(monkeypatch, tmp_path):

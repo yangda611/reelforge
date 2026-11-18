@@ -149,14 +149,37 @@ def _lookup_official_catalog_entry(candidates: list[str]) -> dict[str, Any] | No
     return None
 
 
-def _build_request_schema_from_config(config: dict[str, Any] | None) -> dict[str, Any]:
+def _extract_entry_config(item: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    nested = item.get("config")
+    if isinstance(nested, dict) and nested:
+        return nested
+    return item
+
+
+def _build_request_schema_from_config(
+    config: dict[str, Any] | None, *, model: str = ""
+) -> dict[str, Any]:
     if not isinstance(config, dict) or not config:
         return {}
-    schema = dict(config.get("request")) if isinstance(config.get("request"), dict) else {}
+    raw_req = config.get("request") if isinstance(config.get("request"), dict) else {}
+    parameters = raw_req.get("parameters") if isinstance(raw_req.get("parameters"), list) else []
+    omit_paths = raw_req.get("omitPaths") if isinstance(raw_req.get("omitPaths"), list) else []
+    min_pixels = config.get("minPixels")
+    lowered_model = str(model or "").strip().lower()
+    already_supports_quality = (
+        lowered_model in {"lingshan-g2", "gpt-image-2", "image-2", "image-2-official"}
+        or "gpt-image" in lowered_model
+    )
+    needs_quality_flag = bool(config.get("qualityOptions")) and not already_supports_quality
+    if not parameters and not omit_paths and min_pixels is None and not needs_quality_flag:
+        return {}
+    schema = dict(raw_req)
     if config.get("qualityOptions"):
         schema["includeQuality"] = True
-    if config.get("minPixels") is not None:
-        schema["minPixels"] = config["minPixels"]
+    if min_pixels is not None:
+        schema["minPixels"] = min_pixels
     return schema
 
 
@@ -205,18 +228,9 @@ def resolve_image_model_profile(
     candidates = _catalog_entry_candidates(provider, model, selection)
 
     ce_item = _lookup_ce_mapping_entry(candidates)
-    ce_config = (
-        ce_item.get("config")
-        if isinstance(ce_item, dict) and isinstance(ce_item.get("config"), dict)
-        else {}
-    )
+    ce_config = _extract_entry_config(ce_item)
     official_item = _lookup_official_catalog_entry(candidates)
-    official_config = (
-        official_item.get("config")
-        if isinstance(official_item, dict)
-        and isinstance(official_item.get("config"), dict)
-        else {}
-    )
+    official_config = _extract_entry_config(official_item)
 
     max_size = _pick_highest_resolution_option(ce_config.get("resolutionOptions"))
     if not max_size:
@@ -225,7 +239,7 @@ def resolve_image_model_profile(
         max_size = _infer_max_resolution_from_model_name(provider, model)
 
     merged_config = {**official_config, **ce_config}
-    request_schema = _build_request_schema_from_config(merged_config)
+    request_schema = _build_request_schema_from_config(merged_config, model=model)
     return ImageModelProfile(max_image_size=max_size, request_schema=request_schema)
 
 
@@ -236,3 +250,80 @@ def resolve_highest_image_resolution(
 ) -> str:
     """Return the highest supported resolution label (e.g. ``'4K'``) for a model."""
     return resolve_image_model_profile(provider, model, selection=selection).max_image_size
+
+
+def resolve_supported_image_resolutions(
+    provider: str,
+    model: str,
+    selection: str | None = None,
+) -> list[str]:
+    """Return sorted supported named resolution labels when known, else []."""
+    candidates = _catalog_entry_candidates(provider, model, selection)
+    ce_item = _lookup_ce_mapping_entry(candidates)
+    ce_config = _extract_entry_config(ce_item)
+    official_item = _lookup_official_catalog_entry(candidates)
+    official_config = _extract_entry_config(official_item)
+    options = ce_config.get("resolutionOptions")
+    if not isinstance(options, list) or not options:
+        options = official_config.get("resolutionOptions")
+
+    parsed: list[tuple[float, str]] = []
+    if isinstance(options, list) and options:
+        for item in options:
+            info = _normalize_resolution_option(item)
+            if info is not None and not re.fullmatch(r"\d+\s*[xX×]\s*\d+", info[1]):
+                parsed.append(info)
+    if parsed:
+        dedup: dict[str, float] = {}
+        for rank, label in sorted(parsed, key=lambda pair: pair[0]):
+            dedup[label] = rank
+        return list(dedup.keys())
+
+    clean_model = str(model or "").strip().lower()
+    if re.search(r"(?:^|[-_/])4k(?:$|[-_/])", clean_model) or clean_model.endswith("4k"):
+        return ["4K"]
+    if re.search(r"(?:^|[-_/])3k(?:$|[-_/])", clean_model) or clean_model.endswith("3k"):
+        return ["3K"]
+    if re.search(r"(?:^|[-_/])2k(?:$|[-_/])", clean_model) or clean_model.endswith("2k"):
+        return ["2K"]
+    _ = provider
+    return []
+
+
+def clamp_image_size_for_model(
+    provider: str,
+    model: str,
+    requested_size: str,
+    selection: str | None = None,
+) -> str:
+    """Clamp a named resolution tier to the model's supported tiers when known.
+
+    Explicit pixel strings (``WxH``) and unrecognized values are passed through
+    untouched so existing validation continues to handle them.
+    """
+    raw = str(requested_size or "").strip()
+    if not raw or re.fullmatch(r"\d+\s*[xX×]\s*\d+", raw):
+        return raw
+    parsed_req = _normalize_resolution_option(raw)
+    if parsed_req is None:
+        return raw
+    supported = resolve_supported_image_resolutions(provider, model, selection=selection)
+    if not supported:
+        return raw
+
+    req_rank, req_label = parsed_req
+    supported_parsed = [
+        _normalize_resolution_option(item) for item in supported
+    ]
+    supported_pairs = [pair for pair in supported_parsed if pair is not None]
+    if not supported_pairs:
+        return raw
+    for rank, label in supported_pairs:
+        if label.lower() == req_label.lower() or rank == req_rank:
+            return label
+    supported_pairs.sort(key=lambda pair: pair[0])
+    if req_rank < supported_pairs[0][0]:
+        return supported_pairs[0][1]
+    if req_rank > supported_pairs[-1][0]:
+        return supported_pairs[-1][1]
+    return min(supported_pairs, key=lambda pair: abs(pair[0] - req_rank))[1]

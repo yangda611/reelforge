@@ -17,7 +17,7 @@ SCENE_SKILL_ID = "generate-realist-scenes"
 
 REQUIRED_CHARACTER_SECTIONS = (
     "首版目标与执行顺序",
-    "默认版式：遵守画面含义而非“三视图”字面",
+    "默认版式：竖版9:16四宫格",
     "建立可复用的身份与衣装锁定段",
     "真人实拍质感",
     "提示词组织",
@@ -128,13 +128,36 @@ def _load_skill_document(skill_id: str) -> tuple[str, dict[str, str]]:
     return body, sections
 
 
-def _collect_sections(skill_id: str, headings: tuple[str, ...]) -> str:
+def _strip_h3_subsection(section_text: str, heading: str) -> str:
+    """Remove an H3 subsection (up to the next H3 or end of text) from a section."""
+    lines = section_text.splitlines()
+    kept: list[str] = []
+    skipping = False
+    target_prefix = f"### {heading.strip()}"
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            skipping = stripped == target_prefix
+        if not skipping:
+            kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _collect_sections(
+    skill_id: str,
+    headings: tuple[str, ...],
+    *,
+    exclude_h3: tuple[str, ...] = (),
+) -> str:
     body, sections = _load_skill_document(skill_id)
     blocks: list[str] = []
     for heading in headings:
         content = sections.get(heading)
         if content:
-            blocks.append(f"[{heading}]\n{content}")
+            for excluded in exclude_h3:
+                content = _strip_h3_subsection(content, excluded)
+            if content:
+                blocks.append(f"[{heading}]\n{content}")
     if blocks:
         return "\n\n".join(blocks).strip()
     return body.strip()
@@ -217,24 +240,28 @@ def get_live_action_portrait_skill_directives() -> str:
 
 
 def get_live_action_character_sheet_skill_directives() -> str:
-    """Return live-action 3-panel character sheet rules from SKILL.md."""
+    """Return live-action vertical 9:16 2x2 four-panel character sheet rules from SKILL.md."""
     extracted = _collect_sections(
         CHARACTER_SKILL_ID,
         (
             "首版目标与执行顺序",
-            "默认版式：遵守画面含义而非“三视图”字面",
+            "默认版式：竖版9:16四宫格",
             "建立可复用的身份与衣装锁定段",
             "真人实拍质感",
             "提示词组织",
-            "交付前检查",
         ),
+        exclude_h3=("BODY FRONT 的脸：优先空白脸，做不到改无头",),
     )
     return (
         "LIVE-ACTION CHARACTER SHEET SKILL DIRECTIVES "
         f"(source: {CHARACTER_SKILL_ID}/SKILL.md):\n"
-        "- Apply these rules for live-action costume-fitting 3-panel sheets.\n"
+        "- Apply these rules for vertical 9:16 2x2 four-panel live-action "
+        "costume-fitting character sheets (FACE FRONT, FACE SIDE, BODY FRONT, BACK).\n"
         "- Preserve any attached identity anchor (Reference 1) and costume "
-        "reference (Reference 2) as authoritative visual anchors.\n\n"
+        "reference (Reference 2) as authoritative visual anchors.\n"
+        "- Panel 3 (bottom-left BODY FRONT) MUST keep its face intentionally blurred "
+        "and featureless (smooth matte skin-toned blank oval, no eyes/brows/nose/mouth), "
+        "unless covered by an explicit full-face mask or hood.\n\n"
         f"{extracted}"
     ).strip()
 

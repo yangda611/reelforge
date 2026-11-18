@@ -1,11 +1,15 @@
-"""S9 Cinematic Segment Storyboard core schemas, prompts, validators, and asset binders.
+"""YD Cinematic Segment Storyboard core schemas, prompts, validators, and asset binders.
 
-Implements the two-stage workflow from ``老唐电影级分镜skill-s9``:
-1. Stage 1 (Simplified Preview): Duration assessment, asset manifest, and coherent
-   story segments (大段) capped at 30s or 15s, each containing timed sub-shots (分镜).
+Implements the two-stage workflow from ``YD分镜skills`` (``yd-cinematic-storyboard``,
+replacing legacy ``s9`` while preserving storage/API compatibility):
+1. Stage 1 (Compact Storyboard Preview): Duration assessment (defaulting to
+   ``紧凑`` pacing), asset manifest, and coherent story segments (大段) capped at
+   30s or 15s (ceiling, not target), where each clip finishes its full story beat
+   and lands an explicit ``exit_state`` for seamless next-clip handoff.
 2. Stage 2 (Execution Prompt): Full Seedance 2.0/2.5 continuous multi-shot prompt
-   per 大段 (【参考职责】【全局光影画风】【注意事项】【角色声音】 + 分镜1..M),
-   plus dynamic runtime rebinding between manifest slots and generated 虾塘 assets.
+   per 大段 (【参考职责】【全局光影画风】【场景布局】【注意事项】【角色声音】 + 分镜1..M
+   with YD acting/facial-timing choreography), plus dynamic runtime rebinding
+   between manifest slots and generated 虾塘 assets.
 """
 
 from __future__ import annotations
@@ -37,13 +41,19 @@ class S9DurationAssessment(BaseModel):
     """Stage 1 【时长评估】 summary."""
 
     language: str = Field(default="普通话", description="对白/旁白语言")
+    pace_tier: str = Field(default="紧凑", description="节奏档位：紧凑 / 标准 / 舒缓")
     constraint_summary: str = Field(
-        default="单段上限30秒",
+        default="单段上限30秒（上限非目标，按剧情自然长度分段）",
         description="分段时长约束说明，如 单段上限30秒 / 单段上限15秒",
+    )
+    speech_total_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="全部对白/旁白发声合计 S（秒）",
     )
     core_chain_seconds: str = Field(
         default="",
-        description="核心表演/台词/动作链估算，如 约 55 秒（完整保留原文全部台词与关键反应）",
+        description="核心表演/台词/动作链估算与演一遍复核结论",
     )
     estimated_total_seconds: int = Field(default=0, ge=0, description="预计成片总时长（秒）")
     segment_count: int = Field(default=0, ge=0, description="大段数量")
@@ -87,10 +97,12 @@ class S9SubShot(BaseModel):
     shot_scale_movement: str = Field(default="中景", description="景别，如 中景转特写")
     camera_angle: str = Field(default="平视", description="视角，如 平视 / 俯视45°转平视")
     camera_motion: str = Field(default="缓慢推进", description="运镜，如 缓慢推近 / 固定机位")
-    content: str = Field(default="", description="分镜内容（镜头画面+动作+对白/独白）")
+    content: str = Field(default="", description="分镜内容（景别机位运镜+具体动作表演+完整原话+必要拟音）")
     audio_type: Literal["dialogue", "narration", "silence"] = Field(default="silence")
     speaker: str = Field(default="", description="说话人/OS归属角色")
     spoken_text: str = Field(default="", description="本镜完整台词/内心独白/旁白（原词保留）")
+    sfx_cue: str = Field(default="", description="本镜关键物理拟音与环境声变化")
+    transition_note: str = Field(default="", description="本镜切出动作相位、余势与衔接点")
     identity_ids: list[str] = Field(default_factory=list)
     scene_id: str = Field(default="")
     scene_variant_id: str = Field(default="")
@@ -102,8 +114,11 @@ class S9SegmentPlan(BaseModel):
 
     segment_number: int = Field(default=1, ge=1)
     title: str = Field(default="", description="大段叙事小标题")
-    planned_duration_seconds: int = Field(default=15, ge=1, description="本大段计划整数秒数")
-    story_beat: str = Field(default="", description="本大段要完整讲完的叙事段落及衔接状态")
+    planned_duration_seconds: int = Field(default=15, ge=1, description="本大段计划整数秒数（按剧情自然长度，不强凑上限）")
+    story_beat: str = Field(default="", description="本大段内必须100%讲完的叙事闭环（起势→推进→收束落点）")
+    entry_state: str = Field(default="", description="本大段第0秒起始状态：人物站位、姿态、持物、视线与未完动作")
+    exit_state: str = Field(default="", description="本大段结束瞬间必达落点状态，供下一大段第0秒无缝承接")
+    scene_layout: str = Field(default="", description="本大段【场景布局】：世界地标、人物锚位、机位工作侧与左右投影（多人同场/走位必填）")
     shots: list[S9SubShot] = Field(default_factory=list)
 
 
@@ -130,13 +145,16 @@ class S9EpisodePreviewMeta(BaseModel):
 
 
 class S9SegmentMeta(BaseModel):
-    """Persisted per-Beat (per-大段) s9 metadata."""
+    """Persisted per-Beat (per-大段) segment storyboard metadata."""
 
     segment_number: int = 1
     segment_title: str = ""
     planned_duration_seconds: int = 15
     max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS
     story_beat: str = ""
+    entry_state: str = ""
+    exit_state: str = ""
+    scene_layout: str = ""
     tail_anchor: bool = False
     include_first_frame: bool = False
     segment_asset_slots: list[S9SegmentAssetSlot] = Field(default_factory=list)
@@ -220,9 +238,13 @@ def resolve_s9_style_context(
         style_tag = str(getattr(config, "style_tag", "") or "")
 
     family_desc = (
-        f"动画（{subtype.upper()}）"
-        if family == "animation" and subtype
-        else ("动画" if family == "animation" else "真人电影实拍")
+        f"三维CG（{subtype.upper()}）"
+        if family == "animation" and subtype and "3d" in subtype.lower()
+        else (
+            f"动画（{subtype.upper()}）"
+            if family == "animation" and subtype
+            else ("动画" if family == "animation" else "真人电影实拍")
+        )
     )
     anchor_parts = [f"画风基调：{label}（{family_desc}）"]
     if style_instructions:
@@ -233,6 +255,10 @@ def resolve_s9_style_context(
         anchor_parts.append(f"规避项：{avoid_instructions}")
     video_ratio = aspect_ratio_to_video_ratio(aspect_ratio)
     anchor_parts.append(f"画面比例：{video_ratio}")
+    if family == "live_action":
+        anchor_parts.append("媒介规范：严格写实摄影光学成像与物理质感，禁混UE5/CG术语")
+    elif family == "animation" and subtype and "3d" in subtype.lower():
+        anchor_parts.append("媒介规范：三维CG建模与光影渲染质感，禁混胶片/实拍相机型号")
 
     return S9StyleContext(
         style_id=style_id,
@@ -331,58 +357,52 @@ def build_s9_stage1_system_prompt(
     spine_template: str = "drama",
     tail_anchor: bool = False,
 ) -> str:
-    """Build the Stage 1 (Simplified Preview) system prompt faithful to s9 Skill."""
+    """Build the Stage 1 (Compact Storyboard Preview) system prompt from YD分镜skills."""
+
+    from novelvideo.skills.yd_storyboard_skill import build_yd_stage1_directives
 
     cap = normalize_max_segment_seconds(max_segment_seconds)
-    short_tail_floor = max(4, int(round(cap * 0.4)))
-    subshot_range = "5～9个分镜" if cap >= 25 else "3～6个分镜"
+    yd_directives = build_yd_stage1_directives(
+        max_segment_seconds=cap,
+        pace_tier="紧凑",
+    )
     mode_rule = (
         "【当前为解说剧（narrated）模式】\n"
         "- 原文中的旁白、解说词、心里独白必须完整保留（不得删句/吞词），在对应分镜的 `audio_type` 标为 `narration`，"
         "`spoken_text` 填完整旁白词，`speaker` 填讲述视角（如 `林默 OS` 或 `旁白`）；\n"
-        "- 原文中的明确角色对话标为 `dialogue`，`speaker` 填说话角色身份ID，`spoken_text` 填原句对白。"
+        "- 原文中的明确角色对话标为 `dialogue`，`speaker` 填说话角色身份ID，`spoken_text` 填原句对白。\n"
+        "- 旁白/OS 声画并行：人物在画面中继续自然做事（如敲键盘/走位/反应），不另加纯动作秒数。"
         if spine_template == "narrated"
         else
         "【当前为精品剧（drama）模式】\n"
         "- 完整保留原文中的全部对白、关键内心独白（OS）与核心戏剧动作；\n"
         "- 角色开口对白标 `dialogue`（`speaker` 填对应身份ID，`spoken_text` 保留原话）；"
-        "内心独白/画外音标 `narration`（`speaker` 填 `角色名 OS`）；纯画面反应/动作/空镜标 `silence`。"
+        "内心独白/画外音标 `narration`（`speaker` 填 `角色名 OS`）；纯画面反应/动作/插入标 `silence`。"
     )
     anchor_note = (
-        "已开启「尾帧锚点镜」：在需要跨段衔接的大段末尾预留 1 秒稳态静止锚点缓冲。"
+        "已开启「尾帧锚点镜」：在需要跨段衔接的大段末尾预留 1 秒稳态静止锚点缓冲（计入该段总长）。"
         if tail_anchor
-        else "「尾帧锚点镜」默认关闭：大段结尾应设计自然可承接下一大段的动作/视线/环境延展，不强行定格静止。"
+        else "「尾帧锚点镜」默认关闭：大段末镜结尾须自然落定 `exit_state`（姿态/持物/视线落点），以动作顺延或视线引导无缝承接下一大段。"
     )
 
-    return f"""你是老唐电影级影视分镜导演（s9 · 整片连续模式 Stage 1）。你的任务是把整集剧本精确拆分为可一步生成连贯视频的「大段」（每大段一个完整小故事闭环），并产出可供导演审阅的结构化「简易预览版分镜（S9StoryboardPlan）」。
+    return f"""你是 YD 电影级分镜导演（Stage 1 整片连续模式 · 默认「紧凑」高密度剪辑节奏）。
+你的任务是严格按 YD分镜skills 把整集剧本拆分为可直接生成连贯视频 Clip 的「大段」（每大段必须在单段上限 {cap} 秒内讲完本段完整故事闭环，确保下一大段能无缝接续），并输出结构化 `S9StoryboardPlan` JSON。
 
-### 1. 硬性时间与分段铁律（严禁违背）
-1. **单大段硬上限**：每一大段的 `planned_duration_seconds` 必须是整数秒，且 **严格满足 `4 <= planned_duration_seconds <= {cap}`**（本次用户指定单段上限：**{cap} 秒**）。
-2. **故事闭环与段间衔接**：不要为了凑秒数机械切碎！每一个大段必须在 `{cap}` 秒内讲完一个完整、连贯的小剧情节拍（起势 → 推进 → 小高潮/反应落点），且大段结尾的状态能顺畅过渡到下一大段开篇。
-3. **基于内容的真实语速与节奏估算时长**：
-   - 有声台词/旁白按自然表演语速估算（普通话约 3～4 字/秒 + 必要换气停顿），禁止人为慢放拉长或强塞无声慢镜头。
-   - 纯动作/建立/反应镜头按真实物理耗时（通常 1.5～4 秒）。
-4. **短尾三级校验与消解**：
-   - 当总大段数 >= 2 时，最后一大段的时长 **不得短于 {short_tail_floor} 秒**（上限 {cap} 秒的 40%）。
-   - 若初算末段过短：① 优先回查前段可压缩动作余量合入；② 若合并会超 {cap} 秒，则将最后两段重平衡为相近段长；③ 仅当仅1段或物理不可拆时才例外保留。
-5. **时间轴严谨对齐**：
-   - 每大段内部包含 **{subshot_range}**（可随节奏灵活调整，保证电影级密度与呼吸感）。
-   - 每个大段内所有 `分镜` 的 `start_seconds` / `end_seconds` 从 `0` 连续拼接，最后一个分镜的 `end_seconds` **必须精确等于** 该大段的 `planned_duration_seconds`。
+{yd_directives}
 
-### 2. s9 专业分镜导演核心规则（8步内化执行）
-- **双轨推进与信息分级**：核心剧情按起承转合推进，**每个分镜聚焦 1～2 个清晰视觉/叙事信息点**；情绪重击前/后插入反应镜、细节特写或微停顿。
-- **空间双重锚定**：同一场景内连续分镜保持人物屏幕左右站位、视线方向（左看右/右看左）与机位轴线一致，绝不左右跳轴；切换场景必须在首镜完成空间锚定（人物相对环境与道具的位置）。
-- **景别节奏与运镜克制**：远景/全景/中景/近景/特写错落搭配，**严禁连续 3 镜使用相同景别**；用有叙事动机的克制推近、微幅跟摇、固定机位代替无意义大幅甩镜炫技。
-- **资产名称一致（极重要）**：在 `asset_manifest` 列出全集通用 `@图片1..N`（角色→场景→道具顺序）和 `@音频1..M`（有发声角色），并在每个分镜的 `identity_ids`、`scene_id`、`prop_ids` 尽量引用给定菜单中的精确 ID，未在菜单里的也可按真实名称填写。
-- **双剧型台词处理**：
+### E. 本项目双剧型与资产输出约束
+- **双剧型台词与发声规则**：
 {mode_rule}
 - **尾帧衔接开关**：
   {anchor_note}
-
-### 3. 输出字段约束
-- 输出严格的 `S9StoryboardPlan` JSON。
-- `asset_manifest` 中每项标明 `slot_label`（`@图片1`, `@图片2`, ... `@音频1`）、`media_type`、`asset_kind`、`name`、`asset_id`。
-- 每个分镜的 `content` 用精炼中文写出可直接用于审阅的画面+动作+声音概括（类似 s9 简易预览版 `分镜内容` 栏），`spoken_text` 单独保留完整台词/旁白原句以便精确口型与音频对齐。"""
+- **时间轴精确对齐**：
+  - 每一大段的 `planned_duration_seconds` 为整数秒且满足 `4 <= planned_duration_seconds <= {cap}`（按内容自然长度取整，**绝对禁止为了凑满 {cap} 秒而拉长镜头或硬加废镜头**）。
+  - 段内所有分镜 `start_seconds` / `end_seconds` 从 `0` 连续拼接，最后一镜 `end_seconds` 精确等于该大段的 `planned_duration_seconds`。
+- **资产与结构字段要求**：
+  - `duration_assessment`：填 `pace_tier="紧凑"`、`speech_total_seconds`（全部发声合计 S 秒）与含演一遍复核结论的 `core_chain_seconds`。
+  - `asset_manifest`：列出全集通用 `@图片1..N`（角色→场景→道具顺序）和 `@音频1..M`（有实际发声角色），`identity_ids`、`scene_id`、`prop_ids` 尽量精确匹配给定菜单 ID。
+  - 每个大段填写：`story_beat`（本段从起势到落点的完整故事闭环）、`entry_state`（第0秒起始状态）、`exit_state`（末镜结束瞬间的必达站位/持物/视线落点，供下一段第0秒衔接）、`scene_layout`（多人同场/走位/正反打时写3～5句地标、锚位与机位工作侧）。
+  - 每个分镜填写：`content`（景别机位运镜+具体动作交互与可见变化+完整原话+必要拟音）、`spoken_text`（逐字原句）、`sfx_cue`（关键物理拟音）、`transition_note`（切出余势与接续点）。"""
 
 
 def build_s9_stage1_task_prompt(
@@ -399,11 +419,16 @@ def build_s9_stage1_task_prompt(
 
     cap = normalize_max_segment_seconds(max_segment_seconds)
     prev_block = (
-        f"\n【上一集末尾衔接上下文（本集 EP{episode_num} 第一大段需顺畅承接或自然开场）】\n{prev_episode_context.strip()}\n"
+        f"\n【上一集末尾衔接上下文（本集 EP{episode_num} 第一大段 `entry_state` 与首镜须顺畅承接）】\n{prev_episode_context.strip()}\n"
         if prev_episode_context.strip()
         else ""
     )
-    return f"""请对第 {episode_num} 集《{episode_title or f'EP{episode_num}'}》进行 s9 整片连续模式拆分，单大段上限 **{cap} 秒**。
+    return f"""请使用 **YD分镜skills（紧凑节奏档）** 对第 {episode_num} 集《{episode_title or f'EP{episode_num}'}》进行整片连续模式拆分，单大段上限 **{cap} 秒**（注意：{cap} 秒只是上限，不是每段都要凑满 {cap} 秒！）。
+
+【执行前强制自检】
+1. 先计算全集发声总时长 S（普通话按 4～5 字/秒），边做边说的动作与台词并行不相加。
+2. 砍掉所有无用废镜头（如无戏剧职责的 4 秒雨夜门面空镜、说话完后空敲 8 秒键盘的拖尾），保证每个分镜都承载不可替代的故事/表演信息。
+3. 确保每一个大段（Clip）内部 **100% 讲完自己的 `story_beat`**，并在末镜明确落定 `exit_state`，让下一大段第 0 秒能够直接接上！
 
 【项目视觉规格】
 - {style_context.s9_style_anchor}
@@ -414,7 +439,7 @@ def build_s9_stage1_task_prompt(
 【本集完整原文 / 工作稿】
 {source_text.strip()}
 
-请先完成【时长评估】与【素材准备清单】，再按故事完整段落拆分为若干大段（每大段 <= {cap} 秒且讲述完整小段落），细化每大段内部的分镜 `镜头基础信息` 与 `分镜内容`。"""
+请输出完整的 `S9StoryboardPlan` JSON。"""
 
 
 def _coerce_identity_lookup(characters: list[Any], episode: Any) -> tuple[dict[str, str], dict[str, str], dict[str, Any]]:
@@ -806,14 +831,30 @@ def normalize_s9_storyboard_plan(
         numbered_manifest = list(plan.asset_manifest)
 
     total_seconds = sum(s.planned_duration_seconds for s in normalized_segments)
-    assessment = (plan.duration_assessment or S9DurationAssessment()).model_copy(
+    computed_speech = round(
+        sum(
+            _estimate_spoken_seconds(shot.spoken_text)
+            for seg in normalized_segments
+            for shot in seg.shots
+            if shot.spoken_text
+        ),
+        1,
+    )
+    prev_assess = plan.duration_assessment or S9DurationAssessment()
+    assessment = prev_assess.model_copy(
         update={
-            "constraint_summary": f"单段上限{cap}秒（含短尾三步校验）",
+            "pace_tier": prev_assess.pace_tier or "紧凑",
+            "constraint_summary": f"单段上限{cap}秒（上限非目标，含短尾校验）",
+            "speech_total_seconds": (
+                prev_assess.speech_total_seconds
+                if prev_assess.speech_total_seconds > 0
+                else computed_speech
+            ),
             "estimated_total_seconds": total_seconds,
             "segment_count": len(normalized_segments),
             "core_chain_seconds": (
-                plan.duration_assessment.core_chain_seconds
-                or f"约 {total_seconds} 秒（共 {len(normalized_segments)} 大段）"
+                prev_assess.core_chain_seconds
+                or f"约 {total_seconds} 秒（共 {len(normalized_segments)} 大段，紧凑节奏）"
             ),
             "conclusion": "满足约束",
         }
@@ -850,49 +891,34 @@ def format_slot_table_for_stage2(slots: list[S9SegmentAssetSlot]) -> str:
     return "\n".join(lines)
 
 
+def _segment_needs_scene_layout(segment: S9SegmentPlan) -> bool:
+    """Return True when YD space.md requires explicit 【场景布局】."""
+
+    if str(getattr(segment, "scene_layout", "") or "").strip():
+        return True
+    identities: set[str] = set()
+    for shot in segment.shots or []:
+        for iid in shot.identity_ids or []:
+            if iid:
+                identities.add(iid)
+    return len(identities) >= 2
+
+
 def build_s9_stage2_system_prompt(
     *,
     tail_anchor: bool = False,
     include_first_frame: bool = False,
+    include_scene_layout: bool = False,
 ) -> str:
-    """Build Stage 2 full Seedance 2.0/2.5 continuous-mode prompt generator instructions."""
+    """Build Stage 2 full Seedance 2.0/2.5 continuous-mode prompt instructions from YD分镜skills."""
 
-    tail_rule = (
-        "【尾帧锚点镜规则（已开启）】\n"
-        "- 本大段最后一个分镜结束后，额外追加一段 `【尾帧锚点镜】`（占末段约1秒）：画面中所有人物与物体完全静止保持同一稳态姿态与构图，无新增运镜、无新台词，作为下一大段首尾衔接的清晰锚点。"
-        if tail_anchor
-        else
-        "【尾帧衔接规则（默认无锚点定格）】\n"
-        "- 禁止为衔接硬造 1 秒完全静止僵硬定格；每一分镜的 `- 尾帧与转场` 应通过动作顺延、视线引导、前景掠过或同向运镜收束自然切入下一镜/下一大段。"
+    from novelvideo.skills.yd_storyboard_skill import build_yd_stage2_directives
+
+    return build_yd_stage2_directives(
+        tail_anchor=tail_anchor,
+        include_first_frame=include_first_frame,
+        include_scene_layout=include_scene_layout,
     )
-    first_frame_rule = (
-        "- 本大段已纳入 `首帧渲染图` 作为 `@图片1`：首镜起幅必须严格锚定 `@图片1` 的构图、光线与人物起始姿态，只描写 `t=0` 之后发生的连续动作。"
-        if include_first_frame
-        else "- 本大段采用纯资产全能参考模式（未锁定单张首帧渲染图），首镜请根据角色 `@图片`、场景 `@图片`、道具 `@图片` 主动构图建立空间位置与起势。"
-    )
-
-    return f"""你是老唐电影级影视分镜提示词大师（s9 · Stage 2 整片连续模式执行方案）。
-你的唯一任务是：**严格根据给定的【大段规划】【内部各分镜】【本段可用素材索引表】【视觉画风规则】**，直接输出一段**立即可复制进 Seedance 2.0 / 2.5 主体提示词框执行的纯文本完整生成提示词**。
-
-### 输出结构铁律（必须严格保留以下段落标题与结构）
-1. `【参考职责】`：逐条明确本大段中每一个 `@图片N`（绑定角色脸型服饰/场景空间结构/道具造型特征）和 `@音频N`（仅绑定说话人核心音色，按情绪贴合台词节奏）的精确职责。
-   {first_frame_rule}
-2. `【全局光影画风】`：围绕项目指定的视觉画风，具体展开四行：`画风锁定`、`光线质感`、`材质纹理`、`色调氛围`。
-3. `【注意事项】`：写明物理自然、杜绝瞬移/多指穿模/背景错位、口型与台词同步、**禁止自动添加背景音乐（BGM）**、**严禁出现字幕/文字水印/胶片边框**、首尾衔接流畅。
-4. `【角色声音】`：写出本段每个发声角色 `@音频N` 的音色质感、语速情绪基调及内心独白处理方式（内心独白/旁白为画外音，角色嘴唇闭合）。
-5. 连续分镜块（`分镜1（0秒到X秒）：` … 直到 `分镜M（Y秒到D秒）：`，精确对齐给定秒数）：
-   每个分镜下必须写出清晰可执行的五要素：
-   - `- 空间与主体：`（严守场景内屏幕左右站位、朝向与视线锚定）
-   - `- 动态时间轴：`（按起手→过程→落点写透物理微动作与运镜方式）
-   - `- 物理与光影：`（反光、雨雪风动、衣摆/手指微颤等细节）
-   - `- 音频与对白：`（引用 `@音频N`，**一字不改写入台词/独白原文**，说明嘴部动作/OS画外音与写实环境拟音 SFX，禁止提及 BGM）
-   - `- 尾帧与转场：`（如何自然过渡到下一分镜或下一大段）
-{tail_rule}
-
-### 核心红线
-- **引用精准一致**：正文内只能使用下方【本段可用素材索引表】里实际存在的 `@图片N` / `@音频N` 编号，禁止凭空编造表外编号！
-- **有参考图不重复写静态外貌**：凡已在 `@图片N` 绑定参考图的角色/场景/道具，主体描述中直接写 `@图片N` + 角色名 + 动态神态/污渍/动作/光影反应，禁止把参考图里本就固定的长相、身高、常规衣着再啰嗦抄一遍。
-- **纯净直出**：不要输出 Markdown 标题符号（如 `###`）、不要输出代码块围栏 ```、不要附加额外解释废话，直接输出【参考职责】至最后一镜的纯净提示词正文。"""
 
 
 def build_s9_stage2_task_prompt(
@@ -916,25 +942,47 @@ def build_s9_stage2_task_prompt(
             if shot.spoken_text
             else f" | [{shot.audio_type}]"
         )
+        extra_parts: list[str] = []
+        if getattr(shot, "sfx_cue", ""):
+            extra_parts.append(f"拟音/声场：{shot.sfx_cue}")
+        if getattr(shot, "transition_note", ""):
+            extra_parts.append(f"切出与衔接：{shot.transition_note}")
+        extra_line = f"\n  {' | '.join(extra_parts)}" if extra_parts else ""
         shots_lines.append(
             f"- {shot.label or f'分镜{shot.shot_number}'}（{start_s}秒到{end_s}秒）《{shot.title}》\n"
             f"  基础信息：计划{_format_seconds_label(shot.planned_duration_seconds)}秒｜"
             f"{shot.shot_scale_movement}｜{shot.camera_angle}｜{shot.camera_motion}{spoken_note}\n"
-            f"  分镜内容：{shot.content}"
+            f"  分镜内容：{shot.content}{extra_line}"
         )
 
     continuity_parts: list[str] = []
     if prev_segment is not None:
+        prev_tail = str(getattr(prev_segment, "exit_state", "") or "").strip()
         continuity_parts.append(
             f"- 前一大段（大段{prev_segment.segment_number}·{prev_segment.title}）结尾事件：{prev_segment.story_beat}"
+            + (f"｜结尾状态：{prev_tail}" if prev_tail else "")
         )
     elif prev_episode_context.strip():
         continuity_parts.append(f"- 上一集末尾语境：{prev_episode_context.strip()}")
+    if getattr(segment, "entry_state", "").strip():
+        continuity_parts.append(f"- 本段第0秒起态（entry_state）：{segment.entry_state.strip()}")
+    if getattr(segment, "exit_state", "").strip():
+        continuity_parts.append(
+            f"- 本段末镜必达落点（exit_state，必须完整拍完并止于此）：{segment.exit_state.strip()}"
+        )
     if next_segment is not None:
+        next_entry = str(getattr(next_segment, "entry_state", "") or "").strip()
         continuity_parts.append(
             f"- 下一大段（大段{next_segment.segment_number}·{next_segment.title}）即将承接：{next_segment.story_beat}"
+            + (f"｜下段起态：{next_entry}" if next_entry else "")
         )
     continuity_block = "\n".join(continuity_parts) if continuity_parts else "- 本段独立完成当前闭环"
+
+    layout_block = (
+        f"\n【已规划场景空间蓝图】\n{segment.scene_layout.strip()}\n"
+        if str(getattr(segment, "scene_layout", "") or "").strip()
+        else ""
+    )
 
     guidance_block = (
         f"\n【用户附加微调要求（必须融入本段执行方案）】\n{user_guidance.strip()}\n"
@@ -942,7 +990,7 @@ def build_s9_stage2_task_prompt(
         else ""
     )
 
-    return f"""请为「大段{segment.segment_number}：{segment.title}」（计划总时长 **{segment.planned_duration_seconds}秒**）生成完整的 Seedance 2.0/2.5 生成提示词：
+    return f"""请为「大段{segment.segment_number}：{segment.title}」（计划总时长 **{segment.planned_duration_seconds}秒**，必须在这 {segment.planned_duration_seconds} 秒内讲完本段故事闭环、零空等拖秒）生成完整的 Seedance 2.0/2.5 生成提示词：
 
 【项目视觉与画风要求】
 {style_context.s9_style_anchor}
@@ -952,14 +1000,14 @@ def build_s9_stage2_task_prompt(
 
 【上下文衔接要求】
 {continuity_block}
-
+{layout_block}
 【本大段叙事核心】
 {segment.story_beat}
 
 【本大段内部各分镜规划（时间轴共 {segment.planned_duration_seconds} 秒）】
 {chr(10).join(shots_lines)}
 {guidance_block}
-请立即直接输出纯净的 Stage 2 完整生成提示词文本。"""
+请立即直接输出纯净的 Stage 2 完整生成提示词文本（严格执行 YD分镜skills 的参考职责、全局光影画风、适用场景布局、注意事项、角色声音与动态时间轴表演写法）。"""
 
 
 def build_s9_stage2_fallback_prompt(
@@ -969,7 +1017,7 @@ def build_s9_stage2_fallback_prompt(
     style_context: S9StyleContext,
     tail_anchor: bool = False,
 ) -> str:
-    """Deterministic fallback builder matching exact s9 prompt structure."""
+    """Deterministic fallback builder matching YD分镜skills full-output structure."""
 
     duty_lines: list[str] = []
     voice_lines: list[str] = []
@@ -977,25 +1025,25 @@ def build_s9_stage2_fallback_prompt(
         if s.media_type == "image":
             if s.asset_kind == "first_frame":
                 duty_lines.append(
-                    f"@图片{s.slot} 绑定开篇首帧构图、人物起始姿态与光影基调，首镜动作自该画面状态向后连续发生。"
+                    f"@图片{s.slot} 是开篇首帧的构图与起始状态参考：锁定第0秒构图、光线与人物起始姿态，首镜动作自该画面状态向后连续发生。"
                 )
             elif s.asset_kind == "identity":
                 duty_lines.append(
-                    f"@图片{s.slot} 仅绑定{s.name}的脸型五官、发型与核心服饰造型，严格维持跨镜角色一致性。"
+                    f"@图片{s.slot} 是角色{s.name}的形象参考：锁定脸型五官、发型与核心服饰特征；隔离设定板纯色背景与静态站姿，维持角色动态表演。"
                 )
             elif s.asset_kind == "scene":
                 duty_lines.append(
-                    f"@图片{s.slot} 仅绑定{s.name}的空间布局、建筑材质与光源氛围。"
+                    f"@图片{s.slot} 是场景{s.name}参考：锁定空间结构、陈设材质与环境光色；仅作空间与光线基准，不冻结镜头运镜。"
                 )
             else:
                 duty_lines.append(
-                    f"@图片{s.slot} 仅绑定道具{s.name}的造型结构、材质纹理与视觉细节。"
+                    f"@图片{s.slot} 是道具{s.name}的结构与状态参考：锁定外形、比例与当前特定状态；不继承未指定持握姿态。"
                 )
         else:
             duty_lines.append(
-                f"@音频{s.slot} 仅绑定{s.name}的核心声线音色，贴合情绪与呼吸节奏演绎对白。"
+                f"@音频{s.slot} 是角色{s.name}的参考音色，仅参考核心音色（不迁移原样本台词、混响与环境噪声）。"
             )
-            voice_lines.append(f"@音频{s.slot}（{s.name}）音色贴合人物年龄性格，口播咬字自然清晰")
+            voice_lines.append(f"- {s.name}：绑定@音频{s.slot}稳定声线，保持该角色常态语速与咬字特征。")
 
     voice_slot_by_name = {
         s.name.lower(): f"@音频{s.slot}" for s in slots if s.media_type == "audio"
@@ -1008,7 +1056,8 @@ def build_s9_stage2_fallback_prompt(
     for idx, shot in enumerate(segment.shots):
         start_s = _format_seconds_label(shot.start_seconds)
         end_s = _format_seconds_label(shot.end_seconds)
-        audio_desc = "环境写实拟音与自然呼吸声，无任何背景音乐。"
+        sfx_part = f"；{shot.sfx_cue}" if getattr(shot, "sfx_cue", "").strip() else "；伴随贴动作的真实物理拟音与自然环境底噪"
+        audio_desc = f"纯环境写实拟音与呼吸声{sfx_part if getattr(shot, 'sfx_cue', '').strip() else ''}。"
         if shot.spoken_text:
             speaker_tag = shot.speaker or "角色"
             voice_ref = voice_slot_by_id.get(speaker_tag) or voice_slot_by_name.get(
@@ -1016,51 +1065,80 @@ def build_s9_stage2_fallback_prompt(
             )
             if shot.audio_type == "narration":
                 audio_desc = (
-                    f"{speaker_tag}内心独白/画外音（人物嘴唇闭合）：\"{shot.spoken_text}\"；"
-                    "叠加轻柔真实环境拟音，禁止配乐。"
+                    f"{start_s}秒到{end_s}秒，{speaker_tag}画外音/内心独白（贴合当下呼吸与节奏）：“{shot.spoken_text}”"
+                    f"（画面人物嘴唇闭合，继续既定动作）{sfx_part}。"
                 )
             else:
-                ref_part = f"以{voice_ref}声线" if voice_ref else ""
+                ref_part = f"（{voice_ref}音色，自然吐字）" if voice_ref else "（自然吐字）"
                 audio_desc = (
-                    f"{speaker_tag}{ref_part}清晰开口说出：\"{shot.spoken_text}\"，嘴唇开合精准同步；"
-                    "伴随现场真实拟音。"
+                    f"{start_s}秒到{end_s}秒，{speaker_tag}画内开口{ref_part}：“{shot.spoken_text}”"
+                    f"，说话者唇形咬字精准同步{sfx_part}。"
                 )
-        next_hint = (
-            "画面动作、视线与运镜自然延展并切入下一分镜。"
+        default_next = (
+            "动作余势自然延续并切入下一分镜，严禁复位或重演。"
             if idx + 1 < len(segment.shots)
             else (
-                "末尾保持人物动作微收束，视线与空间关系稳妥承接下一大段。"
+                f"末镜结束落定：{segment.exit_state or '人物动作与视线稳妥落点，承接下一大段第0秒起态。'}"
                 if not tail_anchor
-                else "末段动作收束落定后保留1秒平稳姿态，便于下一段首尾衔接。"
+                else "末段动作落定后保持1秒静止静音稳态构图，供下段参考。"
             )
         )
+        next_hint = str(getattr(shot, "transition_note", "") or "").strip() or default_next
         shot_blocks.append(
-            f"分镜{shot.shot_number}（{start_s}秒到{end_s}秒）：\n"
-            f"- 空间与主体：{shot.shot_scale_movement}，{shot.camera_angle}，{shot.content}\n"
-            f"- 动态时间轴：镜头{shot.camera_motion}，主体动作连贯推进，细节节奏贴合真实表演时长。\n"
-            f"- 物理与光影：保持{style_context.style_label}统一光影反射与自然物理惯性。\n"
+            f"分镜{shot.shot_number}（{start_s}秒到{end_s}秒）：{shot.title or f'镜{shot.shot_number}'}，{shot.shot_scale_movement}，{shot.camera_angle}，{shot.camera_motion}。\n"
+            f"- 空间与主体：{shot.content}\n"
+            f"- 动态时间轴：承接前态后在触发点直接切入核心动作与可见部位变化，动作与台词并行紧凑推进，不留无效空等。\n"
             f"- 音频与对白：{audio_desc}\n"
             f"- 尾帧与转场：{next_hint}"
         )
 
+    is_3d_cg = style_context.style_family == "animation" and "3d" in style_context.animation_subtype.lower()
+    if is_3d_cg:
+        visual_style_line = (
+            f"- 视觉风格：三维CG，写实渲染，{style_context.style_label}（{style_context.style_instructions or '全局光照与物理反射，扎实的重力形变与织物垂坠，自然景深与真实物理运动反馈'}）。"
+        )
+    elif style_context.style_family == "animation":
+        visual_style_line = (
+            f"- 视觉风格：动画媒介，{style_context.style_label}（{style_context.style_instructions or '明确线稿与色块阴影层次，流畅动画运动节奏与受光衰减'}）。"
+        )
+    else:
+        visual_style_line = (
+            f"- 视觉风格：真人电影实拍成像，{style_context.style_label}（{style_context.style_instructions or '场景实际光源自然衰减，皮肤与织物真实纹理，匹配镜距景深与重力惯性反馈'}）。"
+        )
+
+    stop_clause = (
+        f"\n本输入止于：{segment.exit_state.strip()}，严禁提前演绎下一大段事件。"
+        if str(getattr(segment, "exit_state", "") or "").strip()
+        else ""
+    )
     sections = [
-        "【参考职责】\n" + ("\n".join(duty_lines) if duty_lines else "纯文生画面与连贯时空演绎。"),
+        "【参考职责】\n" + ("\n".join(duty_lines) if duty_lines else "无参考纯文字演绎：严格按文字描述维持人物造型、空间几何与声线一致。"),
         f"【全局光影画风】\n"
-        f"画风锁定：{style_context.style_label}，{style_context.style_instructions or '写实影视质感，杜绝僵硬静态感'}；\n"
-        f"光线质感：主辅光源层次分明，明暗过渡与物体材质反光符合真实物理规律；\n"
-        f"材质纹理：人物肌肤细节、服装织物与环境器物纹理清晰可辨；\n"
-        f"色调氛围：保持 {style_context.aspect_ratio} 统一电影级色彩调性与暗部通透层次。",
-        "【注意事项】\n"
-        "全程物理运动自然连贯，严禁人物变形、多指穿模、道具瞬移或背景错位；严格维持同一场景内的屏幕左右方位与视线方向一致；"
-        "所有台词与嘴部动作精准同步；禁止自动添加任何背景音乐（BGM）；严禁出现字幕、文字水印或画面边框。",
-        "【角色声音】\n"
-        + ("；".join(voice_lines) + "；无对白段落保持写实环境音。" if voice_lines else "以画外内心独白与现场真实环境音为主，不添加配乐。"),
-        "\n\n".join(shot_blocks),
+        f"{visual_style_line}\n"
+        f"- 全局主光：主辅光源方向固定，明暗过渡与物体材质反光符合场景实际照明。\n"
+        f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一色彩调性，突出人物皮肤/衣料与器物材质细节。",
     ]
+    if _segment_needs_scene_layout(segment):
+        layout_text = str(getattr(segment, "scene_layout", "") or "").strip() or (
+            "保持同场景固定地标与人物屏幕左右锚位一致，摄影机留在关系轴同一工作侧，反打不越轴。"
+        )
+        sections.append(f"【场景布局】\n{layout_text}")
+    sections.extend(
+        [
+            "【注意事项】\n"
+            "画面全域禁止生成任何硬字幕、文字条或水印。音轨禁止添加任何BGM音乐，声音仅由角色人声台词配音、物理拟音SFX与环境自然底噪构成。"
+            "有画内说话动作的分镜匹配该说者唇形咬字（Lip-sync）。旁白和内心独白不驱动画面人物逐字对口型，人物继续既定动作与自然表演。"
+            "动作与面部变化保持连续，不要表情突变、面部变形、身份漂移或姿态复位。"
+            + stop_clause,
+            "【角色声音】\n"
+            + ("\n".join(voice_lines) if voice_lines else "- 本段以画外内心独白与现场真实物理拟音为主，未出场说话人不追加声线。"),
+            "\n\n".join(shot_blocks),
+        ]
+    )
     if tail_anchor:
         sections.append(
             "【尾帧锚点镜】\n"
-            "最后1秒画面中人物与所有环境要素保持稳态定格构图，无新增运镜与新台词，提供下一大段平滑衔接点。"
+            "最后1秒采用四分之三侧面全景固定无运镜，画面中人物与所有环境要素完全静止承接末镜瞬间构图，音轨完全静音。"
         )
     return "\n\n".join(sections)
 
@@ -1071,6 +1149,81 @@ def _strip_code_fences(text: str) -> str:
         cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\s*\n?", "", cleaned)
         cleaned = re.sub(r"\n?```\s*$", "", cleaned)
     return cleaned.strip()
+
+
+def _estimate_spoken_seconds(spoken_text: str) -> float:
+    """Estimate natural speech duration (Mandarin ~4.5 chars/s, English ~2.8 words/s)."""
+
+    text = str(spoken_text or "").strip()
+    if not text:
+        return 0.0
+    cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_words = len(re.findall(r"[A-Za-z0-9]+", text))
+    digits_punct = len(re.findall(r"[，。！？；：、,.!?;:]", text))
+    if cjk_chars > 0:
+        return (cjk_chars / 4.5) + (latin_words / 2.8) + min(0.8, digits_punct * 0.06)
+    return (latin_words / 2.8) + min(0.8, digits_punct * 0.06)
+
+
+def audit_s9_plan_pacing(
+    plan: S9StoryboardPlan,
+    *,
+    max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
+) -> list[str]:
+    """Audit Stage 1 storyboard plan for YD compact-pacing and clip-closure issues."""
+
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    issues: list[str] = []
+    segments = list(plan.segments or [])
+    if not segments:
+        return ["未生成任何大段分镜"]
+
+    for seg in segments:
+        seg_num = seg.segment_number
+        if seg.planned_duration_seconds > cap:
+            issues.append(f"大段{seg_num} 计划时长 {seg.planned_duration_seconds}s 超出上限 {cap}s")
+        shots = list(seg.shots or [])
+        if not shots:
+            issues.append(f"大段{seg_num} 缺少分镜列表")
+            continue
+
+        # Check opening filler silence shots (e.g., 4s empty door + 3s monitor before action starts)
+        opening_silence_count = 0
+        opening_silence_sec = 0.0
+        for s in shots:
+            if s.audio_type == "silence" and not str(s.spoken_text or "").strip():
+                opening_silence_count += 1
+                opening_silence_sec += float(s.planned_duration_seconds or 0.0)
+            else:
+                break
+        if opening_silence_count >= 2 and opening_silence_sec > 5.0:
+            issues.append(
+                f"大段{seg_num} 段首连续 {opening_silence_count} 个无声铺垫镜共 {opening_silence_sec:.1f}s，涉嫌废镜头拖节奏，应合并进首镜与核心动作并行"
+            )
+
+        for s in shots:
+            dur = float(s.planned_duration_seconds or 0.0)
+            spoken = str(s.spoken_text or "").strip()
+            if s.audio_type == "silence" and not spoken:
+                if dur > 4.5:
+                    issues.append(
+                        f"大段{seg_num}-分镜{s.shot_number} 无声镜头长达 {dur:.1f}s（紧凑档应 <= 4s），请压缩空等或合并"
+                    )
+            elif spoken:
+                est_speech = _estimate_spoken_seconds(spoken)
+                allowed_ceil = max(4.5, est_speech * 1.25 + 1.5)
+                if dur > allowed_ceil:
+                    issues.append(
+                        f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却分配了 {dur:.1f}s（存在严重空尾/注水），应压至约 {max(2, round(est_speech + 1.0))}s 并与动作并行"
+                    )
+
+        if len(segments) >= 2 and seg_num < len(segments):
+            if not str(getattr(seg, "exit_state", "") or "").strip():
+                issues.append(
+                    f"大段{seg_num} 缺少 `exit_state` 段尾落点状态，可能导致下一大段无法衔接"
+                )
+
+    return issues
 
 
 async def run_s9_stage1_plan(
@@ -1087,7 +1240,7 @@ async def run_s9_stage1_plan(
     tail_anchor: bool = False,
     prev_episode_context: str = "",
 ) -> S9StoryboardPlan:
-    """Invoke LLM to compute Stage 1 S9StoryboardPlan."""
+    """Invoke LLM to compute Stage 1 S9StoryboardPlan with YD compact pacing audit."""
 
     from pydantic_ai import Agent
 
@@ -1127,10 +1280,41 @@ async def run_s9_stage1_plan(
         output_type=S9StoryboardPlan,
         model_settings=get_newapi_structured_output_model_settings(),
         retries=3,
-        name="S9 Stage1 Storyboard Planner",
+        name="YD Stage1 Storyboard Planner",
     )
     result = await agent.run(task_prompt)
-    return result.output
+    plan = result.output
+
+    issues = audit_s9_plan_pacing(plan, max_segment_seconds=cap)
+    if issues and plan.segments:
+        logger.warning(
+            "YD Stage 1 pacing/closure audit found %d issue(s); running compact revision: %s",
+            len(issues),
+            "; ".join(issues[:5]),
+        )
+        revision_prompt = (
+            f"{task_prompt}\n\n"
+            "【初稿节奏与段尾衔接审校未通过，请按 YD分镜skills 紧凑档立即精简修订】\n"
+            "发现以下具体问题：\n"
+            + "\n".join(f"- {item}" for item in issues)
+            + "\n\n【待修订初稿 JSON】\n"
+            + plan.model_dump_json(ensure_ascii=False)
+            + "\n\n要求：\n"
+            "1. 保留原文全部台词与必要事件，绝对不要删减对白原字；\n"
+            "2. 砍掉无用段首空镜、压缩话少时多的空尾秒数、让动作与台词并行；\n"
+            "3. 确保每个大段完整讲完自己的 story_beat 并在末镜落定清晰的 exit_state（下一大段 entry_state 直接承接）；\n"
+            f"4. 单段时长 <= {cap} 秒，不为了凑满 {cap} 秒拉长镜头。"
+        )
+        try:
+            revised = await agent.run(revision_prompt)
+            if revised.output and revised.output.segments:
+                revised_issues = audit_s9_plan_pacing(revised.output, max_segment_seconds=cap)
+                if len(revised_issues) <= len(issues):
+                    plan = revised.output
+        except Exception as exc:
+            logger.warning("YD Stage 1 compact revision failed, keeping initial plan: %s", exc)
+
+    return plan
 
 
 async def run_s9_stage2_segment_prompt(
@@ -1154,6 +1338,7 @@ async def run_s9_stage2_segment_prompt(
     system_prompt = build_s9_stage2_system_prompt(
         tail_anchor=tail_anchor,
         include_first_frame=include_first_frame,
+        include_scene_layout=_segment_needs_scene_layout(segment),
     )
     task_prompt = build_s9_stage2_task_prompt(
         segment=segment,
@@ -1173,7 +1358,7 @@ async def run_s9_stage2_segment_prompt(
         system_prompt=system_prompt,
         output_type=str,
         retries=2,
-        name="S9 Stage2 Segment Prompt Director",
+        name="YD Stage2 Segment Prompt Director",
     )
     try:
         result = await agent.run(task_prompt)
@@ -1826,6 +2011,7 @@ __all__ = [
     "aggregate_segment_narration",
     "aggregate_segment_visual_summary",
     "aspect_ratio_to_video_ratio",
+    "audit_s9_plan_pacing",
     "build_s9_stage1_system_prompt",
     "build_s9_stage1_task_prompt",
     "build_s9_stage2_fallback_prompt",
