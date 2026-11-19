@@ -827,4 +827,50 @@ describe("TextPane", () => {
 
     expect(screen.getByDisplayValue("@陆辰_青年 拿起 @玉佩")).toBeInTheDocument();
   });
+
+  it("syncs detected identities and props when the same beat updates in place", () => {
+    episodeDetailState.identity_ids = ["林默_青年时期"];
+    episodeDetailState.prop_menu = [{ prop_id: "二手显示器" }];
+    const { rerender } = render(
+      <Wrapper>
+        <TextPane
+          beat={makeBeat({
+            beat_number: 1,
+            detected_identities: ["__NO_CHARACTER__"],
+            detected_props: ["__NO_PROP__"],
+          })}
+          project="demo"
+          episode={1}
+        />
+      </Wrapper>,
+    );
+
+    const idInitial = screen.getByRole("button", { name: "林默_青年时期" });
+    expect(idInitial).toHaveAttribute("aria-pressed", "false");
+    const propInitial = screen.getByRole("button", { name: "二手显示器" });
+    expect(propInitial).toHaveAttribute("aria-pressed", "false");
+
+    rerender(
+      <Wrapper>
+        <TextPane
+          beat={makeBeat({
+            beat_number: 1,
+            detected_identities: ["林默_青年时期"],
+            detected_props: ["二手显示器"],
+          })}
+          project="demo"
+          episode={1}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByRole("button", { name: "林默_青年时期" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "二手显示器" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
 });

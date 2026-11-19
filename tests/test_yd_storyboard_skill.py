@@ -61,6 +61,10 @@ def test_stage1_and_stage2_prompts_use_yd_skill_and_compact_pacing():
         include_scene_layout=True,
     )
     assert "老唐" not in s2
+    assert "entry_state" not in s2
+    assert "exit_state" not in s2
+    assert "明确亚区间" in s2
+    assert "【本集原稿参考】" in s2
     assert "【参考职责】" in s2
     assert "【全局光影画风】" in s2
     assert "【场景布局】" in s2
@@ -286,8 +290,17 @@ def test_stage2_prompt_and_fallback_include_scene_layout_and_exit_boundary():
         S9SegmentAssetSlot(slot=2, media_type="image", asset_kind="identity", name="黑衣男人", asset_id="黑衣男人_青年"),
         S9SegmentAssetSlot(slot=1, media_type="audio", asset_kind="voice", name="黑衣男人", asset_id="黑衣男人_青年"),
     ]
-    task_prompt = build_s9_stage2_task_prompt(segment=seg, slots=slots, style_context=style)
-    assert "本段末镜必达落点（exit_state" in task_prompt
+    task_prompt = build_s9_stage2_task_prompt(
+        segment=seg,
+        slots=slots,
+        style_context=style,
+        source_text="暴雨夜，林默坐在二手显示器前敲代码，黑衣男人进店点单。",
+    )
+    assert "本段末镜必达收束状态" in task_prompt
+    assert "entry_state" not in task_prompt
+    assert "exit_state" not in task_prompt
+    assert "【本集原稿参考" in task_prompt
+    assert "暴雨夜，林默坐在二手显示器前敲代码" in task_prompt
     assert "【已规划场景空间蓝图】" in task_prompt
 
     fallback = build_s9_stage2_fallback_prompt(segment=seg, slots=slots, style_context=style)
@@ -400,3 +413,477 @@ async def test_yd_workflow_persists_entry_exit_and_layout_metadata(tmp_path, mon
         assert "YD 分镜分段完成" in wf.last_review_summary
     finally:
         await store.close()
+
+
+def test_normalize_recovers_missing_subshot_assets_and_character_os_voice():
+    from novelvideo.models import (
+        CharacterIdentity,
+        NovelCharacter,
+        NovelEpisode,
+        PropMenuItem,
+        SceneMenuItem,
+    )
+    from novelvideo.s9_storyboard import normalize_s9_storyboard_plan
+
+    c1 = NovelCharacter(name="林默")
+    c1.identities = [CharacterIdentity(identity_id="林默_青年时期", character_name="林默", identity_name="青年时期")]
+    c2 = NovelCharacter(name="黑衣男人")
+    c2.identities = [CharacterIdentity(identity_id="黑衣男人_青年时期", character_name="黑衣男人", identity_name="青年时期")]
+
+    ep = NovelEpisode(
+        number=1,
+        title="雨夜守夜人",
+        identity_ids=["林默_青年时期", "黑衣男人_青年时期"],
+        scene_menu=[SceneMenuItem(scene_id="老旧便利店_深夜", description="雨夜便利店收银台")],
+        prop_menu=[
+            PropMenuItem(prop_id="二手显示器"),
+            PropMenuItem(prop_id="机械键盘"),
+            PropMenuItem(prop_id="百元钞票"),
+        ],
+    )
+
+    # Simulate LLM returning empty identity_ids / scene_id / prop_ids on shots
+    raw = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="守夜抓包与来客",
+                planned_duration_seconds=14,
+                story_beat="林默敲机械键盘盯着二手显示器，黑衣男人入店拍下百元钞票。",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=9.0,
+                        start_seconds=0.0,
+                        end_seconds=9.0,
+                        audio_type="narration",
+                        speaker="林默 OS",
+                        spoken_text="白天是写字楼里的架构师，夜里是全网冷门接口的守夜人。",
+                        content="林默在老旧便利店台后紧盯二手显示器，手指在机械键盘上快速敲击。",
+                    ),
+                    S9SubShot(
+                        shot_number=2,
+                        planned_duration_seconds=5.0,
+                        start_seconds=9.0,
+                        end_seconds=14.0,
+                        audio_type="dialogue",
+                        speaker="黑衣男人",
+                        spoken_text="一包薄荷烟。",
+                        content="黑衣男人走近收银台，将百元钞票拍在台面，随后视线转向显示器。",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    plan, per_seg_slots = normalize_s9_storyboard_plan(
+        raw,
+        max_segment_seconds=30,
+        characters=[c1, c2],
+        episode=ep,
+    )
+    seg = plan.segments[0]
+    assert "林默_青年时期" in seg.shots[0].identity_ids
+    assert seg.shots[0].scene_id == "老旧便利店_深夜"
+    assert set(seg.shots[0].prop_ids) == {"二手显示器", "机械键盘"}
+    assert "黑衣男人_青年时期" in seg.shots[1].identity_ids
+    assert "百元钞票" in seg.shots[1].prop_ids
+
+    slots = per_seg_slots[0]
+    slot_summary = [(s.media_type, s.asset_kind, s.asset_id) for s in slots]
+    assert ("image", "identity", "林默_青年时期") in slot_summary
+    assert ("image", "identity", "黑衣男人_青年时期") in slot_summary
+    assert ("image", "scene", "老旧便利店_深夜") in slot_summary
+    assert ("image", "prop", "二手显示器") in slot_summary
+    # Character OS voice MUST be bound as an audio slot!
+    assert ("audio", "voice", "林默_青年时期") in slot_summary
+    assert ("audio", "voice", "黑衣男人_青年时期") in slot_summary
+
+
+def test_compute_manifest_status_and_seedance2_assets_resolve_character_os_voice_and_images(tmp_path):
+    from types import SimpleNamespace
+    from novelvideo.s9_storyboard import compute_s9_manifest_with_live_status
+    from novelvideo.seedance2_i2v.assets import build_seedance2_project_assets
+    from novelvideo.seedance2_i2v.models import Seedance2I2VMode
+
+    proj = tmp_path / "proj"
+    id_img = proj / "assets" / "characters" / "林默" / "identities" / "青年时期.png"
+    id_img.parent.mkdir(parents=True, exist_ok=True)
+    id_img.write_bytes(b"png-id")
+
+    scene_img = proj / "assets" / "scenes" / "老旧便利店" / "master.png"
+    scene_img.parent.mkdir(parents=True, exist_ok=True)
+    scene_img.write_bytes(b"png-scene")
+
+    prop_img = proj / "assets" / "props" / "二手显示器" / "reference_3view.png"
+    prop_img.parent.mkdir(parents=True, exist_ok=True)
+    prop_img.write_bytes(b"png-prop")
+
+    voice_file = proj / "assets" / "characters" / "林默" / "voices" / "voice_default.mp3"
+    voice_file.parent.mkdir(parents=True, exist_ok=True)
+    voice_file.write_bytes(b"mp3-voice")
+
+    char = SimpleNamespace(
+        name="林默",
+        reference_audio_path="",
+        identities=[
+            SimpleNamespace(
+                identity_id="林默_青年时期",
+                character_name="林默",
+                identity_name="青年时期",
+                appearance_details="",
+                costume="",
+                face_prompt="",
+                body_prompt="",
+                turnaround_prompt="",
+                turnaround_path="",
+                portraits=[SimpleNamespace(view="front", image_path=str(id_img))],
+                default_view="front",
+                voice_sample_path=str(voice_file),
+            )
+        ],
+    )
+    ep = SimpleNamespace(
+        number=1,
+        scene_menu=[SimpleNamespace(scene_id="老旧便利店_深夜", variant_id="")],
+        prop_menu=[SimpleNamespace(prop_id="二手显示器", reference_image_path=str(prop_img))],
+    )
+
+    hydrated = compute_s9_manifest_with_live_status(
+        {
+            "asset_manifest": [
+                {"slot_label": "@图片1", "media_type": "image", "asset_kind": "identity", "name": "林默", "asset_id": "林默_青年时期"},
+                {"slot_label": "@图片2", "media_type": "image", "asset_kind": "scene", "name": "老旧便利店_深夜", "asset_id": "老旧便利店_深夜"},
+                {"slot_label": "@图片3", "media_type": "image", "asset_kind": "prop", "name": "二手显示器", "asset_id": "二手显示器"},
+                {"slot_label": "@音频1", "media_type": "audio", "asset_kind": "voice", "name": "林默", "asset_id": "林默_青年时期"},
+            ]
+        },
+        output_dir=proj,
+        characters=[char],
+        episode=ep,
+    )
+    assert [item["status_label"] for item in hydrated["asset_manifest"]] == [
+        "已就绪",
+        "已就绪",
+        "已就绪",
+        "已就绪",
+    ]
+
+    beat = {
+        "beat_number": 1,
+        "audio_type": "narration",
+        "speaker": "",
+        "detected_identities": ["林默_青年时期"],
+        "detected_props": ["二手显示器"],
+        "scene_ref": {"scene_id": "老旧便利店_深夜"},
+        "s9_subshots": [
+            {
+                "shot_number": 1,
+                "audio_type": "narration",
+                "speaker": "林默 OS",
+                "spoken_text": "夜里是全网冷门接口的守夜人。",
+                "identity_ids": ["林默_青年时期"],
+                "scene_id": "老旧便利店_深夜",
+                "prop_ids": ["二手显示器"],
+            }
+        ],
+    }
+    assets = build_seedance2_project_assets(
+        project_output=proj,
+        episode=1,
+        beat=beat,
+        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+        state_dir=proj,
+        characters=[char],
+    )
+    selected_keys = [(a.media_type, a.key, a.exists, a.selected) for a in assets if a.selected]
+    assert ("image", "identity:林默_青年时期", True, True) in selected_keys
+    assert ("image", "scene:老旧便利店_深夜", True, True) in selected_keys
+    assert ("image", "prop:二手显示器", True, True) in selected_keys
+    assert any(
+        mt == "audio" and key.startswith("voice:林默") and ex and sel
+        for mt, key, ex, sel in selected_keys
+    )
+
+    from novelvideo.s9_storyboard import build_s9_slots_from_beat, rebind_s9_prompt_with_active_assets
+
+    _subshots, _meta, slots = build_s9_slots_from_beat(beat)
+    rebound, ordered, missing = rebind_s9_prompt_with_active_assets(
+        "【参考职责】\n@图片1林默 @图片2场景 @图片3显示器 @音频1林默声线",
+        slots=slots,
+        assets=assets,
+    )
+    assert missing == []
+    assert len(ordered) == 4
+    assert "@图片1" in rebound and "@图片2" in rebound and "@图片3" in rebound and "@音频1" in rebound
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_get_beats_backfills_no_character_and_no_prop_from_s9_subshots(tmp_path):
+    import json
+
+    from novelvideo.models import NO_CHARACTER_MARKER, NO_PROP_MARKER, NovelVisualBeat
+    from novelvideo.sqlite_store import SQLiteStore
+
+    proj = tmp_path / "alice" / "backfill"
+    proj.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore("alice/backfill", output_dir=str(proj), state_dir=str(proj))
+    await store.initialize()
+    try:
+        beat = NovelVisualBeat(
+            episode_number=1,
+            beat_number=1,
+            shot_number="shot_001",
+            narration_segment="夜班守夜",
+            visual_description="林默在收银台前看显示器。",
+            detected_identities=[NO_CHARACTER_MARKER],
+            detected_props=[NO_PROP_MARKER],
+            scene_ref=None,
+            s9_subshots_json=json.dumps(
+                [
+                    {
+                        "shot_number": 1,
+                        "identity_ids": ["林默_青年时期"],
+                        "prop_ids": ["二手显示器"],
+                        "scene_id": "老旧便利店_深夜",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            s9_segment_meta_json=json.dumps(
+                {
+                    "segment_asset_slots": [
+                        {"slot": 1, "media_type": "image", "asset_kind": "identity", "name": "林默", "asset_id": "林默_青年时期"},
+                        {"slot": 2, "media_type": "image", "asset_kind": "scene", "name": "老旧便利店", "asset_id": "老旧便利店_深夜"},
+                        {"slot": 3, "media_type": "image", "asset_kind": "prop", "name": "显示器", "asset_id": "二手显示器"},
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        )
+        await store.add_visual_beats([beat])
+        rows = await store.get_beats_as_dicts(1)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["detected_identities"] == ["林默_青年时期"]
+        assert row["detected_props"] == ["二手显示器"]
+        assert (row.get("scene_ref") or {}).get("scene_id") == "老旧便利店_深夜"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_panel_service_generate_seedance2_prompt_forwards_source_text_and_syncs_beat_assets(
+    tmp_path, monkeypatch
+):
+    from novelvideo import project_config as pc
+    from novelvideo import s9_storyboard as s9_mod
+    from novelvideo.models import NO_CHARACTER_MARKER, NO_PROP_MARKER, NovelEpisode
+    from novelvideo.seedance2_i2v.panel_service import generate_seedance2_prompt_for_panel
+
+    monkeypatch.setattr(pc, "OUTPUT_DIR", tmp_path / "state")
+    project_dir = tmp_path / "output" / "alice" / "panel_sync"
+    state_dir = tmp_path / "state" / "alice" / "panel_sync"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    captured_stage2: dict[str, object] = {}
+    captured_update: dict[str, object] = {}
+
+    class _FakeStore:
+        def get_episode(self, ep_num: int):
+            return NovelEpisode(
+                number=ep_num,
+                title="ep1",
+                beat_source_text="暴雨夜，林默坐在老旧便利店收银台后敲键盘，黑衣男人进店买烟。",
+            )
+
+        async def update_beat_asset(self, **kwargs):
+            captured_update.update(kwargs)
+            return True
+
+    async def _fake_stage2(**kwargs):
+        captured_stage2.update(kwargs)
+        return "【参考职责】\n@图片1绑定林默\n【动态时间轴】\n- 0.0秒—3.0秒：林默敲键盘"
+
+    monkeypatch.setattr(s9_mod, "run_s9_stage2_segment_prompt", _fake_stage2)
+
+    beat = {
+        "beat_number": 1,
+        "narration_segment": "林默守夜迎客。",
+        "visual_description": "便利店收银台。",
+        "detected_identities": [NO_CHARACTER_MARKER],
+        "detected_props": [NO_PROP_MARKER],
+        "scene_ref": None,
+        "s9_subshots": [
+            {
+                "shot_number": 1,
+                "planned_duration_seconds": 8.0,
+                "start_seconds": 0.0,
+                "end_seconds": 8.0,
+                "shot_size": "中景",
+                "camera_angle": "平视",
+                "camera_movement": "微推",
+                "content": "林默在台后敲机械键盘。",
+                "identity_ids": ["林默_青年时期"],
+                "scene_id": "老旧便利店_深夜",
+                "prop_ids": ["机械键盘"],
+            }
+        ],
+        "s9_segment_meta": {
+            "segment_number": 1,
+            "title": "雨夜守夜人",
+            "planned_duration_seconds": 8,
+            "story_beat": "林默守夜迎客",
+            "segment_asset_slots": [
+                {"slot": 1, "media_type": "image", "asset_kind": "identity", "name": "林默", "asset_id": "林默_青年时期"},
+                {"slot": 2, "media_type": "image", "asset_kind": "scene", "name": "老旧便利店_深夜", "asset_id": "老旧便利店_深夜"},
+                {"slot": 3, "media_type": "image", "asset_kind": "prop", "name": "机械键盘", "asset_id": "机械键盘"},
+            ],
+        },
+    }
+
+    await generate_seedance2_prompt_for_panel(
+        store=_FakeStore(),
+        state_dir=state_dir,
+        episode=1,
+        beat=beat,
+        project_dir=project_dir,
+    )
+
+    assert "暴雨夜，林默坐在老旧便利店收银台后敲键盘" in str(captured_stage2.get("source_text") or "")
+    assert captured_update.get("detected_identities") == ["林默_青年时期"]
+    assert captured_update.get("detected_props") == ["机械键盘"]
+    assert (captured_update.get("scene_ref") or {}).get("scene_id") == "老旧便利店_深夜"
+
+
+def test_audit_s9_plan_pacing_catches_overcrowded_multi_speaker_prop_shot():
+    overcrowded = S9StoryboardPlan(
+        duration_assessment=S9DurationAssessment(
+            pace_tier="紧凑",
+            estimated_total_seconds=18,
+            segment_count=1,
+        ),
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="守夜交易",
+                planned_duration_seconds=18,
+                story_beat="林默敲代码，黑衣人买烟买冰美式并找零盯屏。",
+                exit_state="黑衣人侧身盯向显示器，林默手停键盘。",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=10.0,
+                        start_seconds=0.0,
+                        end_seconds=10.0,
+                        audio_type="narration",
+                        speaker="林默 OS",
+                        spoken_text="白天是写字楼里的架构师，夜里是全网冷门接口的守夜人。只要再抓十分钟，这批异常心跳包就能完整落盘。",
+                        content="林默盯着绿码屏幕敲机械键盘。",
+                    ),
+                    S9SubShot(
+                        shot_number=2,
+                        planned_duration_seconds=8.0,
+                        start_seconds=10.0,
+                        end_seconds=18.0,
+                        audio_type="dialogue",
+                        speaker="黑衣男人_青年时期；林默_青年时期",
+                        spoken_text="一包薄荷烟，再拿罐冰美式。|一共三十四，找您六十六。",
+                        content="黑衣人进店拍下百元钞，林默转身拿烟拿冰美式、扫码、装袋并找零，男人接过零钱侧身盯屏。",
+                        prop_ids=["百元钞票", "薄荷烟", "冰美式", "零钱"],
+                    ),
+                ],
+            )
+        ],
+    )
+    issues = audit_s9_plan_pacing(overcrowded, max_segment_seconds=30)
+    assert any("大段1-分镜2" in msg and "多人轮流开口" in msg for msg in issues)
+
+
+def test_normalize_uses_integer_seconds_and_preserves_merged_exit_state():
+    from novelvideo.s9_storyboard import normalize_s9_storyboard_plan
+
+    raw = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="前段",
+                planned_duration_seconds=14,
+                story_beat="前半段事件",
+                exit_state="旧尾帧状态",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=10.5,
+                        content="镜一内容",
+                    ),
+                    S9SubShot(
+                        shot_number=2,
+                        planned_duration_seconds=3.5,
+                        content="镜二内容",
+                    ),
+                ],
+            ),
+            S9SegmentPlan(
+                segment_number=2,
+                title="短尾",
+                planned_duration_seconds=3,
+                story_beat="收束事件",
+                exit_state="合并后的最终尾帧状态",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=3.0,
+                        content="镜三内容",
+                    ),
+                ],
+            ),
+        ]
+    )
+    plan, _ = normalize_s9_storyboard_plan(raw, max_segment_seconds=30)
+    assert len(plan.segments) == 1
+    seg = plan.segments[0]
+    assert seg.exit_state == "合并后的最终尾帧状态"
+    for s in seg.shots:
+        assert s.start_seconds == float(int(s.start_seconds))
+        assert s.end_seconds == float(int(s.end_seconds))
+
+
+def test_fallback_prompt_generates_sub_interval_timeline_and_splits_multispeaker_audio():
+    style = resolve_s9_style_context(visual_style="realistic_modern", aspect_ratio="16:9")
+    seg = S9SegmentPlan(
+        segment_number=1,
+        title="便利店交易",
+        planned_duration_seconds=8,
+        story_beat="黑衣人买烟后林默找零。",
+        exit_state="男人握零钱盯向显示器",
+        shots=[
+            S9SubShot(
+                shot_number=1,
+                title="点单与找零",
+                planned_duration_seconds=8,
+                start_seconds=0,
+                end_seconds=8,
+                shot_scale_movement="中景",
+                camera_angle="平视",
+                camera_motion="固定机位",
+                audio_type="dialogue",
+                speaker="黑衣男人_青年时期；林默_青年时期",
+                spoken_text="一包薄荷烟。|一共二十。",
+                content="男人拍下百元钞点单。林默递出薄荷烟并找零。",
+                sfx_cue="钞票拍台声、硬币轻响",
+            )
+        ],
+    )
+    slots = [
+        S9SegmentAssetSlot(slot=1, media_type="audio", asset_kind="voice", name="林默", asset_id="林默_青年时期"),
+        S9SegmentAssetSlot(slot=2, media_type="audio", asset_kind="voice", name="黑衣男人", asset_id="黑衣男人_青年时期"),
+    ]
+    prompt = build_s9_stage2_fallback_prompt(segment=seg, slots=slots, style_context=style)
+    assert "承接前态后在触发点直接切入核心动作与可见部位变化" not in prompt
+    assert "0秒—" in prompt
+    assert "@" in prompt
+    assert "@音频2音色" in prompt
+    assert "@音频1音色" in prompt
+    assert "|" not in prompt

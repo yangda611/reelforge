@@ -37,6 +37,8 @@ from novelvideo.models import (
     SceneMenuItem,
     normalize_detected_identities,
     normalize_detected_props,
+    real_detected_identities,
+    real_detected_props,
     sync_beat_asset_refs,
 )
 from novelvideo.novel_source import (
@@ -2692,17 +2694,74 @@ class SQLiteStore:
                     parsed_s9_meta = {}
             except (TypeError, json.JSONDecodeError):
                 parsed_s9_meta = {}
+            detected_identities = normalize_detected_identities(
+                json.loads(b.detected_identities_json or "[]")
+            )
+            detected_props = normalize_detected_props(
+                json.loads(getattr(b, "detected_props_json", "[]") or "[]")
+            )
+            scene_ref_dict = (
+                b.scene_ref.model_dump()
+                if getattr(b, "scene_ref", None)
+                else None
+            )
+            # Recover segment asset refs when an s9 Beat was persisted without Beat-level markers
+            if parsed_subshots or parsed_s9_meta:
+                if not real_detected_identities(detected_identities):
+                    recovered_ids: list[str] = []
+                    for sh in parsed_subshots:
+                        if isinstance(sh, dict):
+                            for iid in sh.get("identity_ids") or []:
+                                clean_iid = str(iid or "").strip()
+                                if clean_iid and clean_iid not in recovered_ids:
+                                    recovered_ids.append(clean_iid)
+                    for slot in parsed_s9_meta.get("segment_asset_slots") or []:
+                        if isinstance(slot, dict) and slot.get("asset_kind") == "identity":
+                            clean_iid = str(slot.get("asset_id") or "").strip()
+                            if clean_iid and clean_iid not in recovered_ids:
+                                recovered_ids.append(clean_iid)
+                    if recovered_ids:
+                        detected_identities = normalize_detected_identities(recovered_ids)
+                if not real_detected_props(detected_props):
+                    recovered_props: list[str] = []
+                    for sh in parsed_subshots:
+                        if isinstance(sh, dict):
+                            for pid in sh.get("prop_ids") or []:
+                                clean_pid = str(pid or "").strip()
+                                if clean_pid and clean_pid not in recovered_props:
+                                    recovered_props.append(clean_pid)
+                    for slot in parsed_s9_meta.get("segment_asset_slots") or []:
+                        if isinstance(slot, dict) and slot.get("asset_kind") == "prop":
+                            clean_pid = str(slot.get("asset_id") or "").strip()
+                            if clean_pid and clean_pid not in recovered_props:
+                                recovered_props.append(clean_pid)
+                    if recovered_props:
+                        detected_props = normalize_detected_props(recovered_props)
+                if not scene_ref_dict or not str(scene_ref_dict.get("scene_id") or "").strip():
+                    for sh in parsed_subshots:
+                        if isinstance(sh, dict) and str(sh.get("scene_id") or "").strip():
+                            scene_ref_dict = {
+                                "scene_id": str(sh.get("scene_id")).strip(),
+                                "variant_id": str(sh.get("scene_variant_id") or "").strip(),
+                            }
+                            break
+                    if not scene_ref_dict:
+                        for slot in parsed_s9_meta.get("segment_asset_slots") or []:
+                            if isinstance(slot, dict) and slot.get("asset_kind") == "scene":
+                                sid = str(slot.get("asset_id") or "").strip()
+                                if sid:
+                                    scene_ref_dict = {
+                                        "scene_id": sid,
+                                        "variant_id": str(slot.get("variant_id") or "").strip(),
+                                    }
+                                    break
             result.append(
                 {
                     "beat_number": b.beat_number,
                     "narration_segment": b.narration,
                     "visual_description": b.visual_description,
                     "source_text_sha256": b.source_text_sha256,
-                    "scene_ref": (
-                        b.scene_ref.model_dump()
-                        if getattr(b, "scene_ref", None)
-                        else None
-                    ),
+                    "scene_ref": scene_ref_dict,
                     "estimated_duration": estimated_duration,
                     "audio_type": b.audio_type,
                     "speaker": b.speaker,
@@ -2716,12 +2775,8 @@ class SQLiteStore:
                     "s9_segment_meta_json": s9_meta_raw,
                     "s9_subshots": parsed_subshots,
                     "s9_segment_meta": parsed_s9_meta,
-                    "detected_identities": normalize_detected_identities(
-                        json.loads(b.detected_identities_json or "[]")
-                    ),
-                    "detected_props": normalize_detected_props(
-                        json.loads(getattr(b, "detected_props_json", "[]") or "[]")
-                    ),
+                    "detected_identities": detected_identities,
+                    "detected_props": detected_props,
                     "time_of_day": getattr(b, "time_of_day", ""),
                     "shot_order": getattr(b, "shot_order", None),
                     "duration_seconds": getattr(b, "duration_seconds", None),

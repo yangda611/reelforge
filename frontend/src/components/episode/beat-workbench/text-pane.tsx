@@ -156,6 +156,17 @@ export function TextPane({ beat, project, episode, spineTemplate = "drama" }: Te
     if ("speaker" in patch) dirtyRef.current.speaker = false;
   };
 
+  const detectedIdentitiesKey = JSON.stringify(beat.detected_identities ?? []);
+  const detectedPropsKey = JSON.stringify(beat.detected_props ?? []);
+
+  useEffect(() => {
+    setIdentities(beat.detected_identities ?? []);
+  }, [beat.beat_number, detectedIdentitiesKey]);
+
+  useEffect(() => {
+    setProps(beat.detected_props ?? []);
+  }, [beat.beat_number, detectedPropsKey]);
+
   // Reset when beat_number changes (user selected a different beat).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -165,8 +176,6 @@ export function TextPane({ beat, project, episode, spineTemplate = "drama" }: Te
     setSceneId(sceneRefToName(beat.scene_ref) || beat.location || "");
     setTimeOfDay(beat.time_of_day ?? "");
     setSpeaker(beat.speaker ?? "");
-    setIdentities(beat.detected_identities ?? []);
-    setProps(beat.detected_props ?? []);
     dirtyRef.current = {
       narration: false,
       visual: false,

@@ -398,9 +398,13 @@ def build_s9_stage1_system_prompt(
 - **时间轴精确对齐**：
   - 每一大段的 `planned_duration_seconds` 为整数秒且满足 `4 <= planned_duration_seconds <= {cap}`（按内容自然长度取整，**绝对禁止为了凑满 {cap} 秒而拉长镜头或硬加废镜头**）。
   - 段内所有分镜 `start_seconds` / `end_seconds` 从 `0` 连续拼接，最后一镜 `end_seconds` 精确等于该大段的 `planned_duration_seconds`。
-- **资产与结构字段要求**：
+- **资产与结构字段要求（极重要，严禁留空！）**：
   - `duration_assessment`：填 `pace_tier="紧凑"`、`speech_total_seconds`（全部发声合计 S 秒）与含演一遍复核结论的 `core_chain_seconds`。
-  - `asset_manifest`：列出全集通用 `@图片1..N`（角色→场景→道具顺序）和 `@音频1..M`（有实际发声角色），`identity_ids`、`scene_id`、`prop_ids` 尽量精确匹配给定菜单 ID。
+  - `asset_manifest`：列出全集通用 `@图片1..N`（角色→场景→道具顺序）和 `@音频1..M`（有实际发声角色，含对白与角色OS）。
+  - **每个分镜（`S9SubShot`）必须绑定资产字段**：
+    - `identity_ids`：必须填入本镜出场或发声的全部角色身份ID（精确选用给定【已规划角色与身份】里的 `identity_id`，如 `["林默_青年时期"]`），禁止留空 `[]`（仅纯无人空镜除外）；
+    - `scene_id`（与 `scene_variant_id`）：必须填入本镜所在场景ID（精确选用【已规划场景菜单】的 `scene_id`），禁止留空 `""`；
+    - `prop_ids`：必须填入本镜出现、使用或提及的关键道具ID列表（精确选用【已规划道具菜单】的 `prop_id`，如 `["二手显示器", "机械键盘"]`）；
   - 每个大段填写：`story_beat`（本段从起势到落点的完整故事闭环）、`entry_state`（第0秒起始状态）、`exit_state`（末镜结束瞬间的必达站位/持物/视线落点，供下一段第0秒衔接）、`scene_layout`（多人同场/走位/正反打时写3～5句地标、锚位与机位工作侧）。
   - 每个分镜填写：`content`（景别机位运镜+具体动作交互与可见变化+完整原话+必要拟音）、`spoken_text`（逐字原句）、`sfx_cue`（关键物理拟音）、`transition_note`（切出余势与接续点）。"""
 
@@ -429,6 +433,7 @@ def build_s9_stage1_task_prompt(
 1. 先计算全集发声总时长 S（普通话按 4～5 字/秒），边做边说的动作与台词并行不相加。
 2. 砍掉所有无用废镜头（如无戏剧职责的 4 秒雨夜门面空镜、说话完后空敲 8 秒键盘的拖尾），保证每个分镜都承载不可替代的故事/表演信息。
 3. 确保每一个大段（Clip）内部 **100% 讲完自己的 `story_beat`**，并在末镜明确落定 `exit_state`，让下一大段第 0 秒能够直接接上！
+4. **每一个分镜都必须填充 `identity_ids`、`scene_id`、`prop_ids`**（精确引用下方【本集已有资产与音色】里的 ID），否则下游无法绑定角色图、场景图、道具图与参考音色！
 
 【项目视觉规格】
 - {style_context.s9_style_anchor}
@@ -543,7 +548,12 @@ def _match_prop_id(raw_prop: str, episode: Any) -> str:
 
 
 def _normalize_subshot_timeline(shots: list[S9SubShot], target_duration: int) -> list[S9SubShot]:
-    """Ensure sub-shots form a contiguous [0, target_duration] timeline in 0.5s grid."""
+    """Ensure sub-shots form a contiguous [0, target_duration] timeline.
+
+    Uses integer-second boundaries whenever ``target_duration >= len(shots)``
+    (matching Seedance 2.5 continuous integer-second windows), falling back to a
+    0.5s grid only when there are more sub-shots than integer seconds.
+    """
 
     if not shots:
         return [
@@ -565,24 +575,35 @@ def _normalize_subshot_timeline(shots: list[S9SubShot], target_duration: int) ->
 
     total_raw = sum(raw_durations) or float(target_duration)
     scale = float(target_duration) / total_raw
+    use_integer_grid = int(target_duration) >= len(shots)
 
     normalized: list[S9SubShot] = []
     cursor = 0.0
+    ideal_cursor = 0.0
     count = len(shots)
     for idx, shot in enumerate(shots):
         shot_num = idx + 1
+        ideal_cursor += raw_durations[idx] * scale
         if idx == count - 1:
             end_sec = float(target_duration)
+        elif use_integer_grid:
+            remaining_min = float(count - 1 - idx)
+            min_end = cursor + 1.0
+            max_end = max(min_end, float(target_duration) - remaining_min)
+            snapped = float(round(ideal_cursor))
+            end_sec = min(max_end, max(min_end, snapped))
         else:
             step = max(0.5, round((raw_durations[idx] * scale) * 2.0) / 2.0)
-            remaining_min = (count - 1 - idx) * 1.0
+            remaining_min = (count - 1 - idx) * 0.5
             max_end = max(cursor + 0.5, float(target_duration) - remaining_min)
             end_sec = min(max_end, cursor + step)
-        dur = max(0.5, round((end_sec - cursor) * 2.0) / 2.0)
-        end_sec = round(cursor + dur, 1)
-        if idx == count - 1:
-            end_sec = float(target_duration)
-            dur = round(max(0.5, end_sec - cursor), 1)
+            dur_half = max(0.5, round((end_sec - cursor) * 2.0) / 2.0)
+            end_sec = round(cursor + dur_half, 1)
+
+        dur = round(max(0.5, end_sec - cursor), 1)
+        if use_integer_grid:
+            dur = float(int(round(end_sec - cursor)))
+            end_sec = float(int(round(end_sec)))
         normalized.append(
             shot.model_copy(
                 update={
@@ -604,6 +625,91 @@ def _format_seconds_label(value: float) -> str:
     return f"{rounded:.1f}"
 
 
+def _infer_identities_from_text(
+    text: str,
+    characters: list[Any],
+    valid_identities: dict[str, str],
+    char_to_default: dict[str, str],
+) -> list[str]:
+    """Recover character identity IDs mentioned in shot or segment prose."""
+
+    haystack = str(text or "").strip()
+    if not haystack:
+        return []
+    found: list[str] = []
+    # Prefer exact identity_id matches first, then character name / aliases.
+    for iid in dict.fromkeys(valid_identities.values()):
+        if iid and iid in haystack and iid not in found:
+            found.append(iid)
+    for char in characters or []:
+        char_name = str(getattr(char, "name", "") or "").strip()
+        aliases = [str(a or "").strip() for a in (getattr(char, "aliases", []) or []) if str(a or "").strip()]
+        candidates = [char_name, *aliases] if char_name else aliases
+        if any(token and token in haystack for token in candidates):
+            resolved = char_to_default.get(char_name) or char_to_default.get(char_name.lower(), "")
+            if resolved and resolved not in found:
+                found.append(resolved)
+    return found
+
+
+def _infer_scene_from_text(
+    text: str,
+    episode: Any,
+    manifest_scenes: list[tuple[str, str]],
+) -> tuple[str, str]:
+    """Recover scene_id/variant_id from shot or segment prose and episode scene_menu."""
+
+    haystack = str(text or "").strip()
+    scene_menu = list(getattr(episode, "scene_menu", []) or []) if episode else []
+    if haystack:
+        for item in scene_menu:
+            sid = str(getattr(item, "scene_id", "") or "").strip()
+            vid = str(getattr(item, "variant_id", "") or "").strip()
+            if not sid:
+                continue
+            base_sid = sid.split("_", 1)[0]
+            if sid in haystack or (base_sid and len(base_sid) >= 2 and base_sid in haystack):
+                return sid, vid
+        for sid, vid in manifest_scenes:
+            base_sid = sid.split("_", 1)[0]
+            if sid and (sid in haystack or (base_sid and len(base_sid) >= 2 and base_sid in haystack)):
+                return sid, vid
+    if len(scene_menu) == 1:
+        sid = str(getattr(scene_menu[0], "scene_id", "") or "").strip()
+        vid = str(getattr(scene_menu[0], "variant_id", "") or "").strip()
+        if sid:
+            return sid, vid
+    if len(manifest_scenes) == 1:
+        return manifest_scenes[0]
+    return "", ""
+
+
+def _infer_props_from_text(
+    text: str,
+    episode: Any,
+    manifest_props: list[str],
+) -> list[str]:
+    """Recover prop_ids mentioned in shot or segment prose from episode prop_menu."""
+
+    haystack = str(text or "").strip()
+    if not haystack:
+        return []
+    found: list[str] = []
+    prop_menu = list(getattr(episode, "prop_menu", []) or []) if episode else []
+    for item in prop_menu:
+        pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
+        if not pid:
+            continue
+        aliases = [str(a or "").strip() for a in (getattr(item, "aliases", []) or []) if str(a or "").strip()]
+        tokens = [pid, *aliases]
+        if any(tok and tok in haystack for tok in tokens) and pid not in found:
+            found.append(pid)
+    for pid in manifest_props:
+        if pid and pid in haystack and pid not in found:
+            found.append(pid)
+    return found
+
+
 def normalize_s9_storyboard_plan(
     plan: S9StoryboardPlan,
     *,
@@ -616,10 +722,28 @@ def normalize_s9_storyboard_plan(
     """Validate/repair durations, timelines, short tails, and segment asset slots."""
 
     cap = normalize_max_segment_seconds(max_segment_seconds)
+    char_list = list(characters or [])
     valid_identities, char_to_default, _voice_by_key = _coerce_identity_lookup(
-        list(characters or []),
+        char_list,
         episode,
     )
+
+    manifest_identities: list[str] = []
+    manifest_scenes: list[tuple[str, str]] = []
+    manifest_props: list[str] = []
+    for item in plan.asset_manifest or []:
+        if item.asset_kind == "identity":
+            resolved = _match_identity_id(item.asset_id or item.name, valid_identities, char_to_default)
+            if resolved and resolved not in manifest_identities:
+                manifest_identities.append(resolved)
+        elif item.asset_kind == "scene":
+            sid, vid = _match_scene_id(item.asset_id or item.name, episode)
+            if sid and (sid, item.variant_id or vid) not in manifest_scenes:
+                manifest_scenes.append((sid, item.variant_id or vid))
+        elif item.asset_kind == "prop":
+            pid = _match_prop_id(item.asset_id or item.name, episode)
+            if pid and pid not in manifest_props:
+                manifest_props.append(pid)
 
     segments = [seg.model_copy(deep=True) for seg in (plan.segments or [])]
     # Short-tail safety pass when LLM leaves a trailing <4s segment that cleanly fits in prev
@@ -649,6 +773,8 @@ def normalize_s9_storyboard_plan(
                 prev.story_beat = " ".join(
                     part for part in [prev.story_beat.strip(), last.story_beat.strip()] if part
                 )
+                if str(getattr(last, "exit_state", "") or "").strip():
+                    prev.exit_state = last.exit_state
                 segments.pop()
 
     normalized_segments: list[S9SegmentPlan] = []
@@ -662,6 +788,18 @@ def normalize_s9_storyboard_plan(
         ) or 15))
         seg_dur = max(MIN_S9_SEGMENT_SECONDS, min(cap, raw_seg_dur))
         fixed_shots = _normalize_subshot_timeline(seg.shots, seg_dur)
+        seg_prose = " ".join(
+            part
+            for part in [
+                seg.title,
+                seg.story_beat,
+                getattr(seg, "entry_state", ""),
+                getattr(seg, "exit_state", ""),
+                getattr(seg, "scene_layout", ""),
+                *[f"{sh.title} {sh.content} {sh.speaker}" for sh in fixed_shots],
+            ]
+            if part
+        )
 
         # Normalize asset references per sub-shot and collect segment ordered manifest
         seg_identity_ids: list[str] = []
@@ -672,6 +810,9 @@ def normalize_s9_storyboard_plan(
         cleaned_shots: list[S9SubShot] = []
         for shot in fixed_shots:
             label = shot.label.strip() or f"大段{seg_idx}-分镜{shot.shot_number}"
+            shot_prose = " ".join(
+                part for part in [shot.title, shot.content, shot.speaker, shot.spoken_text] if part
+            )
             mapped_identities: list[str] = []
             for raw_id in shot.identity_ids:
                 resolved = _match_identity_id(raw_id, valid_identities, char_to_default)
@@ -679,8 +820,23 @@ def normalize_s9_storyboard_plan(
                     mapped_identities.append(resolved)
                 if resolved and resolved not in seg_identity_ids:
                     seg_identity_ids.append(resolved)
+            for inferred_id in _infer_identities_from_text(
+                shot_prose, char_list, valid_identities, char_to_default
+            ):
+                if inferred_id not in mapped_identities:
+                    mapped_identities.append(inferred_id)
+                if inferred_id not in seg_identity_ids:
+                    seg_identity_ids.append(inferred_id)
 
             scene_id, scene_var = _match_scene_id(shot.scene_id, episode)
+            if not scene_id:
+                scene_id, scene_var = _infer_scene_from_text(
+                    shot_prose or seg_prose, episode, manifest_scenes
+                )
+            if not scene_id:
+                scene_id, scene_var = _infer_scene_from_text(
+                    seg_prose, episode, manifest_scenes
+                )
             if scene_id:
                 pair = (scene_id, scene_var)
                 if pair not in seg_scene_keys:
@@ -693,6 +849,11 @@ def normalize_s9_storyboard_plan(
                     mapped_props.append(pid)
                 if pid and pid not in seg_prop_ids:
                     seg_prop_ids.append(pid)
+            for inferred_pid in _infer_props_from_text(shot_prose, episode, manifest_props):
+                if inferred_pid not in mapped_props:
+                    mapped_props.append(inferred_pid)
+                if inferred_pid not in seg_prop_ids:
+                    seg_prop_ids.append(inferred_pid)
 
             speaker_clean = str(shot.speaker or "").strip()
             if shot.audio_type in {"dialogue", "narration"} and speaker_clean:
@@ -700,13 +861,19 @@ def normalize_s9_storyboard_plan(
                 if shot.audio_type == "dialogue" or (not is_pure_os):
                     resolved_spk = _match_identity_id(speaker_clean, valid_identities, char_to_default)
                     if resolved_spk:
-                        if shot.audio_type == "dialogue" and resolved_spk not in mapped_identities:
+                        if resolved_spk not in mapped_identities and (
+                            resolved_spk in valid_identities or resolved_spk in char_to_default.values()
+                        ):
                             mapped_identities.append(resolved_spk)
                         if resolved_spk not in seg_identity_ids and (
                             resolved_spk in valid_identities or resolved_spk in char_to_default.values()
                         ):
                             seg_identity_ids.append(resolved_spk)
-                        if shot.audio_type == "dialogue" and resolved_spk not in seg_speakers:
+                        if (
+                            shot.audio_type == "dialogue"
+                            or resolved_spk in valid_identities
+                            or resolved_spk in char_to_default.values()
+                        ) and resolved_spk not in seg_speakers:
                             seg_speakers.append(resolved_spk)
 
             cleaned_shots.append(
@@ -720,6 +887,26 @@ def normalize_s9_storyboard_plan(
                     }
                 )
             )
+
+        # Segment-level safety recovery when LLM omitted shot-level arrays
+        if not seg_identity_ids:
+            for inferred_id in _infer_identities_from_text(
+                seg_prose, char_list, valid_identities, char_to_default
+            ) or manifest_identities:
+                if inferred_id not in seg_identity_ids:
+                    seg_identity_ids.append(inferred_id)
+            if seg_identity_ids and cleaned_shots:
+                cleaned_shots[0] = cleaned_shots[0].model_copy(
+                    update={"identity_ids": list(seg_identity_ids)}
+                )
+        if not seg_prop_ids:
+            for inferred_pid in _infer_props_from_text(seg_prose, episode, manifest_props):
+                if inferred_pid not in seg_prop_ids:
+                    seg_prop_ids.append(inferred_pid)
+            if seg_prop_ids and cleaned_shots:
+                cleaned_shots[0] = cleaned_shots[0].model_copy(
+                    update={"prop_ids": list(seg_prop_ids)}
+                )
 
         # Build local ordered @图片1..P and @音频1..A slots for THIS segment
         image_slots: list[S9SegmentAssetSlot] = []
@@ -930,6 +1117,7 @@ def build_s9_stage2_task_prompt(
     next_segment: S9SegmentPlan | None = None,
     prev_episode_context: str = "",
     user_guidance: str = "",
+    source_text: str = "",
 ) -> str:
     """Build Stage 2 user prompt for compiling one 大段 into a full Seedance prompt."""
 
@@ -965,22 +1153,28 @@ def build_s9_stage2_task_prompt(
     elif prev_episode_context.strip():
         continuity_parts.append(f"- 上一集末尾语境：{prev_episode_context.strip()}")
     if getattr(segment, "entry_state", "").strip():
-        continuity_parts.append(f"- 本段第0秒起态（entry_state）：{segment.entry_state.strip()}")
+        continuity_parts.append(f"- 本段第0秒起始画面状态：{segment.entry_state.strip()}")
     if getattr(segment, "exit_state", "").strip():
         continuity_parts.append(
-            f"- 本段末镜必达落点（exit_state，必须完整拍完并止于此）：{segment.exit_state.strip()}"
+            f"- 本段末镜必达收束状态（必须完整拍完并止于此）：{segment.exit_state.strip()}"
         )
     if next_segment is not None:
         next_entry = str(getattr(next_segment, "entry_state", "") or "").strip()
         continuity_parts.append(
             f"- 下一大段（大段{next_segment.segment_number}·{next_segment.title}）即将承接：{next_segment.story_beat}"
-            + (f"｜下段起态：{next_entry}" if next_entry else "")
+            + (f"｜下段起始状态：{next_entry}" if next_entry else "")
         )
     continuity_block = "\n".join(continuity_parts) if continuity_parts else "- 本段独立完成当前闭环"
 
     layout_block = (
         f"\n【已规划场景空间蓝图】\n{segment.scene_layout.strip()}\n"
         if str(getattr(segment, "scene_layout", "") or "").strip()
+        else ""
+    )
+
+    source_block = (
+        f"\n【本集原稿参考（完整版须从原稿复核台词原字、知情与表演细节，严禁演到下一大段）】\n{source_text.strip()}\n"
+        if str(source_text or "").strip()
         else ""
     )
 
@@ -1003,11 +1197,113 @@ def build_s9_stage2_task_prompt(
 {layout_block}
 【本大段叙事核心】
 {segment.story_beat}
-
+{source_block}
 【本大段内部各分镜规划（时间轴共 {segment.planned_duration_seconds} 秒）】
 {chr(10).join(shots_lines)}
 {guidance_block}
-请立即直接输出纯净的 Stage 2 完整生成提示词文本（严格执行 YD分镜skills 的参考职责、全局光影画风、适用场景布局、注意事项、角色声音与动态时间轴表演写法）。"""
+请立即直接输出纯净的 Stage 2 完整生成提示词文本（严格执行 YD分镜skills 的参考职责、全局光影画风、适用场景布局、注意事项、角色声音与分亚区间动态时间轴表演写法，禁止出现任何代码字段名）。"""
+
+
+def _resolve_voice_slot_ref(
+    speaker_tag: str,
+    voice_slot_by_id: dict[str, str],
+    voice_slot_by_name: dict[str, str],
+) -> str:
+    clean = str(speaker_tag or "").strip()
+    if not clean:
+        return ""
+    return voice_slot_by_id.get(clean) or voice_slot_by_name.get(
+        clean.split("_", 1)[0].lower(), ""
+    )
+
+
+def _format_fallback_audio_desc(
+    *,
+    shot: S9SubShot,
+    start_s: str,
+    end_s: str,
+    voice_slot_by_id: dict[str, str],
+    voice_slot_by_name: dict[str, str],
+) -> str:
+    sfx_raw = str(getattr(shot, "sfx_cue", "") or "").strip()
+    sfx_part = f"；{sfx_raw}" if sfx_raw else "；伴随贴动作的真实物理拟音与自然环境底噪"
+    if not shot.spoken_text:
+        return f"纯环境写实拟音与呼吸声{sfx_part if sfx_raw else ''}。"
+
+    speaker_raw = str(shot.speaker or "角色").strip()
+    if shot.audio_type == "narration":
+        return (
+            f"{start_s}秒到{end_s}秒，{speaker_raw}画外音/内心独白（贴合当下呼吸与节奏）：“{shot.spoken_text}”"
+            f"（画面人物嘴唇闭合，继续既定动作）{sfx_part}。"
+        )
+
+    turns = [t.strip() for t in str(shot.spoken_text).split("|") if t.strip()]
+    speakers = [s.strip() for s in re.split(r"[;；、/]+", speaker_raw) if s.strip()]
+    if len(turns) <= 1:
+        voice_ref = _resolve_voice_slot_ref(speaker_raw, voice_slot_by_id, voice_slot_by_name)
+        ref_part = f"（{voice_ref}音色，自然吐字）" if voice_ref else "（自然吐字）"
+        return (
+            f"{start_s}秒到{end_s}秒，{speaker_raw}画内开口{ref_part}：“{shot.spoken_text}”"
+            f"，说话者唇形咬字精准同步{sfx_part}。"
+        )
+
+    # Multi-turn dialogue inside one shot: partition into contiguous integer sub-windows.
+    start_i = int(round(float(shot.start_seconds or 0.0)))
+    end_i = max(start_i + 1, int(round(float(shot.end_seconds or start_i + 1))))
+    total_i = max(1, end_i - start_i)
+    weights = [max(1.0, _estimate_spoken_seconds(t)) for t in turns]
+    weight_sum = sum(weights) or float(len(turns))
+    cursor = start_i
+    turn_parts: list[str] = []
+    for idx, turn_text in enumerate(turns):
+        spk = speakers[idx] if idx < len(speakers) else speakers[-1]
+        vref = _resolve_voice_slot_ref(spk, voice_slot_by_id, voice_slot_by_name)
+        ref_part = f"（{vref}音色，自然吐字）" if vref else "（自然吐字）"
+        if idx == len(turns) - 1:
+            t_end = end_i
+        else:
+            span = max(1, int(round(total_i * (weights[idx] / weight_sum))))
+            t_end = min(end_i - (len(turns) - 1 - idx), cursor + span)
+        turn_parts.append(f"{cursor}秒—{t_end}秒，{spk}画内开口{ref_part}：“{turn_text}”")
+        cursor = t_end
+    return "；".join(turn_parts) + f"，说话者按轮次唇形咬字精准同步{sfx_part}。"
+
+
+def _build_fallback_dynamic_timeline(
+    *,
+    shot: S9SubShot,
+    next_hint: str,
+) -> str:
+    start_i = int(round(float(shot.start_seconds or 0.0)))
+    end_i = max(start_i + 1, int(round(float(shot.end_seconds or start_i + 1))))
+    dur_i = end_i - start_i
+    clauses = [
+        c.strip()
+        for c in re.split(r"[。；！!？?]+", str(shot.content or "").strip())
+        if c.strip()
+    ]
+    lead_action = clauses[0] if clauses else "承接前态起幅并切入本镜主体动作"
+    mid_action = "；".join(clauses[1:]) if len(clauses) > 1 else lead_action
+    end_action = next_hint.rstrip("。")
+
+    if dur_i <= 2:
+        return (
+            f"{start_i}秒—{end_i}秒，紧接起幅完成关键动作与神态落点（{lead_action}），"
+            f"余势衔接至{end_action}。"
+        )
+    if dur_i <= 5:
+        split_1 = start_i + max(1, dur_i // 2)
+        return (
+            f"{start_i}秒—{split_1}秒，起态承接后立刻推进核心动作与视线触发（{lead_action}）；"
+            f"{split_1}秒—{end_i}秒，完成当前交互落点与情绪反馈（{mid_action}），余势顺延切出（{end_action}）。"
+        )
+    split_1 = start_i + max(1, round(dur_i * 0.3))
+    split_2 = min(end_i - 1, max(split_1 + 1, start_i + round(dur_i * 0.75)))
+    return (
+        f"{start_i}秒—{split_1}秒，承接前态建立主体站位与起势（{lead_action}）；"
+        f"{split_1}秒—{split_2}秒，紧接着展开核心交互、台词咬字与手部/视线传导（{mid_action}）；"
+        f"{split_2}秒—{end_i}秒，道具归属与动作稳妥落定（{end_action}）。"
+    )
 
 
 def build_s9_stage2_fallback_prompt(
@@ -1056,24 +1352,13 @@ def build_s9_stage2_fallback_prompt(
     for idx, shot in enumerate(segment.shots):
         start_s = _format_seconds_label(shot.start_seconds)
         end_s = _format_seconds_label(shot.end_seconds)
-        sfx_part = f"；{shot.sfx_cue}" if getattr(shot, "sfx_cue", "").strip() else "；伴随贴动作的真实物理拟音与自然环境底噪"
-        audio_desc = f"纯环境写实拟音与呼吸声{sfx_part if getattr(shot, 'sfx_cue', '').strip() else ''}。"
-        if shot.spoken_text:
-            speaker_tag = shot.speaker or "角色"
-            voice_ref = voice_slot_by_id.get(speaker_tag) or voice_slot_by_name.get(
-                speaker_tag.split("_", 1)[0].lower(), ""
-            )
-            if shot.audio_type == "narration":
-                audio_desc = (
-                    f"{start_s}秒到{end_s}秒，{speaker_tag}画外音/内心独白（贴合当下呼吸与节奏）：“{shot.spoken_text}”"
-                    f"（画面人物嘴唇闭合，继续既定动作）{sfx_part}。"
-                )
-            else:
-                ref_part = f"（{voice_ref}音色，自然吐字）" if voice_ref else "（自然吐字）"
-                audio_desc = (
-                    f"{start_s}秒到{end_s}秒，{speaker_tag}画内开口{ref_part}：“{shot.spoken_text}”"
-                    f"，说话者唇形咬字精准同步{sfx_part}。"
-                )
+        audio_desc = _format_fallback_audio_desc(
+            shot=shot,
+            start_s=start_s,
+            end_s=end_s,
+            voice_slot_by_id=voice_slot_by_id,
+            voice_slot_by_name=voice_slot_by_name,
+        )
         default_next = (
             "动作余势自然延续并切入下一分镜，严禁复位或重演。"
             if idx + 1 < len(segment.shots)
@@ -1084,10 +1369,11 @@ def build_s9_stage2_fallback_prompt(
             )
         )
         next_hint = str(getattr(shot, "transition_note", "") or "").strip() or default_next
+        timeline_desc = _build_fallback_dynamic_timeline(shot=shot, next_hint=next_hint)
         shot_blocks.append(
             f"分镜{shot.shot_number}（{start_s}秒到{end_s}秒）：{shot.title or f'镜{shot.shot_number}'}，{shot.shot_scale_movement}，{shot.camera_angle}，{shot.camera_motion}。\n"
             f"- 空间与主体：{shot.content}\n"
-            f"- 动态时间轴：承接前态后在触发点直接切入核心动作与可见部位变化，动作与台词并行紧凑推进，不留无效空等。\n"
+            f"- 动态时间轴：{timeline_desc}\n"
             f"- 音频与对白：{audio_desc}\n"
             f"- 尾帧与转场：{next_hint}"
         )
@@ -1204,6 +1490,17 @@ def audit_s9_plan_pacing(
         for s in shots:
             dur = float(s.planned_duration_seconds or 0.0)
             spoken = str(s.spoken_text or "").strip()
+            speaker_raw = str(s.speaker or "").strip()
+            turns = [t.strip() for t in spoken.split("|") if t.strip()] if spoken else []
+            multi_speaker = len(turns) >= 2 or len(
+                [p for p in re.split(r"[;；、/]+", speaker_raw) if p.strip()]
+            ) >= 2
+            prop_count = len(list(getattr(s, "prop_ids", []) or []))
+            exchange_hits = re.findall(
+                r"(扫码|装袋|找零|掏钱|拍在|递给|接过|拿烟|取烟|拿冰美式|打包)",
+                str(getattr(s, "content", "") or ""),
+            )
+
             if s.audio_type == "silence" and not spoken:
                 if dur > 4.5:
                     issues.append(
@@ -1216,6 +1513,21 @@ def audit_s9_plan_pacing(
                     issues.append(
                         f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却分配了 {dur:.1f}s（存在严重空尾/注水），应压至约 {max(2, round(est_speech + 1.0))}s 并与动作并行"
                     )
+                if est_speech >= 2.0 and dur < est_speech * 0.8:
+                    issues.append(
+                        f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却仅分配 {dur:.1f}s（语速过赶/吞词风险），请适当加长或拆分台词"
+                    )
+
+            if multi_speaker:
+                est_multi = _estimate_spoken_seconds(spoken) + 0.6 * max(1, len(turns) - 1)
+                if dur < est_multi + 2.0 or prop_count >= 3 or len(exchange_hits) >= 2:
+                    issues.append(
+                        f"大段{seg_num}-分镜{s.shot_number} 单镜内含多人轮流开口与多步动作（仅 {dur:.1f}s），极易动作快进和道具穿帮，请按说话轮次拆分为独立分镜"
+                    )
+            elif prop_count >= 4 or (len(exchange_hits) >= 3 and dur < max(7.0, _estimate_spoken_seconds(spoken) + len(exchange_hits) * 1.5)):
+                issues.append(
+                    f"大段{seg_num}-分镜{s.shot_number} 单镜塞入过多连续道具交接（{max(prop_count, len(exchange_hits))} 项操作仅 {dur:.1f}s），极易导致道具分裂/漏装，请拆分成多个分镜或精简冗余过程"
+                )
 
         if len(segments) >= 2 and seg_num < len(segments):
             if not str(getattr(seg, "exit_state", "") or "").strip():
@@ -1302,8 +1614,9 @@ async def run_s9_stage1_plan(
             + "\n\n要求：\n"
             "1. 保留原文全部台词与必要事件，绝对不要删减对白原字；\n"
             "2. 砍掉无用段首空镜、压缩话少时多的空尾秒数、让动作与台词并行；\n"
-            "3. 确保每个大段完整讲完自己的 story_beat 并在末镜落定清晰的 exit_state（下一大段 entry_state 直接承接）；\n"
-            f"4. 单段时长 <= {cap} 秒，不为了凑满 {cap} 秒拉长镜头。"
+            "3. 严禁单镜超载：把多人轮流开口或 3 项以上连续道具交接拆成多个独立分镜（必要时多拆一个短 Clip），给每个动作留足物理时间；\n"
+            "4. 确保每个大段完整讲完自己的 story_beat 并在末镜落定清晰的 exit_state，且下一大段第 1 镜必须切换景别/机位推进到新动作，严禁与上段末镜拍成同构重复画面；\n"
+            f"5. 单段时长 <= {cap} 秒（整数秒），不为了凑满 {cap} 秒硬塞或拉长镜头。"
         )
         try:
             revised = await agent.run(revision_prompt)
@@ -1328,6 +1641,7 @@ async def run_s9_stage2_segment_prompt(
     tail_anchor: bool = False,
     include_first_frame: bool = False,
     user_guidance: str = "",
+    source_text: str = "",
 ) -> str:
     """Invoke LLM to compile Stage 2 full Seedance 2.0/2.5 prompt for one 大段."""
 
@@ -1348,6 +1662,7 @@ async def run_s9_stage2_segment_prompt(
         next_segment=next_segment,
         prev_episode_context=prev_episode_context,
         user_guidance=user_guidance,
+        source_text=source_text,
     )
     agent = Agent(
         get_newapi_text_pydantic_model(
@@ -1388,6 +1703,7 @@ async def generate_all_s9_segment_prompts(
     tail_anchor: bool = False,
     include_first_frame: bool = False,
     max_concurrency: int = 4,
+    source_text: str = "",
 ) -> list[str]:
     """Generate Stage 2 continuous prompts across all 大段 with bounded concurrency."""
 
@@ -1405,6 +1721,7 @@ async def generate_all_s9_segment_prompts(
                 prev_episode_context=prev_episode_context if idx == 0 else "",
                 tail_anchor=tail_anchor,
                 include_first_frame=include_first_frame,
+                source_text=source_text,
             )
 
     return await asyncio.gather(*(_compile_one(i) for i in range(len(segments))))
@@ -1514,7 +1831,13 @@ def _match_resolved_asset_to_slot(
         key = str(getattr(asset, "key", "") or "").lower()
         label = str(getattr(asset, "label", "") or "").lower()
         suffix = key.split(":", 1)[-1] if ":" in key else key
-        if slot_id and (suffix == slot_id or key == slot_id or slot_id in key or slot_id in label):
+        if slot_id and (
+            suffix == slot_id
+            or key == slot_id
+            or slot_id in key
+            or slot_id in label
+            or (suffix and suffix in slot_id)
+        ):
             return asset
     for asset in candidates:
         label = str(getattr(asset, "label", "") or "").lower()
@@ -1727,17 +2050,69 @@ def build_s9_slots_from_beat(
                         )
                     )
         for s in subshots:
-            if s.audio_type == "dialogue" and s.speaker and s.speaker not in seen_voice:
-                seen_voice.add(s.speaker)
+            spk_clean = str(s.speaker or "").strip()
+            is_pure_narrator = "旁白" in spk_clean or spk_clean.lower() == "narrator"
+            if (
+                spk_clean
+                and (s.audio_type == "dialogue" or (s.audio_type == "narration" and not is_pure_narrator))
+                and spk_clean not in seen_voice
+            ):
+                seen_voice.add(spk_clean)
+                clean_name = re.sub(r"\s*(?:OS|os)\s*$", "", spk_clean).strip()
                 aud_slots.append(
                     S9SegmentAssetSlot(
                         slot=len(aud_slots) + 1,
                         media_type="audio",
                         asset_kind="voice",
-                        name=s.speaker.split("_", 1)[0] or s.speaker,
-                        asset_id=s.speaker,
+                        name=(clean_name.split("_", 1)[0] or clean_name) if clean_name else spk_clean,
+                        asset_id=clean_name or spk_clean,
                     )
                 )
+        # Fallback to beat-level detected fields when subshots lacked asset IDs
+        if isinstance(beat, dict):
+            if not img_slots:
+                for iid in beat.get("detected_identities") or []:
+                    clean_iid = str(iid or "").strip()
+                    if clean_iid and clean_iid not in seen_id:
+                        seen_id.add(clean_iid)
+                        img_slots.append(
+                            S9SegmentAssetSlot(
+                                slot=len(img_slots) + 1,
+                                media_type="image",
+                                asset_kind="identity",
+                                name=clean_iid.split("_", 1)[0] or clean_iid,
+                                asset_id=clean_iid,
+                            )
+                        )
+                sref = beat.get("scene_ref") or {}
+                if isinstance(sref, dict) and str(sref.get("scene_id") or "").strip():
+                    sid = str(sref.get("scene_id") or "").strip()
+                    vid = str(sref.get("variant_id") or "").strip()
+                    if sid not in seen_scene:
+                        seen_scene.add(sid)
+                        img_slots.append(
+                            S9SegmentAssetSlot(
+                                slot=len(img_slots) + 1,
+                                media_type="image",
+                                asset_kind="scene",
+                                name=sid,
+                                asset_id=sid,
+                                variant_id=vid,
+                            )
+                        )
+                for pid in beat.get("detected_props") or []:
+                    clean_pid = str(pid or "").strip()
+                    if clean_pid and clean_pid not in seen_prop:
+                        seen_prop.add(clean_pid)
+                        img_slots.append(
+                            S9SegmentAssetSlot(
+                                slot=len(img_slots) + 1,
+                                media_type="image",
+                                asset_kind="prop",
+                                name=clean_pid,
+                                asset_id=clean_pid,
+                            )
+                        )
         base_slots = img_slots + aud_slots
 
     if include_first_frame:
@@ -1783,9 +2158,19 @@ def compute_s9_manifest_with_live_status(
     if not isinstance(meta_dict, dict) or not meta_dict:
         return {}
 
-    from novelvideo.utils.path_resolver import PathResolver
+    from novelvideo.seedance2_i2v.voice_clone import (
+        find_identity_reference_audio,
+        resolve_character_voice,
+    )
+    from novelvideo.utils.path_resolver import (
+        canonical_identity_path,
+        canonical_identity_portrait_path,
+        canonical_portrait_path,
+        canonical_prop_reference_path,
+        canonical_scene_master_path,
+    )
 
-    resolver = PathResolver(output_dir)
+    project_root = Path(output_dir)
     ready_identities: set[str] = set()
     ready_scenes: set[str] = set()
     ready_props: set[str] = set()
@@ -1793,66 +2178,90 @@ def compute_s9_manifest_with_live_status(
 
     for char in characters or []:
         char_name = str(getattr(char, "name", "") or "").strip()
-        has_voice = bool(str(getattr(char, "reference_audio_path", "") or "").strip())
-        if has_voice and char_name:
+        voice_candidates: list[Path] = []
+        ref_audio = str(getattr(char, "reference_audio_path", "") or "").strip()
+        if ref_audio:
+            voice_candidates.append(
+                Path(ref_audio) if Path(ref_audio).is_absolute() else project_root / ref_audio
+            )
+        if char_name:
+            voice_candidates.append(
+                project_root / "assets" / "characters" / char_name / "voices" / "voice_default.mp3"
+            )
+        has_char_voice = any(p.exists() for p in voice_candidates)
+        if not has_char_voice and char_name:
+            try:
+                has_char_voice = resolve_character_voice(project_dir=project_root, character=char).audio_path is not None
+            except Exception:
+                has_char_voice = False
+        if has_char_voice and char_name:
             ready_voices.add(char_name)
         for ident in list(getattr(char, "identities", []) or []):
             iid = str(getattr(ident, "identity_id", "") or "").strip()
             if not iid:
                 continue
-            has_img = False
-            for getter in (
-                lambda idx=iid: resolver.identity_reference_path(idx),
-                lambda idx=iid: resolver.identity_portrait_path(idx),
-            ):
-                try:
-                    p = getter()
-                    if p and Path(p).exists():
-                        has_img = True
-                        break
-                except Exception:
-                    continue
-            if has_img:
+            ident_name = str(getattr(ident, "identity_name", "") or "").strip() or (
+                iid.split("_", 1)[1] if "_" in iid else iid
+            )
+            candidates = [
+                canonical_identity_path(project_root, char_name, ident_name),
+                canonical_identity_portrait_path(project_root, char_name, ident_name),
+                canonical_portrait_path(project_root, char_name),
+            ]
+            for portrait in list(getattr(ident, "portraits", []) or []):
+                raw_p = str(getattr(portrait, "image_path", "") or "").strip()
+                if raw_p:
+                    candidates.append(Path(raw_p) if Path(raw_p).is_absolute() else project_root / raw_p)
+            if any(p.exists() for p in candidates):
                 ready_identities.add(iid)
-            if has_voice or bool(str(getattr(ident, "voice_sample_path", "") or "").strip()):
+            has_ident_voice = has_char_voice
+            for attr_name in ("voice_sample_path", "reference_audio_path"):
+                if has_ident_voice:
+                    break
+                raw_v = str(getattr(ident, attr_name, "") or "").strip()
+                if raw_v:
+                    vp = Path(raw_v) if Path(raw_v).is_absolute() else project_root / raw_v
+                    if vp.exists():
+                        has_ident_voice = True
+            if not has_ident_voice and char_name and ident_name:
+                if find_identity_reference_audio(project_root, char_name, ident_name) is not None:
+                    has_ident_voice = True
+            if not has_ident_voice:
+                try:
+                    has_ident_voice = (
+                        resolve_character_voice(project_dir=project_root, character=char, identity=ident).audio_path
+                        is not None
+                    )
+                except Exception:
+                    has_ident_voice = False
+            if has_ident_voice:
                 ready_voices.add(iid)
                 if char_name:
                     ready_voices.add(char_name)
 
-    ep_num = int(getattr(episode, "number", 0) or 0) if episode else 0
     for item in list(getattr(episode, "scene_menu", []) or []) if episode else []:
         sid = str(getattr(item, "scene_id", "") or "").strip()
         vid = str(getattr(item, "variant_id", "") or "").strip()
         if not sid:
             continue
-        for candidate_fn in (
-            lambda s=sid, v=vid: resolver.scene_variant_path(s, v) if v else None,
-            lambda s=sid: resolver.scene_path(s),
-            lambda s=sid, e=ep_num: resolver.episode_scene_path(e, s) if e > 0 else None,
-        ):
-            try:
-                p = candidate_fn()
-                if p and Path(p).exists():
-                    ready_scenes.add(sid)
-                    break
-            except Exception:
-                continue
+        scene_candidates = [canonical_scene_master_path(project_root, f"{sid}_{vid}") if vid else canonical_scene_master_path(project_root, sid)]
+        if vid:
+            scene_candidates.append(canonical_scene_master_path(project_root, sid))
+        if "_" in sid:
+            scene_candidates.append(canonical_scene_master_path(project_root, sid.split("_", 1)[0]))
+        if any(p.exists() for p in scene_candidates):
+            ready_scenes.add(sid)
 
     for item in list(getattr(episode, "prop_menu", []) or []) if episode else []:
         pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
         if not pid:
             continue
-        for candidate_fn in (
-            lambda p_id=pid: resolver.prop_path(p_id),
-            lambda p_id=pid, e=ep_num: resolver.episode_prop_path(e, p_id) if e > 0 else None,
-        ):
-            try:
-                p = candidate_fn()
-                if p and Path(p).exists():
-                    ready_props.add(pid)
-                    break
-            except Exception:
-                continue
+        prop_candidates = [canonical_prop_reference_path(project_root, pid)]
+        ref_img = str(getattr(item, "reference_image_path", "") or "").strip() if not isinstance(item, dict) else str(item.get("reference_image_path") or "").strip()
+        if ref_img:
+            prop_candidates.append(Path(ref_img) if Path(ref_img).is_absolute() else project_root / ref_img)
+        if any(p.exists() for p in prop_candidates):
+            ready_props.add(pid)
 
     manifest = []
     for raw_item in meta_dict.get("asset_manifest") or []:

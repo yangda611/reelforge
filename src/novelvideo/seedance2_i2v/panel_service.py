@@ -474,6 +474,17 @@ async def generate_seedance2_prompt_for_panel(
                     )
                 )
         stage2_slots = (active_img_slots + active_aud_slots) or slots
+        episode_source_text = ""
+        try:
+            from novelvideo.sqlite_store import load_episode_planning_content
+
+            ep_obj = store.get_episode(episode) if hasattr(store, "get_episode") else None
+            if ep_obj is not None:
+                episode_source_text = (
+                    await load_episode_planning_content(store, ep_obj) or ""
+                ).strip()
+        except Exception:
+            episode_source_text = ""
         rendered_s9 = await run_s9_stage2_segment_prompt(
             segment=segment_plan,
             slots=stage2_slots,
@@ -483,6 +494,7 @@ async def generate_seedance2_prompt_for_panel(
             tail_anchor=bool(config.s9_tail_anchor),
             include_first_frame=bool(config.s9_include_first_frame and any(s.asset_kind == "first_frame" for s in stage2_slots)),
             user_guidance=config.prompt_guidance,
+            source_text=episode_source_text,
         )
         config.final_prompt = mark_seedance2_prompt_references_for_editor(rendered_s9)
         if not config.duration_user_set:
@@ -493,10 +505,37 @@ async def generate_seedance2_prompt_for_panel(
         config.prompt_updated_at = datetime.now().isoformat(timespec="seconds")
         saved_json = dump_seedance2_config(config)
         beat["seedance2_config_json"] = saved_json
+
+        from novelvideo.models import build_scene_ref, real_detected_identities, real_detected_props
+
+        asset_patch: dict[str, Any] = {}
+        if not real_detected_identities(beat.get("detected_identities")):
+            recovered_ids = [
+                s.asset_id for s in stage2_slots if s.asset_kind == "identity" and s.asset_id
+            ]
+            if recovered_ids:
+                asset_patch["detected_identities"] = recovered_ids
+                beat["detected_identities"] = recovered_ids
+        if not real_detected_props(beat.get("detected_props")):
+            recovered_props = [
+                s.asset_id for s in stage2_slots if s.asset_kind == "prop" and s.asset_id
+            ]
+            if recovered_props:
+                asset_patch["detected_props"] = recovered_props
+                beat["detected_props"] = recovered_props
+        existing_scene = beat.get("scene_ref") or {}
+        if not (isinstance(existing_scene, dict) and str(existing_scene.get("scene_id") or "").strip()):
+            scene_slot = next((s for s in stage2_slots if s.asset_kind == "scene" and s.asset_id), None)
+            if scene_slot is not None:
+                sref = build_scene_ref(scene_slot.asset_id, scene_slot.variant_id).model_dump()
+                asset_patch["scene_ref"] = sref
+                beat["scene_ref"] = sref
+
         await store.update_beat_asset(
             episode_number=episode,
             beat_number=int(beat.get("beat_number") or 0),
             seedance2_config_json=saved_json,
+            **asset_patch,
         )
         return saved_json
 

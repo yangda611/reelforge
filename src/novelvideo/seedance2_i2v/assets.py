@@ -37,9 +37,14 @@ from novelvideo.seedance2_i2v.voice_clone import (
     normalize_seedance2_audio_type,
     resolve_character_voice,
 )
-from novelvideo.utils.path_resolver import PathResolver
-from novelvideo.utils.path_resolver import canonical_scene_master_path
-from novelvideo.utils.path_resolver import canonical_prop_reference_path
+from novelvideo.utils.path_resolver import (
+    PathResolver,
+    canonical_identity_path,
+    canonical_identity_portrait_path,
+    canonical_portrait_path,
+    canonical_prop_reference_path,
+    canonical_scene_master_path,
+)
 
 MIN_REFERENCE_ASPECT_RATIO = 0.4
 MAX_REFERENCE_ASPECT_RATIO = 2.5
@@ -224,8 +229,17 @@ def _identity_display_label(identity_id: str) -> str:
 def _identity_asset_path(project_output: Path, identity_id: str) -> Path:
     character, identity = _split_identity_label(identity_id)
     if not identity:
-        return project_output / "assets" / "characters" / character / "portrait.png"
-    return project_output / "assets" / "characters" / character / "identities" / f"{identity}.png"
+        return canonical_portrait_path(project_output, character)
+    primary = canonical_identity_path(project_output, character, identity)
+    if primary.exists():
+        return primary
+    for fallback in (
+        canonical_identity_portrait_path(project_output, character, identity),
+        canonical_portrait_path(project_output, character),
+    ):
+        if fallback.exists():
+            return fallback
+    return primary
 
 
 def _prop_asset_path(project_output: Path, prop_id: str) -> Path:
@@ -1116,6 +1130,11 @@ def build_seedance2_project_assets(
         if s9_mode
         else []
     )
+    s9_meta = (
+        parse_s9_segment_meta(beat.get("s9_segment_meta") or beat.get("s9_segment_meta_json"))
+        if s9_mode
+        else None
+    )
 
     identity_ids: list[str] = []
     for identity_id in resolve_beat_identity_ids(
@@ -1131,6 +1150,10 @@ def build_seedance2_project_assets(
             clean = _text(iid)
             if clean and clean not in identity_ids:
                 identity_ids.append(clean)
+    if s9_meta:
+        for slot in s9_meta.segment_asset_slots:
+            if slot.asset_kind == "identity" and _text(slot.asset_id) and _text(slot.asset_id) not in identity_ids:
+                identity_ids.append(_text(slot.asset_id))
 
     for identity_id in identity_ids:
         character, identity = _split_identity_label(identity_id)
@@ -1161,6 +1184,10 @@ def build_seedance2_project_assets(
             clean = _text(pid)
             if clean and clean not in prop_ids:
                 prop_ids.append(clean)
+    if s9_meta:
+        for slot in s9_meta.segment_asset_slots:
+            if slot.asset_kind == "prop" and _text(slot.asset_id) and _text(slot.asset_id) not in prop_ids:
+                prop_ids.append(_text(slot.asset_id))
 
     def _add_scene_entries() -> None:
         if s9_mode:
@@ -1175,12 +1202,22 @@ def build_seedance2_project_assets(
                 pair = (scene_ref.scene_id, scene_ref.variant_id or "")
                 if pair not in seen_scenes:
                     seen_scenes.append(pair)
+            if s9_meta:
+                for slot in s9_meta.segment_asset_slots:
+                    if slot.asset_kind == "scene" and _text(slot.asset_id):
+                        pair = (_text(slot.asset_id), _text(slot.variant_id))
+                        if pair not in seen_scenes:
+                            seen_scenes.append(pair)
             if seen_scenes:
                 for sid, vid in seen_scenes:
                     label_key = f"{sid}_{vid}" if vid else sid
                     candidate = canonical_scene_master_path(project_output, label_key)
                     if vid and not candidate.exists():
                         base_candidate = canonical_scene_master_path(project_output, sid)
+                        if base_candidate.exists():
+                            candidate = base_candidate
+                    if not candidate.exists() and "_" in sid:
+                        base_candidate = canonical_scene_master_path(project_output, sid.split("_", 1)[0])
                         if base_candidate.exists():
                             candidate = base_candidate
                     add_image(
@@ -1247,12 +1284,17 @@ def build_seedance2_project_assets(
         _add_scene_entries()
 
     audio_type = normalize_seedance2_audio_type(beat)
-    if audio_type == "dialogue":
-        for voice_asset in _dialogue_voice_assets(
+    dialogue_voice_refs = (
+        _dialogue_voice_assets(
             project_output=project_output,
             beat=beat,
             characters=resolved_characters,
-        ):
+        )
+        if audio_type == "dialogue" or s9_mode
+        else []
+    )
+    if dialogue_voice_refs:
+        for voice_asset in dialogue_voice_refs:
             add_audio(
                 key=voice_asset["key"],
                 label=voice_asset["label"],

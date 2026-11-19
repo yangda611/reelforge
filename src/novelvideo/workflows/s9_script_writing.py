@@ -221,6 +221,7 @@ class S9ScriptWritingWorkflow:
             prev_episode_context=prev_episode_context,
             tail_anchor=bool(tail_anchor),
             include_first_frame=False,
+            source_text=resolved_text,
         )
 
         report_progress(0.85, "持久化 YD 分镜预览与 Seedance2.0 主体提示词")
@@ -245,6 +246,14 @@ class S9ScriptWritingWorkflow:
                 if not first_scene_id and s.scene_id:
                     first_scene_id = s.scene_id
                     first_scene_var = s.scene_variant_id
+            for slot in slots:
+                if slot.asset_kind == "identity" and slot.asset_id and slot.asset_id not in identities:
+                    identities.append(slot.asset_id)
+                elif slot.asset_kind == "prop" and slot.asset_id and slot.asset_id not in props:
+                    props.append(slot.asset_id)
+                elif slot.asset_kind == "scene" and not first_scene_id and slot.asset_id:
+                    first_scene_id = slot.asset_id
+                    first_scene_var = slot.variant_id
 
             planned_dur = int(segment.planned_duration_seconds)
             seg_title = f"大段{segment.segment_number} · {segment.title}"

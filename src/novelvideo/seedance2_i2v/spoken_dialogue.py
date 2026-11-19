@@ -107,7 +107,7 @@ def required_seedance2_dialogue_texts(beat: dict[str, Any]) -> list[str]:
 
 
 def unique_seedance2_dialogue_speakers(beat: dict[str, Any]) -> list[str]:
-    """Return dialogue speakers in first-spoken order."""
+    """Return dialogue (and character OS) speakers in first-spoken order."""
     from novelvideo.s9_storyboard import parse_s9_subshots
 
     seen: set[str] = set()
@@ -118,10 +118,15 @@ def unique_seedance2_dialogue_speakers(beat: dict[str, Any]) -> list[str]:
             audio_t = getattr(s, "audio_type", "") if not isinstance(s, dict) else s.get("audio_type", "")
             raw_spk = getattr(s, "speaker", "") if not isinstance(s, dict) else s.get("speaker", "")
             spk = _text(raw_spk)
-            if audio_t == "dialogue" and spk and spk not in seen:
-                seen.add(spk)
-                speakers.append(spk)
-        if speakers:
+            if not spk:
+                continue
+            is_pure_narrator = "旁白" in spk or spk.lower() == "narrator"
+            if audio_t == "dialogue" or (audio_t == "narration" and not is_pure_narrator):
+                clean_spk = re.sub(r"\s*(?:OS|os)\s*$", "", spk).strip() or spk
+                if clean_spk not in seen:
+                    seen.add(clean_spk)
+                    speakers.append(clean_spk)
+        if speakers or normalize_seedance2_audio_type(beat) == "narration":
             return speakers
 
     for line in parse_seedance2_spoken_lines(beat):
