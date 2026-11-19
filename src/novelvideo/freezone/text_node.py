@@ -431,9 +431,16 @@ async def generate_freezone_text(
 
     from novelvideo.model_gateway_runtime import model_gateway_request_scope
 
+    agent = get_freezone_text_writer_agent()
     with model_gateway_request_scope(egress_context):
-        response = await get_freezone_text_writer_agent().run(clean_prompt)
-    generated_text = str(response.output or "").strip()
+        if callable(getattr(agent, "run_stream", None)):
+            # 流式回流 token 可刷新反代/网关 120s 读超时窗口，避免长文本或 Skill 导入触发 524。
+            async with agent.run_stream(clean_prompt) as result:
+                raw_output = await result.get_output()
+        else:
+            response = await agent.run(clean_prompt)
+            raw_output = response.output
+    generated_text = str(raw_output or "").strip()
     if not generated_text:
         raise ValueError("text generation returned empty output")
     return resolve_freezone_text_writer_model(), generated_text

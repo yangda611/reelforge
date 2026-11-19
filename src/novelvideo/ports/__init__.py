@@ -86,17 +86,6 @@ def get_lifecycle_port():
     return get_port("lifecycle")
 
 
-def get_release_feed_port():
-    try:
-        return get_port("release_feed")
-    except Exception as exc:
-        if exc.__class__.__name__ != "PortNotRegistered":
-            raise
-        from novelvideo.ports.local.release_feed import NoOpReleaseFeed
-
-        return NoOpReleaseFeed()
-
-
 def get_task_projection():
     # Deliberately falls back instead of failing closed: not installing a
     # projector is the rollback, so it has to stay a legal state. See
@@ -169,7 +158,6 @@ __all__ = [
     "get_project_access",
     "get_project_registry",
     "get_provider_instrumentation",
-    "get_release_feed_port",
     "get_task_backend",
     "get_task_envelope_consumer",
     "get_task_projection",

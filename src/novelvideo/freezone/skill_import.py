@@ -43,12 +43,31 @@ def _decode_zip_filename(entry: zipfile.ZipInfo) -> str:
     return name
 
 
+_TEST_DOC_DIRS = frozenset({"tests", "test", "evals", "__tests__", "__evals__"})
+
+
 def _is_macos_metadata_entry(path: PurePosixPath) -> bool:
     return (
         "__MACOSX" in path.parts
         or path.name.startswith("._")
         or path.name == ".DS_Store"
     )
+
+
+def _is_test_doc_path(path: PurePosixPath) -> bool:
+    return path.name.lower() != "skill.md" and any(
+        part.lower() in _TEST_DOC_DIRS for part in path.parts[:-1]
+    )
+
+
+def _extract_relative_links(doc_path: str, body: str) -> list[str]:
+    targets: list[str] = []
+    for link in re.findall(r'!?\[[^\]]*\]\(([^\s)]+)(?:[^)]*)\)', body):
+        link = link.strip('<>').split('#', 1)[0]
+        if not link or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', link):
+            continue
+        targets.append(posixpath.normpath(posixpath.join(posixpath.dirname(doc_path), link)))
+    return targets
 
 
 def _decode_markdown_bytes(raw: bytes, label: str) -> str:
@@ -103,6 +122,7 @@ def read_source(name: str, encoded: str) -> dict[str, Any]:
         docs.append((file_name, _decode_markdown_bytes(data, file_name)))
         resources.add(file_name)
     elif name.lower().endswith('.zip'):
+        test_docs: list[tuple[str, str]] = []
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 entries = archive.infolist()
@@ -132,26 +152,32 @@ def read_source(name: str, encoded: str) -> dict[str, Any]:
                     if entry.is_dir():
                         continue
                     if path.suffix.lower() == '.md':
-                        docs.append(
-                            (
-                                str(path),
-                                _decode_markdown_bytes(archive.read(entry), str(path)),
-                            )
-                        )
+                        decoded = _decode_markdown_bytes(archive.read(entry), str(path))
+                        if _is_test_doc_path(path):
+                            test_docs.append((str(path), decoded))
+                        else:
+                            docs.append((str(path), decoded))
                     else:
                         warnings.append(f'Not converted or executed: {path}')
         except (zipfile.BadZipFile, RuntimeError) as exc:
             raise ValueError('Invalid ZIP archive') from exc
+        if docs:
+            referenced = {
+                target
+                for doc_path, body in docs
+                for target in _extract_relative_links(doc_path, body)
+            }
+            for doc_path, body in test_docs:
+                if doc_path in referenced:
+                    docs.append((doc_path, body))
+        else:
+            docs.extend(test_docs)
         if not _has_valid_zip_skill_entrypoint(docs):
             raise ValueError('ZIP must contain exactly one SKILL.md')
     else:
         raise ValueError('Only .md and .zip sources are supported')
     for doc_path, body in docs:
-        for link in re.findall(r'!?\[[^\]]*\]\(([^\s)]+)(?:[^)]*)\)', body):
-            link = link.strip('<>').split('#', 1)[0]
-            if not link or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', link):
-                continue
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(doc_path), link))
+        for target in _extract_relative_links(doc_path, body):
             if target not in resources:
                 warnings.append(f'Missing referenced resource: {target}')
     text = '\n\n'.join(f'--- SOURCE FILE: {path} ---\n{body}' for path, body in docs)

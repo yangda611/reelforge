@@ -346,7 +346,7 @@ def _classify_get_port_calls():
 
     A call is *fallback* when an enclosing ``try`` names ``PortNotRegistered``
     in one of its handlers — either as the caught type or, as in
-    ``get_release_feed_port``, as the class name the handler re-raises on.
+    ``get_canvas_write_mutex``, as the class name the handler re-raises on.
     Anything else is *bare*: the error reaches the caller, so the port must be
     present before the process serves traffic.
     """

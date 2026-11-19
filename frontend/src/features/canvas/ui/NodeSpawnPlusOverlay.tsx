@@ -338,7 +338,6 @@ export const NodeSpawnPlusOverlay = memo(({
 }: NodeSpawnPlusOverlayProps) => {
   const { t: _t } = useTranslation();
   void FREEZONE_VIEWER_CONTRACT_TYPES;
-  const nodes = useCanvasStore((state) => state.nodes);
   const activeOverlayNodeId = useCanvasStore((state) => state.activeOverlayNodeId);
   // 「+」与节点的间距随画布缩放：NodeToolbar 的 offset 是固定屏幕像素，画布缩小时
   // 节点变小、这段固定间距相对就显得很远。改成 offset = 基础间距 × zoom，让间距在
@@ -367,9 +366,8 @@ export const NodeSpawnPlusOverlay = memo(({
     return () => window.clearTimeout(timeout);
   }, [activeNodeId]);
 
-  const selectedNode = useMemo(
-    () => (renderNodeId ? nodes.find((node) => node.id === renderNodeId) ?? null : null),
-    [nodes, renderNodeId],
+  const selectedNode = useCanvasStore((state) =>
+    renderNodeId ? state.nodes.find((node) => node.id === renderNodeId) ?? null : null,
   );
 
   // 「引用该节点生成」+ 菜单的下游白名单，与 Canvas 拖线落空菜单共用同一份

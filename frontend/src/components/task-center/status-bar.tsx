@@ -41,11 +41,7 @@ function taskProgress(task: TaskState | null | undefined): number {
   return Math.max(0, Math.min(100, Math.round((task.progress || 0) * 100)));
 }
 
-type TaskStatusBarProps = {
-  onOpenPikoStation?: () => void;
-};
-
-export function TaskStatusBar({ onOpenPikoStation }: TaskStatusBarProps) {
+export function TaskStatusBar() {
   const { t } = useTranslation();
   // Subscribe to the tasks Map itself (stable reference unless updated) and
   // derive running/leading/last-completion via useMemo so each render does
@@ -113,7 +109,7 @@ export function TaskStatusBar({ onOpenPikoStation }: TaskStatusBarProps) {
   return (
     <footer
       style={{ height: TASK_STATUS_BAR_HEIGHT }}
-      className="relative z-50 flex shrink-0 cursor-pointer select-none items-center justify-between border-t border-white/[0.05] bg-background/82 px-3 text-[11px] backdrop-blur-xl transition-colors hover:bg-muted/15"
+      className="relative z-50 flex shrink-0 cursor-pointer select-none items-center justify-between border-t border-white/[0.05] bg-background/95 px-3 text-[11px] transition-colors hover:bg-muted/15"
       role="button"
       tabIndex={0}
       aria-label={t("taskCenter.title")}
@@ -184,29 +180,6 @@ export function TaskStatusBar({ onOpenPikoStation }: TaskStatusBarProps) {
               {progress}%
             </span>
           </span>
-        ) : null}
-        {onOpenPikoStation ? (
-          <button
-            type="button"
-            className="group ml-3 inline-flex h-8 shrink-0 items-center px-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-200/55 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            title={t("pikoMiniGame.statusTooltip")}
-            aria-label={t("pikoMiniGame.statusTooltip")}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenPikoStation();
-            }}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <img
-              src="/piko/entry/piko-game-launcher.png"
-              alt=""
-              aria-hidden="true"
-              draggable={false}
-              className="h-[30px] w-auto -translate-y-px select-none opacity-90 transition-[filter,opacity] duration-[var(--duration-fast)] group-hover:brightness-110 group-hover:opacity-100 group-focus-visible:brightness-110 group-focus-visible:opacity-100"
-            />
-          </button>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2 text-muted-foreground">

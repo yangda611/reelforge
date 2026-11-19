@@ -100,11 +100,6 @@ typography:
     fontSize: 12px
     fontWeight: 400
     lineHeight: 1.33
-  counter-pixel:
-    fontFamily: PikoCountdownPixel
-    fontSize: 72px
-    fontWeight: 600
-    lineHeight: 1
 rounded:
   sm: 12px
   md: 14px
@@ -325,8 +320,7 @@ ReelForge（虾导）是一个专业 AIGC 视频工作台：节点画布、故�
 实际层级分工：`body-sm`（12px）和 `body-md`（14px）承担约 90% 的产品文本——
 属性面板行、节点标签、任务列表。`label-md`（12px/500）用于 chip、按钮、工具条控件。
 `headline-*` 每个面板标题只出现一次。`display-lg` 只留给空状态和弹窗标题。
-`mono-sm` 仅用于 ID、路径、seed、时间码。`counter-pixel`（方舟像素数字子集）
-只作用于 Piko 小游戏倒计时，不得外泄到产品界面。
+`mono-sm` 仅用于 ID、路径、seed、时间码。
 
 ## Layout & Spacing
 

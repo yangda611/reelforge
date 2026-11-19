@@ -31,19 +31,20 @@ export function resolveMediaUrl(
   return withMediaVariant(resolved, options.variant);
 }
 
-// The single downscaled copy the frontend may request.
-// The frontend intentionally requests only the variant prewarmed by the
-// production history write path. Larger display budgets use the original.
-export type MediaVariant = "thumb";
+// Downscaled image tiers prewarmed on upload and served by the backend
+// (`novelvideo/utils/thumbnails.py`). Larger display budgets fall back to original.
+export type MediaVariant = "thumb" | "thumb2x" | "card";
 
 export const MEDIA_VARIANT_MAX_EDGE: Record<MediaVariant, number> = {
   thumb: 320,
+  thumb2x: 640,
+  card: 1280,
 };
 
-const MEDIA_VARIANT_LADDER: MediaVariant[] = ["thumb"];
+const MEDIA_VARIANT_LADDER: MediaVariant[] = ["thumb", "thumb2x", "card"];
 
 /**
- * Return ``thumb`` when its 320px edge can fill the requested device pixels,
+ * Return the smallest variant whose edge covers the requested device pixels,
  * or ``null`` so the caller uses the original.
  *
  * Device pixels, not CSS pixels: a 320px copy in a 315 CSS px box is crisp on a
@@ -51,7 +52,7 @@ const MEDIA_VARIANT_LADDER: MediaVariant[] = ["thumb"];
  * a fixed budget per call site cannot express. Callers compute the requirement
  * as `displayEdge * zoom * devicePixelRatio` and let this pick.
  *
- * `null` means "serve the original". Upscaling the 320px thumbnail is avoided
+ * `null` means "serve the original". Upscaling a thumbnail is avoided
  * because its decode saving would come with visible blur.
  */
 export function pickMediaVariant(requiredEdge: number): MediaVariant | null {

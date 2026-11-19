@@ -83,20 +83,6 @@ THIRD_PARTY_PATH_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
         "Quaternius",
         "upstream License.txt (CC0-1.0 public domain)",
     ),
-    (
-        # The Piko countdown font is an Ark Pixel subset; its OFL text ships next to it and
-        # frontend/public/fonts/README.md records the upstream and the licensing.
-        "frontend/public/fonts/piko-countdown-pixel.woff",
-        "OFL-1.1",
-        "2021 TakWolf",
-        "frontend/public/fonts/OFL.txt (Ark Pixel subset, SIL Open Font License 1.1)",
-    ),
-    (
-        "frontend/public/fonts/OFL.txt",
-        "OFL-1.1",
-        "SIL International",
-        "SIL Open Font License 1.1 text",
-    ),
 )
 
 
@@ -432,24 +418,6 @@ path = [
 ]
 precedence = "override"
 SPDX-FileCopyrightText = "Rasmus Andersson"
-SPDX-License-Identifier = "OFL-1.1"
-
-# frontend/REUSE.toml deliberately leaves public/fonts/** unannotated, so the root catch-all
-# reached it. The Piko countdown font is an OFL Ark Pixel subset and ships its license text.
-[[annotations]]
-path = [
-    "frontend/public/fonts/piko-countdown-pixel.woff",
-]
-precedence = "override"
-SPDX-FileCopyrightText = "2021 TakWolf"
-SPDX-License-Identifier = "OFL-1.1"
-
-[[annotations]]
-path = [
-    "frontend/public/fonts/OFL.txt",
-]
-precedence = "override"
-SPDX-FileCopyrightText = "SIL International"
 SPDX-License-Identifier = "OFL-1.1"
 """,
     )

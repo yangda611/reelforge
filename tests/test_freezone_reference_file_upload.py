@@ -312,3 +312,123 @@ async def test_cancelled_freezone_upload_finishes_cleanup_before_reraising(
     upload_dir = tmp_path / "freezone" / "_uploads"
     assert (upload_dir / "asset.bin").read_bytes() == b"payload"
     assert list(upload_dir.iterdir()) == [upload_dir / "asset.bin"]
+
+
+@pytest.mark.asyncio
+async def test_freezone_image_upload_returns_dimensions_and_prewarms_variants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+    from novelvideo.utils import thumbnails
+
+    _stub_freezone_upload_context(tmp_path, monkeypatch, safe_filename="shot.png")
+    buf = BytesIO()
+    Image.new("RGB", (2000, 1000), color=(40, 160, 80)).save(buf, format="PNG")
+    buf.seek(0)
+
+    result = await freezone.freezone_upload(
+        project="demo",
+        file=UploadFile(filename="shot.png", file=buf),
+        user={"username": "admin"},
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["width"] == 2000
+    assert result["data"]["height"] == 1000
+    source = tmp_path / "freezone" / "_uploads" / "shot.png"
+    for variant in ("card", "thumb2x", "thumb"):
+        assert thumbnails.fresh_thumbnail(tmp_path, source, variant) is not None
+
+
+@pytest.mark.asyncio
+async def test_freezone_upload_check_and_dedup_reuse_identical_image_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    from PIL import Image
+    from novelvideo.api.schemas import FreezoneUploadCheckRequest
+
+    _stub_freezone_upload_context(tmp_path, monkeypatch, safe_filename=None)
+    buf = BytesIO()
+    Image.new("RGB", (1600, 900), color=(90, 50, 210)).save(buf, format="PNG")
+    raw_bytes = buf.getvalue()
+    sha256_hex = hashlib.sha256(raw_bytes).hexdigest()
+
+    miss = await freezone.freezone_upload_check(
+        project="demo",
+        body=FreezoneUploadCheckRequest(sha256=sha256_hex, size=len(raw_bytes), filename="a.png"),
+        user={"username": "admin"},
+    )
+    assert miss == {"ok": True, "data": {"found": False}}
+
+    first = await freezone.freezone_upload(
+        project="demo",
+        file=UploadFile(filename="a.png", file=BytesIO(raw_bytes)),
+        user={"username": "admin"},
+    )
+    assert first["ok"] is True
+
+    hit = await freezone.freezone_upload_check(
+        project="demo",
+        body=FreezoneUploadCheckRequest(sha256=sha256_hex, size=len(raw_bytes), filename="b.png"),
+        user={"username": "admin"},
+    )
+    assert hit["ok"] is True
+    assert hit["data"]["found"] is True
+    assert hit["data"]["url"] == first["data"]["url"]
+    assert hit["data"]["width"] == 1600
+    assert hit["data"]["height"] == 900
+    assert hit["data"]["deduplicated"] is True
+
+    second = await freezone.freezone_upload(
+        project="demo",
+        file=UploadFile(filename="b.png", file=BytesIO(raw_bytes)),
+        user={"username": "admin"},
+    )
+    assert second["ok"] is True
+    assert second["data"]["deduplicated"] is True
+    assert second["data"]["url"] == first["data"]["url"]
+    upload_dir = tmp_path / "freezone" / "_uploads"
+    assert len(list(upload_dir.iterdir())) == 1
+
+
+@pytest.mark.asyncio
+async def test_freezone_prewarm_thumbnails_endpoint_queues_all_tiers_and_skips_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+    from novelvideo.api.schemas import FreezoneThumbnailPrewarmRequest
+    from novelvideo.utils import thumbnails
+
+    _stub_freezone_upload_context(tmp_path, monkeypatch, safe_filename=None)
+    source = tmp_path / "freezone" / "_outputs" / "scene.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (2400, 1350), color=(40, 120, 80)).save(source, format="PNG")
+
+    queued_calls: list[tuple[Path, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        thumbnails,
+        "prewarm",
+        lambda _project_dir, path, variants=(): (
+            queued_calls.append((path, tuple(variants))) or len(tuple(variants))
+        ),
+    )
+
+    resp = await freezone.freezone_prewarm_thumbnails(
+        project="demo",
+        body=FreezoneThumbnailPrewarmRequest(
+            urls=[
+                "/static/projects/demo/freezone/_outputs/scene.png",
+                "/static/projects/demo/freezone/_outputs/scene.png?v=1",
+                "https://evil.example.com/outside.png",
+                "/static/projects/other/freezone/_outputs/missing.png",
+            ]
+        ),
+        user={"username": "admin"},
+    )
+
+    assert resp == {"ok": True, "data": {"queued": 3}}
+    assert queued_calls == [(source, ("card", "thumb2x", "thumb"))]

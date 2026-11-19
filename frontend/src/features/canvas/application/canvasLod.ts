@@ -77,6 +77,9 @@ export function isNodeMediaActive(nodeId: string): boolean {
 /** 手势进行中挂在画布容器上；CSS 侧据此关掉 backdrop-filter / shadow / filter。 */
 export const CANVAS_PANNING_CLASS = 'dc-canvas--panning';
 
+/** 手势进行中挂在根节点上；同时关掉视口外浮动 HUD（聊天停靠窗/工具栏等）的模糊重采样。 */
+export const CANVAS_GLOBAL_GESTURING_CLASS = 'dc-canvas-gesturing';
+
 /** 低缩放档挂在画布容器上；同样关效果，另外给节点内部提供降级钩子。 */
 export const CANVAS_LOW_DETAIL_CLASS = 'dc-canvas--low-detail';
 
@@ -119,6 +122,9 @@ export function setCanvasGestureActive(active: boolean): void {
   if (gestureActive === active) return;
   const wasDeferred = isCanvasMeasurementDeferred();
   gestureActive = active;
+  if (typeof document !== 'undefined') {
+    document.documentElement.classList.toggle(CANVAS_GLOBAL_GESTURING_CLASS, active);
+  }
   notifyIfSettled(wasDeferred);
 }
 

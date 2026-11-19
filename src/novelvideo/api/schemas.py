@@ -2104,6 +2104,35 @@ class FreezoneStageAssetAcceptedResponse(BaseModel):
     data: FreezoneStageAssetAcceptedData
 
 
+class FreezoneUploadCheckRequest(BaseModel):
+    sha256: str = Field(..., min_length=64, max_length=64)
+    size: int = Field(..., ge=0)
+    filename: Optional[str] = None
+
+
+class FreezoneThumbnailPrewarmRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=128)
+
+
+class CanvasPatchPayload(BaseModel):
+    base_revision: int
+    client_save_id: Optional[str] = None
+    save_source: Literal[
+        "autosave",
+        "manual_save",
+        "agent_patch",
+    ] = "autosave"
+    upsert_nodes: list[dict] = Field(default_factory=list)
+    remove_node_ids: list[str] = Field(default_factory=list)
+    upsert_edges: list[dict] = Field(default_factory=list)
+    remove_edge_ids: list[str] = Field(default_factory=list)
+    viewport: Optional[dict] = None
+    has_viewport: bool = False
+    metadata: Optional[dict] = None
+    has_metadata: bool = False
+    allow_empty_overwrite: bool = False
+
+
 class CanvasPayload(BaseModel):
     schema_version: Optional[Literal[2]] = None
     canvas_id: Optional[str] = None

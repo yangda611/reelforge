@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -72,6 +73,7 @@ from novelvideo.api.schemas import (
     FreezoneImageAnimateRequest,
     FreezoneImageVectorizeRequest,
     FreezoneImageAnimateGifRequest,
+    CanvasPatchPayload,
     CanvasPayload,
     CreateIdentityAssetRequest,
     FreezoneAnalyzeShotsRequest,
@@ -128,6 +130,8 @@ from novelvideo.api.schemas import (
     FreezoneVideoGenRequest,
     FreezoneVideoOmniGenRequest,
     FreezoneVideoUpscaleRequest,
+    FreezoneThumbnailPrewarmRequest,
+    FreezoneUploadCheckRequest,
     ImpactRequest,
     OkResponse,
     PresetCanvasRequest,
@@ -142,6 +146,7 @@ from novelvideo.chat.hermes_workspace import (
 )
 from novelvideo.api.task_start_errors import handle_task_start_runtime_error
 from novelvideo.api.upload_workers import run_asset_upload_operation
+from novelvideo.utils import thumbnails
 from novelvideo.config import (
     IMAGE_GENERATION_SELECTIONS,
     image_generation_selection_options,
@@ -3432,6 +3437,14 @@ async def _finalize_skill_run_outputs(
                     user_action_hint="Retry the skill run. If this repeats, inspect the canonical slot target.",
                 )
         finalized.append(item)
+        final_url = str(item.get("image_url") or "").strip()
+        if final_url:
+            try:
+                final_path = resolve_static_url_to_path(final_url, project_dir)
+                if final_path.exists() and final_path.is_file() and thumbnails.is_thumbnailable(final_path):
+                    thumbnails.prewarm(project_dir, final_path, ("card", "thumb2x", "thumb"))
+            except Exception:
+                logger.debug("skill output thumbnail prewarm skipped for %s", final_url, exc_info=True)
 
     if outputs and (changed or metadata.get("status") != "completed"):
         metadata["status"] = "completed"
@@ -3609,6 +3622,74 @@ async def list_freezone_hermes_skills(user: dict = Depends(get_api_user)):
         "ok": True,
         "data": list_freezone_hermes_workflow_skills(username),
     }
+
+
+@router.get("/freezone/native-skills", tags=[TAG_FREEZONE_AGENT_CONFIG])
+async def list_freezone_native_skills(user: dict = Depends(get_api_user)):
+    from novelvideo.freezone.native_skill_store import list_user_native_skills
+
+    username = str(user.get("username") or "")
+    items = [
+        {
+            "id": item["id"],
+            "name": item["name"],
+            "description": item["description"],
+            "source_name": item.get("source_name", ""),
+            "file_count": item.get("file_count", 0),
+            "files": item.get("files", []),
+            "warnings": item.get("warnings", []),
+            "installed_at": item.get("installed_at"),
+        }
+        for item in list_user_native_skills(username)
+    ]
+    return {"ok": True, "data": items}
+
+
+@router.get("/freezone/native-skills/{skill_id}/file", tags=[TAG_FREEZONE_AGENT_CONFIG])
+async def read_freezone_native_skill_file_route(
+    skill_id: str,
+    path: str = "SKILL.md",
+    user: dict = Depends(get_api_user),
+):
+    from novelvideo.freezone.native_skill_store import read_user_native_skill_file
+
+    username = str(user.get("username") or "")
+    try:
+        data = read_user_native_skill_file(
+            username=username,
+            skill_id=skill_id,
+            file_path=path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True, "data": data}
+
+
+@router.delete("/freezone/native-skills/{skill_id}", tags=[TAG_FREEZONE_AGENT_CONFIG])
+async def remove_freezone_native_skill(
+    skill_id: str,
+    user: dict = Depends(get_api_user),
+):
+    from novelvideo.freezone.native_skill_store import delete_user_native_skill
+
+    username = str(user.get("username") or "")
+    try:
+        deleted = delete_user_native_skill(username=username, skill_id=skill_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if deleted:
+        sync_freezone_hermes_workflow_skills(username)
+        try:
+            from novelvideo.chat.hermes_pool import pool as hermes_pool
+
+            hermes_pool.mark_user_freezone_profiles_dirty(username)
+        except Exception:
+            logger.exception(
+                "failed to mark Freezone Hermes worker dirty after native skill delete"
+            )
+    return {"ok": True, "data": {"deleted": deleted}}
 
 
 @router.post("/freezone/agent-config/{kind}", tags=[TAG_FREEZONE_AGENT_CONFIG])
@@ -4454,6 +4535,135 @@ def _persist_freezone_upload(target: Path, contents: bytes) -> None:
         staged_path.unlink(missing_ok=True)
 
 
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _upload_index_file(project_dir: Path, sha256_hex: str) -> Path:
+    return project_dir / "freezone" / "_upload_index" / f"{sha256_hex}.json"
+
+
+def _lookup_dedup_upload_sync(
+    ctx: ProjectContext,
+    project_dir: Path,
+    sha256_hex: str,
+    *,
+    expected_size: int | None = None,
+) -> dict[str, Any] | None:
+    normalized = (sha256_hex or "").strip().lower()
+    if not _SHA256_HEX_RE.match(normalized):
+        return None
+    index_file = _upload_index_file(project_dir, normalized)
+    if not index_file.is_file():
+        return None
+    try:
+        record = json.loads(index_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    rel = record.get("rel")
+    if not isinstance(rel, str) or not rel:
+        return None
+    try:
+        project_resolved = project_dir.resolve()
+        target = (project_dir / rel).resolve()
+        target.relative_to(project_resolved)
+    except (OSError, ValueError):
+        return None
+    if not target.is_file():
+        return None
+    try:
+        actual_size = target.stat().st_size
+    except OSError:
+        return None
+    if expected_size is not None and actual_size != expected_size:
+        return None
+
+    width = record.get("width")
+    height = record.get("height")
+    if thumbnails.is_thumbnailable(target):
+        if not (isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0):
+            dims = thumbnails.probe_image_dimensions(target)
+            if dims is not None:
+                width, height = dims
+        thumbnails.ensure_variants(
+            project_dir, target, ("card", "thumb2x", "thumb")
+        )
+
+    payload: dict[str, Any] = {
+        "url": make_static_url_for_context(ctx, rel, local_path=target),
+        "filename": str(record.get("filename") or target.name),
+        "size": actual_size,
+        "deduplicated": True,
+    }
+    if isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0:
+        payload["width"] = width
+        payload["height"] = height
+    return payload
+
+
+def _record_dedup_upload_sync(
+    project_dir: Path,
+    sha256_hex: str,
+    *,
+    rel: str,
+    filename: str,
+    size: int,
+    dims: tuple[int, int] | None,
+) -> None:
+    normalized = (sha256_hex or "").strip().lower()
+    if not _SHA256_HEX_RE.match(normalized):
+        return
+    index_file = _upload_index_file(project_dir, normalized)
+    try:
+        index_file.parent.mkdir(parents=True, exist_ok=True)
+        record: dict[str, Any] = {
+            "sha256": normalized,
+            "rel": rel,
+            "filename": filename,
+            "size": size,
+        }
+        if dims is not None:
+            record["width"] = dims[0]
+            record["height"] = dims[1]
+        tmp = index_file.with_name(f".{normalized}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(index_file)
+    except OSError:
+        logger.debug("upload dedup index write skipped for %s", sha256_hex, exc_info=True)
+
+
+def _persist_and_prepare_freezone_upload(
+    ctx: ProjectContext,
+    project_dir: Path,
+    target: Path,
+    contents: bytes,
+) -> tuple[tuple[int, int] | None, dict[str, Any] | None]:
+    sha256_hex = hashlib.sha256(contents).hexdigest()
+    existing = _lookup_dedup_upload_sync(
+        ctx, project_dir, sha256_hex, expected_size=len(contents)
+    )
+    if existing is not None:
+        return None, existing
+
+    _persist_freezone_upload(target, contents)
+    dims = thumbnails.probe_image_dimensions(target)
+    if thumbnails.is_thumbnailable(target):
+        thumbnails.ensure_variants(
+            project_dir, target, ("card", "thumb2x", "thumb")
+        )
+    rel = target.relative_to(project_dir).as_posix()
+    _record_dedup_upload_sync(
+        project_dir,
+        sha256_hex,
+        rel=rel,
+        filename=target.name,
+        size=len(contents),
+        dims=dims,
+    )
+    return dims, None
+
+
 async def _save_freezone_upload(
     project: str,
     file: UploadFile,
@@ -4468,16 +4678,75 @@ async def _save_freezone_upload(
     filename = safe_upload_filename(file.filename)
     target = target_dir / filename
     contents = await _read_upload_contents(file, max_bytes=max_bytes)
-    await run_asset_upload_operation(_persist_freezone_upload, target, contents)
+    dims, dedup_hit = await run_asset_upload_operation(
+        _persist_and_prepare_freezone_upload, ctx, project_dir, target, contents
+    )
+    if dedup_hit is not None:
+        return {"ok": True, "data": dedup_hit}
     rel = target.relative_to(project_dir).as_posix()
+    data: dict[str, Any] = {
+        "url": (make_static_url_for_context(ctx, rel, local_path=target)),
+        "filename": filename,
+        "size": len(contents),
+    }
+    if dims is not None:
+        data["width"] = dims[0]
+        data["height"] = dims[1]
     return {
         "ok": True,
-        "data": {
-            "url": (make_static_url_for_context(ctx, rel, local_path=target)),
-            "filename": filename,
-            "size": len(contents),
-        },
+        "data": data,
     }
+
+
+@router.post("/projects/{project}/freezone/upload/check", tags=[TAG_FREEZONE_MEDIA])
+async def freezone_upload_check(
+    project: str,
+    body: FreezoneUploadCheckRequest,
+    user: dict = Depends(get_api_user),
+):
+    """内容寻址秒传预检：同项目内已存在相同 SHA-256 文件时直接复用，免传字节。"""
+    ctx, _username, _project_name, project_dir, _output_dir = (
+        await _resolve_freezone_project(project, user)
+    )
+    hit = await asyncio.to_thread(
+        _lookup_dedup_upload_sync,
+        ctx,
+        project_dir,
+        body.sha256,
+        expected_size=body.size,
+    )
+    if hit is None:
+        return {"ok": True, "data": {"found": False}}
+    return {"ok": True, "data": {"found": True, **hit}}
+
+
+@router.post("/projects/{project}/freezone/thumbnails/prewarm", tags=[TAG_FREEZONE_MEDIA])
+async def freezone_prewarm_thumbnails(
+    project: str,
+    body: FreezoneThumbnailPrewarmRequest,
+    user: dict = Depends(get_api_user),
+):
+    """异步预热老画布或生成图缺少的多档 WebP 缩略图 (`card` / `thumb2x` / `thumb`)。"""
+    _ctx, _username, _project_name, project_dir, _output_dir = (
+        await _resolve_freezone_project(project, user)
+    )
+    queued = 0
+    seen: set[Path] = set()
+    for raw_url in body.urls:
+        url = (raw_url or "").strip()
+        if not url:
+            continue
+        try:
+            source = resolve_static_url_to_path(url, project_dir)
+        except (OSError, ValueError):
+            continue
+        if source in seen or not source.exists() or not source.is_file():
+            continue
+        seen.add(source)
+        if not thumbnails.is_thumbnailable(source):
+            continue
+        queued += thumbnails.prewarm(project_dir, source, ("card", "thumb2x", "thumb"))
+    return {"ok": True, "data": {"queued": queued}}
 
 
 @router.post("/projects/{project}/freezone/upload", tags=[TAG_FREEZONE_MEDIA])
@@ -13765,14 +14034,19 @@ async def get_canvas(project: str, canvas_id: str, user: dict = Depends(get_api_
         )
     )
     canvas_project_dir = _canvas_state_project_dir(ctx, project_dir)
-    try:
+    actor_id = _canvas_actor_id(user)
+
+    def _read_sync() -> dict | None:
         if canvas_id == "default":
             canvas_store.ensure_default_canvas(
                 canvas_project_dir,
                 project_id=ctx.project_id,
-                actor_id=_canvas_actor_id(user),
+                actor_id=actor_id,
             )
-        payload = canvas_store.read_canvas(canvas_project_dir, canvas_id)
+        return canvas_store.read_canvas(canvas_project_dir, canvas_id)
+
+    try:
+        payload = await asyncio.to_thread(_read_sync)
     except (canvas_store.CanvasStoreError, CanvasLockBusy) as exc:
         _raise_canvas_store_http(exc)
     if payload is None:
@@ -13787,27 +14061,138 @@ async def get_canvas(project: str, canvas_id: str, user: dict = Depends(get_api_
         project_dir=project_dir,
         payload=payload,
     )
-    migrated_payload = migrate_canvas_static_urls_in_memory(
-        refreshed_payload or {"nodes": [], "edges": []},
-        project_id=ctx.project_id,
-        owner_username=ctx.owner_username,
-        project_name=ctx.project_name,
+
+    def _finalize_read_sync() -> dict[str, Any]:
+        migrated_payload = migrate_canvas_static_urls_in_memory(
+            refreshed_payload or {"nodes": [], "edges": []},
+            project_id=ctx.project_id,
+            owner_username=ctx.owner_username,
+            project_name=ctx.project_name,
+            project_dir=project_dir,
+        )
+        response: dict[str, Any] = {
+            "ok": True,
+            "data": migrated_payload or {"nodes": [], "edges": []},
+        }
+        editing_by = canvas_store.canvas_editing_hint(
+            payload, viewer_id=actor_id
+        )
+        if editing_by:
+            response["editing_by"] = editing_by
+        foreign_media = scan_foreign_media_refs(
+            response["data"], project_id=ctx.project_id
+        )
+        if foreign_media:
+            response["foreign_media"] = [ref.as_dict() for ref in foreign_media]
+        return response
+
+    return await asyncio.to_thread(_finalize_read_sync)
+
+
+@router.get(
+    "/projects/{project}/freezone/canvases/{canvas_id}/delta",
+    tags=[TAG_FREEZONE_CANVAS],
+)
+async def get_canvas_delta(
+    project: str,
+    canvas_id: str,
+    since_revision: int = Query(0, ge=0),
+    user: dict = Depends(get_api_user),
+):
+    """Return incremental canvas node/edge delta since `since_revision`, or full fallback."""
+    if not CANVAS_ID_RE.match(canvas_id):
+        raise HTTPException(400, "invalid canvas_id")
+    ctx, username, project_name, project_dir, _output_dir = (
+        await _resolve_freezone_project(
+            project,
+            user,
+            required_role="viewer",
+            require_home_node=False,
+        )
+    )
+    canvas_project_dir = _canvas_state_project_dir(ctx, project_dir)
+    try:
+        delta = await asyncio.to_thread(
+            canvas_store.read_canvas_delta,
+            canvas_project_dir,
+            canvas_id,
+            since_revision=since_revision,
+        )
+    except (canvas_store.CanvasStoreError, CanvasLockBusy) as exc:
+        _raise_canvas_store_http(exc)
+
+    mode = delta.get("mode")
+    if mode == "noop":
+        return {"ok": True, "data": delta}
+
+    if mode == "delta":
+        def _finalize_delta_sync() -> dict[str, Any]:
+            migrated_nodes = migrate_canvas_static_urls_in_memory(
+                {"nodes": delta.get("upsert_nodes") or []},
+                project_id=ctx.project_id,
+                owner_username=ctx.owner_username,
+                project_name=ctx.project_name,
+                project_dir=project_dir,
+            ) or {"nodes": []}
+            result = {
+                **delta,
+                "upsert_nodes": migrated_nodes.get("nodes") or [],
+            }
+            if result.get("has_metadata"):
+                migrated_meta = migrate_canvas_static_urls_in_memory(
+                    {"metadata": result.get("metadata")},
+                    project_id=ctx.project_id,
+                    owner_username=ctx.owner_username,
+                    project_name=ctx.project_name,
+                    project_dir=project_dir,
+                ) or {}
+                result["metadata"] = migrated_meta.get("metadata")
+            foreign_media = scan_foreign_media_refs(
+                {"nodes": result["upsert_nodes"]}, project_id=ctx.project_id
+            )
+            if foreign_media:
+                result["foreign_media"] = [ref.as_dict() for ref in foreign_media]
+            return {"ok": True, "data": result}
+
+        return await asyncio.to_thread(_finalize_delta_sync)
+
+    raw_canvas = delta.get("canvas")
+    if raw_canvas is None:
+        return {
+            "ok": True,
+            "data": {
+                "mode": "full",
+                "revision": None,
+                "canvas": {"nodes": [], "edges": [], "viewport": None},
+            },
+        }
+    refreshed = await _refresh_preset_canvas_payload_on_read(
+        ctx=ctx,
+        username=username,
+        project_name=project_name,
         project_dir=project_dir,
+        payload=raw_canvas,
     )
-    response = {"ok": True, "data": migrated_payload or {"nodes": [], "edges": []}}
-    # B2 §3.9 O2:最近有别人写过就带一句提示,零额外往返——判断只用刚读出来的
-    # 那份载荷。字段挂在 `data` 之外,画布契约(`CanvasPayload`)一个字节不变(B2-6)。
-    editing_by = canvas_store.canvas_editing_hint(
-        payload, viewer_id=_canvas_actor_id(user)
-    )
-    if editing_by:
-        response["editing_by"] = editing_by
-    # 历史遗留的外项目引用不拦保存,只在读取期报出来:前端据此把节点显示成
-    # 「素材属于其他项目」并给修复入口,不再只给一片裂图。同样挂在 `data` 之外。
-    foreign_media = scan_foreign_media_refs(response["data"], project_id=ctx.project_id)
-    if foreign_media:
-        response["foreign_media"] = [ref.as_dict() for ref in foreign_media]
-    return response
+
+    def _finalize_full_sync() -> dict[str, Any]:
+        migrated = migrate_canvas_static_urls_in_memory(
+            refreshed or {"nodes": [], "edges": []},
+            project_id=ctx.project_id,
+            owner_username=ctx.owner_username,
+            project_name=ctx.project_name,
+            project_dir=project_dir,
+        ) or {"nodes": [], "edges": []}
+        foreign_media = scan_foreign_media_refs(migrated, project_id=ctx.project_id)
+        data: dict[str, Any] = {
+            "mode": "full",
+            "revision": migrated.get("revision"),
+            "canvas": migrated,
+        }
+        if foreign_media:
+            data["foreign_media"] = [ref.as_dict() for ref in foreign_media]
+        return {"ok": True, "data": data}
+
+    return await asyncio.to_thread(_finalize_full_sync)
 
 
 @router.get(
@@ -16138,18 +16523,21 @@ async def put_canvas(
         return prepared
 
     try:
+        request_hash = await asyncio.to_thread(
+            lambda: canvas_store.canvas_request_hash(
+                body.model_dump(
+                    exclude={"client_save_id"},
+                    exclude_none=True,
+                )
+            )
+        )
         saved_canvas = await canvas_store.save_canvas_async(
             canvas_project_dir,
             canvas_id,
             base_revision=body.base_revision,
             build_payload=build_payload,
             client_save_id=body.client_save_id,
-            request_hash=canvas_store.canvas_request_hash(
-                body.model_dump(
-                    exclude={"client_save_id"},
-                    exclude_none=True,
-                )
-            ),
+            request_hash=request_hash,
             save_source=body.save_source,
             allow_empty_overwrite=body.allow_empty_overwrite,
         )
@@ -16193,6 +16581,115 @@ async def put_canvas(
                 "edge_count": len(payload.get("edges") or []),
                 "client_save_id": body.client_save_id,
                 "save_source": body.save_source,
+                "backup_path": canvas_store.relative_project_path(
+                    canvas_project_dir,
+                    saved_canvas.backup_path,
+                ),
+            },
+        )
+    response_data = saved_canvas.response_cache or {
+        "saved": True,
+        "revision": payload.get("revision"),
+        "updated_at": payload.get("updated_at"),
+        "client_save_id": body.client_save_id,
+    }
+    return {"ok": True, "data": response_data}
+
+
+@router.patch(
+    "/projects/{project}/freezone/canvases/{canvas_id}", tags=[TAG_FREEZONE_CANVAS]
+)
+async def patch_canvas(
+    project: str,
+    canvas_id: str,
+    body: CanvasPatchPayload,
+    user: dict = Depends(get_api_user),
+):
+    """Apply an incremental node/edge/metadata patch onto a persisted canvas."""
+    if not CANVAS_ID_RE.match(canvas_id):
+        raise HTTPException(400, "invalid canvas_id")
+    ctx, _username, _project_name, project_dir, _output_dir = (
+        await _resolve_freezone_project(
+            project,
+            user,
+            require_home_node=False,
+        )
+    )
+    canvas_project_dir = _canvas_state_project_dir(ctx, project_dir)
+    patch_dict = body.model_dump(exclude={"client_save_id"}, exclude_none=False)
+
+    def build_payload(existing: dict | None) -> dict:
+        if existing is None:
+            raise canvas_store.CanvasBaseRevisionRequired()
+        merged = canvas_store.apply_canvas_patch_to_existing(existing, patch_dict)
+        prepared = _prepare_canvas_payload_for_write(
+            project_id=project,
+            canvas_id=canvas_id,
+            body=None,
+            raw_payload=merged,
+            existing=existing,
+            user=user,
+        )
+        _stamp_canvas_mainline_context_project_id(prepared, project)
+        reject_new_foreign_media_refs(prepared, existing=existing, project_id=ctx.project_id)
+        return prepared
+
+    try:
+        request_hash = await asyncio.to_thread(
+            lambda: canvas_store.canvas_request_hash(patch_dict)
+        )
+        saved_canvas = await canvas_store.patch_canvas_async(
+            canvas_project_dir,
+            canvas_id,
+            base_revision=body.base_revision,
+            build_payload=build_payload,
+            client_save_id=body.client_save_id,
+            request_hash=request_hash,
+            save_source=body.save_source,
+            allow_empty_overwrite=body.allow_empty_overwrite,
+        )
+    except CanvasMediaScopeError as exc:
+        raise HTTPException(
+            422,
+            {
+                "code": "canvas_media_scope_mismatch",
+                "project_id": ctx.project_id,
+                "refs": [ref.as_dict() for ref in exc.refs],
+            },
+        ) from exc
+    except (canvas_store.CanvasStoreError, CanvasLockBusy) as exc:
+        _raise_canvas_store_http(exc)
+
+    payload = saved_canvas.payload
+    try:
+        await asyncio.to_thread(
+            reconcile_workflow_runs_with_canvas_nodes,
+            project_dir=canvas_project_dir,
+            canvas_id=canvas_id,
+            existing_node_ids={
+                str(node.get("id") or "")
+                for node in payload.get("nodes") or []
+                if isinstance(node, dict) and str(node.get("id") or "")
+            },
+        )
+    except CanvasLockBusy as exc:
+        _raise_canvas_store_http(exc)
+
+    if not saved_canvas.idempotent:
+        _append_canvas_event(
+            project_dir=canvas_project_dir,
+            project_id=project,
+            canvas_id=canvas_id,
+            event_type="canvas.saved",
+            actor=_canvas_event_actor(user),
+            payload={
+                "revision": payload.get("revision"),
+                "base_revision": body.base_revision,
+                "node_count": len(payload.get("nodes") or []),
+                "edge_count": len(payload.get("edges") or []),
+                "client_save_id": body.client_save_id,
+                "save_source": body.save_source,
+                "incremental_patch": True,
                 "backup_path": canvas_store.relative_project_path(
                     canvas_project_dir,
                     saved_canvas.backup_path,

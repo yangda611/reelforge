@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Handle,
   Position,
+  useStore,
   useUpdateNodeInternals,
   type NodeProps,
 } from '@xyflow/react';
@@ -25,9 +26,18 @@ import {
   type ImageGenNodeData,
 } from '@/features/canvas/domain/canvasNodes';
 import {
+  nodeBodyImageMeasurement,
+  nodeBodyImageSrc,
+  nodeBodyRecordDescribesImage,
+  planNaturalSizeRecordWrite,
+  readNodeNaturalSize,
   resolveImageDisplayUrl,
+  shouldUseOriginalImageByZoom,
   withImageCacheBust,
 } from '@/features/canvas/application/imageData';
+import { withMediaVariant } from '@/lib/media-url';
+import { useNaturalSizeRecordTrust } from '@/features/canvas/hooks/useNaturalSizeRecordTrust';
+import { useNodeBodyVariantBudget } from '@/features/canvas/hooks/useNodeBodyVariantBudget';
 import {
   aspectRatioFromImageDimensions,
   resolveMinEdgeFittedSize,
@@ -291,11 +301,25 @@ export const ImageGenNode = memo(({ id, data, selected, width, height }: ImageGe
   );
   const resolvedWidth = Math.max(MIN_WIDTH, Math.round(width ?? DEFAULT_WIDTH));
   const resolvedHeight = Math.max(MIN_HEIGHT, Math.round(height ?? DEFAULT_HEIGHT));
+  const preferOriginalImage = useStore((state) => shouldUseOriginalImageByZoom(state.transform[2]));
+  const bodyVariantBudget = useNodeBodyVariantBudget({
+    width: resolvedWidth,
+    height: resolvedHeight,
+  });
   // 收起态浮动面板固定基础尺寸；放大用居中弹窗（见下方 OperationPanelShell）。
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
   const panelHeight = OPERATIONS_PANEL_HEIGHT;
   const panelWidth = Math.max(resolvedWidth, OPERATIONS_PANEL_MIN_WIDTH);
+
+  const recordedNaturalSize = useMemo(() => readNodeNaturalSize(data), [data]);
+  const ownPreviewRaw = data.previewImageUrl || data.imageUrl || null;
+  const recordSubject = useMemo(() => {
+    if (!ownPreviewRaw) return null;
+    const committedAt = (data as { committed_at?: unknown }).committed_at;
+    return `${ownPreviewRaw}\u0000${typeof committedAt === 'string' ? committedAt : ''}`;
+  }, [data, ownPreviewRaw]);
+  const { distrusted, distrustRecord, trustAgain } = useNaturalSizeRecordTrust(recordSubject);
 
   const previewUrl = useMemo(() => {
     if (data.previewImageUrl) return resolveImageDisplayUrl(data.previewImageUrl);
@@ -304,6 +328,32 @@ export const ImageGenNode = memo(({ id, data, selected, width, height }: ImageGe
     return null;
   }, [data.imageUrl, data.previewImageUrl, referenceImageUrl]);
   const visiblePreviewUrl = isGenerating ? null : previewUrl;
+
+  const bodyImage = useMemo(() => {
+    if (isGenerating || !ownPreviewRaw) return null;
+    const picked = preferOriginalImage
+      ? data.imageUrl || data.previewImageUrl
+      : data.previewImageUrl || data.imageUrl;
+    if (!picked) return null;
+    const resolved = resolveImageDisplayUrl(
+      withImageCacheBust(picked, (data as { committed_at?: unknown }).committed_at as string | undefined),
+    );
+    return nodeBodyImageSrc(resolved, recordedNaturalSize, {
+      preferOriginal: preferOriginalImage || distrusted,
+      requiredEdge: bodyVariantBudget,
+    });
+  }, [
+    bodyVariantBudget,
+    data,
+    data.imageUrl,
+    data.previewImageUrl,
+    distrusted,
+    isGenerating,
+    ownPreviewRaw,
+    preferOriginalImage,
+    recordedNaturalSize,
+  ]);
+  const bodyImageSrc = bodyImage?.src ?? visiblePreviewUrl;
 
   const hasGeneratedResult = Boolean(data.imageUrl);
   // Natural pixel size of the displayed image, mirrored from data when present
@@ -766,31 +816,45 @@ export const ImageGenNode = memo(({ id, data, selected, width, height }: ImageGe
           albumExpanded && hasAlbum ? 'invisible' : ''
         }`}
       >
-        {visiblePreviewUrl ? (
+        {visiblePreviewUrl && bodyImageSrc ? (
           <>
             <CanvasNodeImage
-              src={visiblePreviewUrl}
+              src={bodyImageSrc}
               alt={resolvedTitle}
               viewerSourceUrl={visiblePreviewUrl}
               viewerNodeId={id}
               viewerImageList={viewerImageList}
               onLoad={(event) => {
-                const naturalW = event.currentTarget.naturalWidth;
-                const naturalH = event.currentTarget.naturalHeight;
-                if (naturalW > 0 && naturalH > 0) {
+                if (
+                  bodyImage?.downscaled &&
+                  !nodeBodyRecordDescribesImage(
+                    event.currentTarget,
+                    recordedNaturalSize,
+                    bodyImage.maxEdge ?? 0,
+                  )
+                ) {
+                  distrustRecord();
+                  return;
+                }
+                const measuringRecordSubject = Boolean(ownPreviewRaw) && !preferOriginalImage;
+                if (measuringRecordSubject) {
+                  trustAgain();
+                }
+                const measured = bodyImage
+                  ? nodeBodyImageMeasurement(event.currentTarget, bodyImage, recordedNaturalSize)
+                  : { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight };
+                if (measured.width > 0 && measured.height > 0) {
                   setNaturalSize((prev) =>
-                    prev && prev.width === naturalW && prev.height === naturalH
+                    prev && prev.width === measured.width && prev.height === measured.height
                       ? prev
-                      : { width: naturalW, height: naturalH },
+                      : { width: measured.width, height: measured.height },
                   );
                 }
                 const forceNaturalSize = shouldForceNaturalImageSize(data as Record<string, unknown>);
-                if (data.isSizeManuallyAdjusted === true && !forceNaturalSize) {
-                  return;
-                }
+                const sizeLockedByUser = data.isSizeManuallyAdjusted === true && !forceNaturalSize;
                 const nextAspectRatio = aspectRatioFromImageDimensions(
-                  event.currentTarget.naturalWidth,
-                  event.currentTarget.naturalHeight,
+                  measured.width,
+                  measured.height,
                 );
                 if (!nextAspectRatio) {
                   return;
@@ -802,13 +866,48 @@ export const ImageGenNode = memo(({ id, data, selected, width, height }: ImageGe
                 const displaySizeMismatch =
                   Math.abs(resolvedWidth - nextSize.width) > 1 ||
                   Math.abs(resolvedHeight - nextSize.height) > 1;
+                if (ownPreviewRaw) {
+                  const recordWrite = planNaturalSizeRecordWrite({
+                    aspectRatioChanged: nextAspectRatio !== data.aspectRatio,
+                    displaySizeMismatch,
+                    record: recordedNaturalSize,
+                    measured,
+                    measuringRecordSubject,
+                    sizeLockedByUser,
+                  });
+                  if (!recordWrite.persist) {
+                    return;
+                  }
+                  if (!recordWrite.applySize) {
+                    updateNodeData(
+                      id,
+                      { imageNaturalWidth: measured.width, imageNaturalHeight: measured.height },
+                      { recordHistory: false },
+                    );
+                    return;
+                  }
+                  updateNodeSize(id, nextSize, {
+                    lockManualSize: forceNaturalSize ? false : undefined,
+                    recordHistory: recordWrite.recordHistory,
+                    data: {
+                      aspectRatio: nextAspectRatio,
+                      imageNaturalWidth: measured.width,
+                      imageNaturalHeight: measured.height,
+                      imageAspectRatioUpdatedAt: Date.now(),
+                    },
+                  });
+                  return;
+                }
+                if (sizeLockedByUser) {
+                  return;
+                }
                 if (nextAspectRatio !== data.aspectRatio || displaySizeMismatch) {
                   updateNodeSize(id, nextSize, {
                     lockManualSize: forceNaturalSize ? false : undefined,
                     data: {
                       aspectRatio: nextAspectRatio,
-                      imageNaturalWidth: event.currentTarget.naturalWidth,
-                      imageNaturalHeight: event.currentTarget.naturalHeight,
+                      imageNaturalWidth: measured.width,
+                      imageNaturalHeight: measured.height,
                       imageAspectRatioUpdatedAt: Date.now(),
                     },
                   });
@@ -1014,8 +1113,9 @@ export const ImageGenNode = memo(({ id, data, selected, width, height }: ImageGe
                 style={{ width: resolvedWidth, height: resolvedHeight }}
               >
                 <img
-                  src={resolveImageDisplayUrl(url)}
+                  src={withMediaVariant(resolveImageDisplayUrl(url), 'thumb2x')}
                   alt=""
+                  decoding="async"
                   className="h-full w-full object-cover"
                   draggable={false}
                 />

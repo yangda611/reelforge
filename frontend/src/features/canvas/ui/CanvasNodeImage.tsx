@@ -49,6 +49,7 @@ export const CanvasNodeImage = memo(({
   return (
     <img
       draggable={false}
+      decoding="async"
       {...props}
       src={displaySrc}
       data-viewer-src={

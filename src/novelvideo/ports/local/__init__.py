@@ -23,7 +23,6 @@ from novelvideo.ports.local.credit_quote import LocalCreditQuote
 from novelvideo.ports.local.egress_operations import LocalEgressOperations
 from novelvideo.ports.local.lifecycle import NoOpLifecycle
 from novelvideo.ports.local.project import AllowAllProjectAccess, SQLiteProjectRegistry
-from novelvideo.ports.local.release_feed import LocalReleaseFeed
 from novelvideo.ports.local.tasks import InlineTaskBackend, InMemoryCancellationStore
 from novelvideo.ports.local.usage import NoOpProviderInstrumentation, NoOpUsageMeter
 from novelvideo.ports.product_surface_access import LocalProductSurfaceAccess
@@ -140,7 +139,6 @@ def register_local_ports() -> None:
         ("cancellation_store", InMemoryCancellationStore()),
         ("audit_sink", NoOpAuditSink()),
         ("lifecycle", NoOpLifecycle()),
-        ("release_feed", LocalReleaseFeed()),
         ("product_surface_access", LocalProductSurfaceAccess()),
         ("model_credentials", LocalModelCredentials()),
         ("authz", authz),

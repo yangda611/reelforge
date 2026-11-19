@@ -435,3 +435,25 @@ def test_zip_multi_md_without_skill_entrypoint_is_still_rejected():
         archive.writestr('demo/b.md', '# B')
     with pytest.raises(ValueError, match='exactly one SKILL.md'):
         read_source('bad.zip', base64.b64encode(data.getvalue()).decode())
+
+
+def test_zip_skips_unreferenced_test_markdown_suites_but_keeps_linked_ones():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('demo/SKILL.md', '# 主技能\n参考 [规范](references/rules.md)')
+        archive.writestr('demo/references/rules.md', '核心方法')
+        archive.writestr('demo/tests/regression.md', 'UNREFERENCED_REGRESSION_CASE')
+        archive.writestr('demo/evals/cases.md', 'UNREFERENCED_EVAL_CASE')
+    result = read_source('demo.zip', base64.b64encode(data.getvalue()).decode())
+    assert '核心方法' in result['text']
+    assert 'UNREFERENCED_REGRESSION_CASE' not in result['text']
+    assert 'UNREFERENCED_EVAL_CASE' not in result['text']
+    assert 'demo/tests/regression.md' in result['resources']
+    assert result['warnings'] == []
+
+    linked_data = io.BytesIO()
+    with zipfile.ZipFile(linked_data, 'w') as archive:
+        archive.writestr('demo/SKILL.md', '# 主技能\n参考 [回归用例](tests/regression.md)')
+        archive.writestr('demo/tests/regression.md', 'LINKED_REGRESSION_CASE')
+    linked_result = read_source('linked.zip', base64.b64encode(linked_data.getvalue()).decode())
+    assert 'LINKED_REGRESSION_CASE' in linked_result['text']

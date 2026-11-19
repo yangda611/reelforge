@@ -17,6 +17,7 @@
 import type {
   CanvasBackupStatus,
   CanvasSaveSource,
+  FreezoneCanvasPatchPayload,
   FreezoneCanvasPayload,
 } from "@/api/canvas";
 import type { CanvasMutationSource } from "@/stores/canvasStore";
@@ -294,6 +295,135 @@ export function buildSavePayload(
     payload.base_revision = input.baseRevision;
   }
   return payload;
+}
+
+export const INCREMENTAL_PATCH_MIN_NODES = 10;
+
+const patchNodeSigCache = new WeakMap<object, string>();
+const patchEdgeSigCache = new WeakMap<object, string>();
+
+function patchNodeSignature(node: unknown): string {
+  if (!node || typeof node !== "object") return JSON.stringify(node);
+  const cached = patchNodeSigCache.get(node);
+  if (cached !== undefined) return cached;
+  const serialized = JSON.stringify(node);
+  patchNodeSigCache.set(node, serialized);
+  return serialized;
+}
+
+function patchEdgeSignature(edge: unknown): string {
+  if (!edge || typeof edge !== "object") return JSON.stringify(edge);
+  const cached = patchEdgeSigCache.get(edge);
+  if (cached !== undefined) return cached;
+  const serialized = JSON.stringify(edge);
+  patchEdgeSigCache.set(edge, serialized);
+  return serialized;
+}
+
+export interface BuildIncrementalPatchInput {
+  baselineNodes: unknown[];
+  baselineEdges: unknown[];
+  baselineMetadata: Record<string, unknown> | null;
+  currentNodes: unknown[];
+  currentEdges: unknown[];
+  currentMetadata: Record<string, unknown> | null;
+  viewport?: unknown;
+  baseRevision: number | null;
+  clientSaveId: string;
+  decision: Extract<SaveDecision, { kind: "send" }>;
+}
+
+/**
+ * Compute an incremental PATCH payload against the last server-acknowledged
+ * snapshot. Returns `null` when a full PUT is required or cheaper (first save,
+ * empty canvas, non-patchable saveSource, or >60% of nodes changed).
+ */
+export function buildIncrementalPatch(
+  input: BuildIncrementalPatchInput,
+): FreezoneCanvasPatchPayload | null {
+  if (
+    input.baseRevision == null ||
+    input.baselineNodes.length < INCREMENTAL_PATCH_MIN_NODES ||
+    input.currentNodes.length === 0 ||
+    input.decision.allowEmptyOverwrite
+  ) {
+    return null;
+  }
+  const saveSource =
+    input.decision.saveSource === "autosave" ||
+    input.decision.saveSource === "manual_save" ||
+    input.decision.saveSource === "agent_patch"
+      ? input.decision.saveSource
+      : null;
+  if (!saveSource) return null;
+
+  const sanitizedNodes = sanitizePreviewImageUrls(input.currentNodes);
+  const prevNodesById = new Map<string, unknown>();
+  for (const node of input.baselineNodes) {
+    const id = (node as { id?: unknown } | null)?.id;
+    if (typeof id === "string" && id) prevNodesById.set(id, node);
+  }
+  const currNodeIds = new Set<string>();
+  const upsertNodes: unknown[] = [];
+  for (const node of sanitizedNodes) {
+    const id = (node as { id?: unknown } | null)?.id;
+    if (typeof id !== "string" || !id) return null;
+    currNodeIds.add(id);
+    const prev = prevNodesById.get(id);
+    if (!prev || patchNodeSignature(prev) !== patchNodeSignature(node)) {
+      upsertNodes.push(node);
+    }
+  }
+  const removeNodeIds: string[] = [];
+  for (const id of prevNodesById.keys()) {
+    if (!currNodeIds.has(id)) removeNodeIds.push(id);
+  }
+
+  // If most of the canvas changed, a full PUT is just as small and simpler.
+  if (upsertNodes.length > Math.ceil(sanitizedNodes.length * 0.6)) {
+    return null;
+  }
+
+  const prevEdgesById = new Map<string, unknown>();
+  for (const edge of input.baselineEdges) {
+    const id = (edge as { id?: unknown } | null)?.id;
+    if (typeof id === "string" && id) prevEdgesById.set(id, edge);
+  }
+  const currEdgeIds = new Set<string>();
+  const upsertEdges: unknown[] = [];
+  for (const edge of input.currentEdges) {
+    const id = (edge as { id?: unknown } | null)?.id;
+    if (typeof id !== "string" || !id) return null;
+    currEdgeIds.add(id);
+    const prev = prevEdgesById.get(id);
+    if (!prev || patchEdgeSignature(prev) !== patchEdgeSignature(edge)) {
+      upsertEdges.push(edge);
+    }
+  }
+  const removeEdgeIds: string[] = [];
+  for (const id of prevEdgesById.keys()) {
+    if (!currEdgeIds.has(id)) removeEdgeIds.push(id);
+  }
+
+  const metadataChanged =
+    JSON.stringify(input.baselineMetadata ?? null) !==
+    JSON.stringify(input.currentMetadata ?? null);
+
+  return {
+    base_revision: input.baseRevision,
+    client_save_id: input.clientSaveId,
+    save_source: saveSource,
+    upsert_nodes: upsertNodes,
+    remove_node_ids: removeNodeIds,
+    upsert_edges: upsertEdges,
+    remove_edge_ids: removeEdgeIds,
+    ...(input.viewport !== undefined
+      ? { has_viewport: true, viewport: input.viewport }
+      : {}),
+    ...(metadataChanged
+      ? { has_metadata: true, metadata: input.currentMetadata ?? null }
+      : {}),
+  };
 }
 
 export interface PayloadLimitViolation {

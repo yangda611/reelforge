@@ -73,7 +73,6 @@ import novelvideo.freezone.skill_import
             "PYTHONPATH": os.pathsep.join((str(source), os.environ.get("PYTHONPATH", ""))),
             "ST_EDITION": "ce",
             "ST_CONTROL_PLANE_DSN": "",
-            "PIKO_WORLD_BACKEND": "demo",
             "ST_REDIS_URL": "",
             "PYTHON_DOTENV_DISABLED": "1",
             "NOVELVIDEO_DATA_ROOT": str(tmp_path),

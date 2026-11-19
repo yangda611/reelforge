@@ -71,7 +71,8 @@ export function toFreezoneSkillSuggestions(
   return items.flatMap((item) => {
     const id = readString(item.id);
     if (!id || item.enabled === false) return [];
-    if (!hasRecipeBoundary(item.allowed_recipe_ids ?? item.allowedRecipeIds)) return [];
+    const isNativeMarkdown = item.source === "hermes_native_markdown_skill";
+    if (!isNativeMarkdown && !hasRecipeBoundary(item.allowed_recipe_ids ?? item.allowedRecipeIds)) return [];
     const triggers = item.triggers && typeof item.triggers === "object"
       ? item.triggers as Record<string, unknown>
       : {};

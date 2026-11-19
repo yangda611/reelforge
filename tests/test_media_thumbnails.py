@@ -1165,3 +1165,28 @@ def test_backfill_requires_a_target(backfill):
 def test_backfill_rejects_a_missing_directory(backfill, tmp_path):
     with pytest.raises(SystemExit):
         backfill.main([str(tmp_path / "nope")])
+
+
+def test_probe_image_dimensions_and_exif_orientation(tmp_path):
+    source = _write_png(tmp_path / "landscape.png", (1600, 900))
+    assert thumbnails.probe_image_dimensions(source) == (1600, 900)
+
+    jpg = tmp_path / "portrait_exif.jpg"
+    im = Image.new("RGB", (800, 400), color=(30, 120, 200))
+    exif = im.getexif()
+    exif[274] = 6  # Rotate 90 CW -> displayed 400x800
+    im.save(jpg, format="JPEG", exif=exif.tobytes())
+    assert thumbnails.probe_image_dimensions(jpg) == (400, 800)
+
+
+def test_ensure_variants_builds_all_tiers_in_one_pass(tmp_path):
+    source = _write_png(tmp_path / "freezone" / "_uploads" / "hero.png", (2400, 1200))
+
+    built = thumbnails.ensure_variants(tmp_path, source, ("card", "thumb2x", "thumb"))
+
+    assert set(built) == {"card", "thumb2x", "thumb"}
+    for variant in ("card", "thumb2x", "thumb"):
+        with Image.open(built[variant]) as im:
+            assert max(im.size) == thumbnails.VARIANTS[variant]
+        assert built[variant].stat().st_mtime_ns == source.stat().st_mtime_ns
+        assert thumbnails.fresh_thumbnail(tmp_path, source, variant) == built[variant]

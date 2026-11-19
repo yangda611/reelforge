@@ -6883,6 +6883,26 @@ def _handle_get_workflow_skill(args: dict[str, Any], **_: Any) -> str:
     )
 
 
+def _handle_read_native_skill_file(args: dict[str, Any], **_: Any) -> str:
+    if not _available():
+        return tool_error("Freezone backend is unavailable")
+    skill_id = str(args.get("skill_id") or "").strip()
+    if not skill_id:
+        return tool_error("skill_id is required")
+    file_path = str(args.get("file_path") or "SKILL.md").strip() or "SKILL.md"
+    try:
+        response = _request(
+            "GET",
+            f"/freezone/native-skills/{quote(skill_id, safe='')}/file?path={quote(file_path, safe='')}",
+        )
+    except ValueError as exc:
+        return tool_error(str(exc))
+    return _structured_tool_result(
+        response,
+        tool_name="freezone_read_native_skill_file",
+    )
+
+
 _AGENT_PRODUCT_OPERATION_ID_PATTERN = re.compile(r"^agent_product_[0-9a-f]{32}$")
 
 
@@ -10180,6 +10200,7 @@ _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "freezone_get_saved_skill": ("id", "kind", "item", "available_ids"),
     "freezone_get_saved_recipe": ("id", "kind", "item", "available_ids"),
+    "freezone_read_native_skill_file": ("skill_id", "name", "file_path", "content", "available_files"),
     "freezone_get_workflow_skill": (
         "schema_version", "skill_id", "user_goal", "source", "skill", "recipes",
         "recipe_definitions_omitted", "available_recipes", "capabilities",
@@ -10321,6 +10342,7 @@ _RESULT_SUCCESS_REQUIRED: dict[str, tuple[str, ...]] = {
     "freezone_get_audio_voice_options": ("node_id", "voices", "count"),
     "freezone_get_slot_candidates": ("slot", "candidates", "count"),
     "freezone_get_mainline_projection_assets": ("assets", "count"),
+    "freezone_read_native_skill_file": ("skill_id", "file_path", "content", "available_files"),
     "freezone_get_workflow_skill": (
         "schema_version", "skill_id", "skill", "recipes", "available_recipes",
         "input_contract", "planning_contract",
@@ -12951,6 +12973,26 @@ TOOLS = (
             reject_unknown=True,
         ),
         _handle_begin_agent_product_generation,
+    ),
+    (
+        "freezone_read_native_skill_file",
+        _schema(
+            "freezone_read_native_skill_file",
+            "Read a file (such as SKILL.md, references/*.md, or assets/*) from a user-installed lossless native Markdown Skill. Read-only.",
+            {
+                "skill_id": {
+                    "type": "string",
+                    "description": "Installed native Skill id (e.g. yd-cinematic-storyboard).",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Relative path inside the Skill directory, e.g. references/acting.md or SKILL.md.",
+                },
+            },
+            ["skill_id"],
+            reject_unknown=True,
+        ),
+        _handle_read_native_skill_file,
     ),
     (
         "freezone_get_workflow_skill",

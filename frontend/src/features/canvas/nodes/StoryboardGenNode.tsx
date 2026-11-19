@@ -11,7 +11,7 @@ import {
   useEffect,
   useRef,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, useViewport } from '@xyflow/react';
+import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import { Minus, Plus, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { CreditSparkIcon } from '@/components/credits/credit-visual';
@@ -561,7 +561,7 @@ function generateGridImageDataUrl(
 export const StoryboardGenNode = memo(({ id, data, selected, width, height }: StoryboardGenNodeProps) => {
   const { t, i18n } = useTranslation();
   const modelTaskAccess = useModelTaskAccess();
-  const { zoom } = useViewport();
+  const { getZoom } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
@@ -1459,7 +1459,7 @@ export const StoryboardGenNode = memo(({ id, data, selected, width, height }: St
         if (pointerAnchor && pointerAnchor.frameIndex === index) {
           setPickerAnchor(pointerAnchor.anchor);
         } else {
-          setPickerAnchor(resolvePickerAnchor(rootRef.current, event.currentTarget, cursor, zoom));
+          setPickerAnchor(resolvePickerAnchor(rootRef.current, event.currentTarget, cursor, getZoom()));
         }
         setPickerFrameIndex(index);
         setPickerCursor(cursor);
@@ -1476,6 +1476,7 @@ export const StoryboardGenNode = memo(({ id, data, selected, width, height }: St
     },
     [
       closeImagePicker,
+      getZoom,
       handleFrameDescriptionChange,
       incomingImages.length,
       insertImageReference,
@@ -1484,7 +1485,6 @@ export const StoryboardGenNode = memo(({ id, data, selected, width, height }: St
       pickerFrameIndex,
       showImagePicker,
       syncFrameHighlightScroll,
-      zoom,
     ]
   );
 
@@ -1636,7 +1636,7 @@ export const StoryboardGenNode = memo(({ id, data, selected, width, height }: St
                   onPointerDown={(event) => {
                     lastPointerAnchorRef.current = {
                       frameIndex: index,
-                      anchor: resolvePointerAnchor(rootRef.current, event.clientX, event.clientY, zoom),
+                      anchor: resolvePointerAnchor(rootRef.current, event.clientX, event.clientY, getZoom()),
                     };
                   }}
                   onFocus={(event) => {

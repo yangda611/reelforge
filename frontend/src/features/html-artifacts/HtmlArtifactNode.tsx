@@ -137,14 +137,15 @@ export const HtmlArtifactNode=memo(function HtmlArtifactNode({id,data,selected}:
     if (!isGenerating) setHistoryPreviewVersion(null);
   }, [isGenerating]);
   const mediaVariant=useNodeBodyVariant({width:384,height:224});
+  const htmlPreviewVariant: 'thumb' | null = mediaVariant === 'thumb' ? 'thumb' : null;
   const [media,setMedia]=useState<Array<{placeholder:string;url:string}>>([]);
   const [html,setHtml]=useState('');const [error,setError]=useState('');
   useEffect(()=>{
     if(!projectId||!artifactId){setHtml('');setMedia([]);setError('');return;}let alive=true;let release:(()=>void)|undefined;
-    const load=()=>void readHtmlPreview(projectId,artifactId,historyPreviewVersion ?? version,mediaVariant).then(value=>{if(alive){release?.();release=value.release;setHtml(value.html);setMedia(value.media??[]);setError('');}else value.release?.();}).catch(err=>{if(alive)setError(String(err));});
+    const load=()=>void readHtmlPreview(projectId,artifactId,historyPreviewVersion ?? version,htmlPreviewVariant).then(value=>{if(alive){release?.();release=value.release;setHtml(value.html);setMedia(value.media??[]);setError('');}else value.release?.();}).catch(err=>{if(alive)setError(String(err));});
     const changed=(event:Event)=>{const d=(event as CustomEvent).detail;if(d?.projectId===projectId&&d.artifact?.id===artifactId)load();};
     load();const refresh=window.setInterval(load,12*60*1000);window.addEventListener('focus',load);window.addEventListener(HTML_ARTIFACT_UPDATED_EVENT,changed);return()=>{alive=false;window.clearInterval(refresh);window.removeEventListener('focus',load);release?.();window.removeEventListener(HTML_ARTIFACT_UPDATED_EVENT,changed);};
-  },[projectId,artifactId,version,historyPreviewVersion,mediaVariant]);
+  },[projectId,artifactId,version,historyPreviewVersion,htmlPreviewVariant]);
   const uploadHtml = async (file: File) => {
     const scope = readUrl();
     if (!scope.project || !scope.canvas) return;

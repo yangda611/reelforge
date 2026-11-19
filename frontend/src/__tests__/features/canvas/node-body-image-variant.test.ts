@@ -204,13 +204,15 @@ describe("按显示尺寸 x zoom x DPR 挑档", () => {
     expect(nodeBodyRequiredEdge({ width: 580, height: 326 }, Number.NaN, 0)).toBe(580);
   });
 
-  it("pickMediaVariant 只保留 thumb，超过 320px 就回原图", () => {
+  it("pickMediaVariant 按 thumb / thumb2x / card 阶梯挑选，超过 1280px 才回原图", () => {
     expect(pickMediaVariant(315)).toBe("thumb");
     expect(pickMediaVariant(320)).toBe("thumb");
-    expect(pickMediaVariant(321)).toBeNull();
-    expect(pickMediaVariant(630)).toBeNull();
-    expect(pickMediaVariant(1160)).toBeNull();
-    expect(pickMediaVariant(1280)).toBeNull();
+    expect(pickMediaVariant(321)).toBe("thumb2x");
+    expect(pickMediaVariant(630)).toBe("thumb2x");
+    expect(pickMediaVariant(640)).toBe("thumb2x");
+    expect(pickMediaVariant(641)).toBe("card");
+    expect(pickMediaVariant(1160)).toBe("card");
+    expect(pickMediaVariant(1280)).toBe("card");
   });
 
   // 放大糊是唯一不能接受的结果：宁可付原图的解码，也不给一张要放大 2.5 倍的副本。
@@ -230,15 +232,20 @@ describe("按显示尺寸 x zoom x DPR 挑档", () => {
     });
   });
 
-  it("默认尺寸的节点在 Retina 上直接使用原图", () => {
+  it("默认尺寸的节点在 Retina 上命中 card 降采样副本", () => {
     const required = nodeBodyRequiredEdge({ width: 580, height: 326 }, 1, 2);
-    expect(nodeBodyImageSrc(URL, BIG, { requiredEdge: required }).src).toBe(URL);
+    expect(nodeBodyImageSrc(URL, BIG, { requiredEdge: required })).toEqual({
+      src: `${URL}?st_thumb=card`,
+      original: URL,
+      downscaled: true,
+      maxEdge: 1280,
+    });
   });
 
-  it("LOD 外壳只有 1x 尺寸落在 thumb 预算内", () => {
+  it("LOD 外壳在 1x 命中 thumb、2x 命中 thumb2x", () => {
     const shell = { width: 900, height: 900 };
     expect(pickMediaVariant(nodeBodyRequiredEdge(shell, 0.35, 1))).toBe("thumb");
-    expect(pickMediaVariant(nodeBodyRequiredEdge(shell, 0.35, 2))).toBeNull();
+    expect(pickMediaVariant(nodeBodyRequiredEdge(shell, 0.35, 2))).toBe("thumb2x");
   });
 
   it("挑到的那一档不比源图小时仍然回原图", () => {

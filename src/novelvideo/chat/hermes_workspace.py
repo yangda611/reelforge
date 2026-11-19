@@ -31,6 +31,7 @@ DEFAULT_HERMES_TOOLSETS = {"hermes-acp"}
 FREEZONE_HERMES_SKILLS = {"freezone", "interactive-story", "workflows"}
 FREEZONE_HERMES_PLUGINS = {"freezone", "websearch"}
 _GENERATED_WORKFLOW_SKILL_MARKER = ".dramaclaw-workflow-skill.json"
+_GENERATED_NATIVE_SKILL_MARKER = ".dramaclaw-native-skill.json"
 FREEZONE_HERMES_PYTHON_HOOK_DIR = ".dramaclaw-python"
 _warned_repo_state_fallback = False
 
@@ -564,6 +565,7 @@ def ensure_user_hermes_workspace(
     _materialize_skill_links(skills_dir, profile=normalized_profile)
     if normalized_profile == "freezone":
         _sync_freezone_workflow_skills(skills_dir, username)
+        _sync_freezone_native_skills(skills_dir, username)
 
     # plugins layout
     plugins_dir = home / "plugins"
@@ -606,12 +608,16 @@ def ensure_user_hermes_workspace(
 
 
 def list_freezone_hermes_workflow_skills(username: str) -> list[dict[str, object]]:
-    """Return Workflow Skills materialized in the user's native Hermes profile."""
+    """Return Workflow and native Markdown Skills materialized in the user's Hermes profile."""
     home = ensure_user_hermes_workspace(username, profile="freezone")
     summaries: list[dict[str, object]] = []
     for skill_dir in sorted((home / "skills").iterdir(), key=lambda item: item.name):
+        if not skill_dir.is_dir():
+            continue
         marker = skill_dir / _GENERATED_WORKFLOW_SKILL_MARKER
-        if not skill_dir.is_dir() or not marker.is_file():
+        if not marker.is_file():
+            marker = skill_dir / _GENERATED_NATIVE_SKILL_MARKER
+        if not marker.is_file():
             continue
         try:
             payload = json.loads(marker.read_text(encoding="utf-8"))
@@ -872,6 +878,94 @@ def _sync_freezone_workflow_skills(skills_dir: Path, username: str) -> None:
         except OSError as exc:
             _log.warning(
                 "failed to materialize Hermes Workflow Skill %s: %s", skill_id, exc
+            )
+
+
+def _sync_freezone_native_skills(skills_dir: Path, username: str) -> None:
+    """Materialize lossless user-installed Markdown Skills into HERMES_HOME/skills."""
+    try:
+        from novelvideo.freezone.native_skill_store import (
+            NATIVE_SKILL_MANIFEST,
+            list_user_native_skills,
+        )
+
+        items = [
+            item
+            for item in list_user_native_skills(username)
+            if item.get("enabled") is not False
+        ]
+    except Exception as exc:
+        _log.warning("failed to load native Markdown Skills for %s: %s", username, exc)
+        return
+
+    desired: dict[str, dict[str, object]] = {}
+    for item in items:
+        skill_id = str(item.get("id") or "").strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", skill_id):
+            continue
+        desired[skill_id] = item
+
+    for entry in skills_dir.iterdir():
+        marker = entry / _GENERATED_NATIVE_SKILL_MARKER
+        if entry.is_dir() and marker.is_file() and entry.name not in desired:
+            try:
+                shutil.rmtree(entry)
+            except OSError:
+                _log.warning("failed to remove stale native Hermes Skill %s", entry)
+
+    for skill_id, item in desired.items():
+        source_dir = Path(str(item.get("storage_path") or ""))
+        if not source_dir.is_dir() or not (source_dir / "SKILL.md").is_file():
+            continue
+        target = skills_dir / skill_id
+        marker = target / _GENERATED_NATIVE_SKILL_MARKER
+        if target.is_symlink() or (target.exists() and not marker.is_file()):
+            _log.warning(
+                "native Hermes Skill collision at %s; skipping materialized package",
+                target,
+            )
+            continue
+        summary = {
+            "id": skill_id,
+            "name": str(item.get("name") or skill_id),
+            "description": str(item.get("description") or "").strip(),
+            "category": "native_skill",
+            "source": "hermes_native_markdown_skill",
+            "source_sha256": str(item.get("source_sha256") or ""),
+            "allowed_recipe_ids": [],
+            "file_count": int(item.get("file_count") or 0),
+            "files": list(item.get("files") or []),
+        }
+        marker_text = json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
+        if marker.is_file():
+            try:
+                existing = json.loads(marker.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                existing = None
+            if (
+                isinstance(existing, dict)
+                and existing.get("source_sha256") == summary["source_sha256"]
+                and (target / "SKILL.md").is_file()
+            ):
+                continue
+        try:
+            staging = skills_dir / f".staging-native-{skill_id}"
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            shutil.copytree(
+                source_dir,
+                staging,
+                ignore=shutil.ignore_patterns(NATIVE_SKILL_MANIFEST),
+            )
+            (staging / _GENERATED_NATIVE_SKILL_MARKER).write_text(
+                marker_text, encoding="utf-8"
+            )
+            if target.exists():
+                shutil.rmtree(target)
+            os.replace(staging, target)
+        except OSError as exc:
+            _log.warning(
+                "failed to materialize native Hermes Skill %s: %s", skill_id, exc
             )
 
 

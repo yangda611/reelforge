@@ -185,7 +185,7 @@ function LodShell({ type, id, data, selected, width, height }: {
         <Handle type="source" position={Position.Right} id="source" />
       )}
       {imageSrc ? (
-        <img src={imageSrc} alt="" draggable={false} className="dc-lod-shell__thumb" />
+        <img src={imageSrc} alt="" draggable={false} decoding="async" className="dc-lod-shell__thumb" />
       ) : null}
       {busy ? <span className="dc-lod-shell__busy" data-node-id={id} /> : null}
     </div>

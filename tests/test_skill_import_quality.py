@@ -824,3 +824,58 @@ async def test_run_timeout_preserves_candidate_and_cannot_install(monkeypatch):
     assert review_cancelled
     assert any('while waiting for reviewing:0' in issue
                for issue in record['quality_report']['blockers'])
+
+
+def test_bundle_schemas_advertise_lowercase_id_pattern_for_action_keys():
+    from novelvideo.freezone.agent_catalog_schema import SAFE_AGENT_CONFIG_ID
+    from novelvideo.freezone.skill_import_quality import bundle_schemas
+
+    schemas = bundle_schemas()
+    assert schemas['bundle']['properties']['id']['pattern'] == SAFE_AGENT_CONFIG_ID.pattern
+    assert schemas['skill']['properties']['id']['pattern'] == SAFE_AGENT_CONFIG_ID.pattern
+    assert schemas['recipe']['properties']['id']['pattern'] == SAFE_AGENT_CONFIG_ID.pattern
+    action_key_items = schemas['recipe']['properties']['action_keys']['items']
+    assert action_key_items['pattern'] == SAFE_AGENT_CONFIG_ID.pattern
+    assert 'textGeneration' in action_key_items['description']
+
+
+@pytest.mark.asyncio
+async def test_node_scope_action_keys_are_repaired_without_wasting_generation_attempts():
+    from test_freezone_agent_bundle import _bundle_payload
+
+    bundle = _bundle_payload()
+    bundle['recipes'][0]['action_keys'] = ['textGeneration']
+    record = record_fixture()
+    responses = [design_fixture(), bundle, review_fixture()]
+    calls = []
+
+    async def generate(prompt):
+        calls.append(prompt)
+        return json.dumps(responses.pop(0))
+
+    await run_quality_pipeline(record, 'alice', generate, lambda: None, lambda *a: None)
+    assert len(calls) == 3
+    assert record['status'] == 'ready'
+    assert record['bundle']['recipes'][0]['action_keys'] == [bundle['recipes'][0]['id']]
+
+
+@pytest.mark.asyncio
+async def test_invalid_agent_config_id_structure_failure_is_deduplicated_with_pattern_hint():
+    from test_freezone_agent_bundle import _bundle_payload
+
+    invalid = _bundle_payload()
+    invalid['recipes'][0]['id'] = 'CamelCaseRecipe'
+    invalid['skill']['allowed_recipe_ids'] = ['CamelCaseRecipe']
+    record = record_fixture()
+    responses = [design_fixture(), invalid, invalid, invalid]
+
+    async def generate(prompt):
+        return json.dumps(responses.pop(0))
+
+    await run_quality_pipeline(record, 'alice', generate, lambda: None, lambda *a: None)
+    issues = record['quality_report']['structure']['issues']
+    assert record['quality_report']['structure']['status'] == 'failed'
+    assert len(issues) == 3
+    assert any('AgentCatalogSkillConfig' in issue for issue in issues)
+    assert any('AgentCatalogRecipeConfig' in issue for issue in issues)
+    assert '^[a-z0-9][a-z0-9_-]{0,127}$' in issues[-1]

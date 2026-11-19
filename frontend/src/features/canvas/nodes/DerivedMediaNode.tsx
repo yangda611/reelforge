@@ -15,7 +15,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { useCanvasStore } from "@/stores/canvasStore";
 export function DerivedMediaNode({ id, data, selected, type }: NodeProps) {
   const { t } = useTranslation();
-  const store = useCanvasStore();
+  const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const gif = type === "animatedGifNode";
   const url = typeof data.imageUrl === "string" ? data.imageUrl : "";
   const busy = data.isGenerating === true;
@@ -33,7 +33,7 @@ export function DerivedMediaNode({ id, data, selected, type }: NodeProps) {
         )}
         editable
         onTitleChange={(displayName) =>
-          store.updateNodeData(id, { displayName })
+          updateNodeData(id, { displayName })
         }
       />
       <div className="relative overflow-hidden rounded-[var(--node-radius)] bg-bg-dark">

@@ -883,3 +883,33 @@ async def test_freezone_image_reverse_prompt_job_result_returns_json_payload(
 
     assert result["ok"] is True
     assert result["data"]["prompt"].startswith("雨夜街头")
+
+
+@pytest.mark.asyncio
+async def test_generate_freezone_text_prefers_run_stream_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import asynccontextmanager
+
+    class FakeStreamingAgent:
+        async def run(self, prompt: str):
+            raise AssertionError("generate_freezone_text should stream when run_stream exists")
+
+        @asynccontextmanager
+        async def run_stream(self, prompt: str):
+            assert prompt == "生成转换配置"
+
+            class _StreamResult:
+                async def get_output(self):
+                    return '{"ok": true}'
+
+            yield _StreamResult()
+
+    monkeypatch.setattr(
+        "novelvideo.freezone.text_node.get_freezone_text_writer_agent",
+        FakeStreamingAgent,
+    )
+
+    model, text = await generate_freezone_text(prompt="生成转换配置")
+    assert model == FREEZONE_TEXT_WRITER_MODEL
+    assert text == '{"ok": true}'

@@ -1,29 +1,21 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
-  Bell,
   Bolt,
   ChevronRight,
-  Gamepad2,
-  Map,
-  Users,
   LogOut,
   KeyRound,
   Settings,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { capturePikoTaskEntry } from "@/features/piko-world/piko-task-entry";
-import { enterPikoWorld } from "@/features/piko-world/piko-entry-transition";
-import { playPikoUiSound } from "@/features/piko-world/piko-audio";
 import { NotificationDot } from "@/components/ui/notification-dot";
-import { useFeatureEntrySeen } from "@/lib/feature-entry-state";
 import { PhoneBindingDialog } from "@/components/account/phone-binding-dialog";
 import {
   Tooltip,
@@ -33,34 +25,19 @@ import {
 } from "@/components/ui/tooltip";
 import { CreditBalanceBadge } from "@/components/layout/credit-balance-badge";
 import { BrandLockup } from "@/components/layout/brand-lockup";
-import { NotificationDrawer } from "@/components/notifications/notification-drawer";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/settings-dialog";
 import {
   OPEN_SETTINGS_DIALOG_EVENT,
   openSettingsDialog,
   type OpenSettingsDialogDetail,
 } from "@/components/settings/settings-dialog-events";
-import {
-  PetGalleryDialog,
-  type CompanionSelection,
-} from "@/features/companion/petdex/PetGalleryDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth-store";
-import { useAppStore } from "@/stores/app-store";
 import { authRequired, isCeRuntime, phoneOtpEntryVisible } from "@/lib/runtime-config";
 import { resetUserSessionState } from "@/lib/reset-region-state";
 import { useModelGatewayConfig } from "@/lib/queries/model-gateway";
 import { useOrgBranding } from "@/lib/queries/org-branding";
 import { useAccountSecurity } from "@/lib/queries/auth";
-import { useReleaseNotifications } from "@/lib/queries/release-notifications";
-import {
-  useAnnouncementReadState,
-  useAnnouncements,
-} from "@/components/login/cinematic/announcements";
-import {
-  markUpgradeSeen,
-  shouldShowUpgradeNudge,
-} from "@/lib/release-notification-state";
 import {
   ProjectHeaderNavigation,
   ProjectSwitcher,
@@ -72,14 +49,11 @@ import { APP_HEADER_HEIGHT } from "./layout-metrics";
 const ACCOUNT_PANEL_TRANSITION_MS = 150;
 
 export function Header({ ambientBackground = false }: { ambientBackground?: boolean }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as { project?: string };
-  const [companionOpen, setCompanionOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPage>();
-  const [notificationOpen, setNotificationOpen] = useState(false);
-  const [releaseNotificationStateVersion, setReleaseNotificationStateVersion] = useState(0);
   const [phoneBindingOpen, setPhoneBindingOpen] = useState(false);
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
   const [accountPanelVisible, setAccountPanelVisible] = useState(false);
@@ -108,8 +82,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
     window.addEventListener(OPEN_SETTINGS_DIALOG_EVENT, handleOpenSettings);
     return () => window.removeEventListener(OPEN_SETTINGS_DIALOG_EVENT, handleOpenSettings);
   }, []);
-  const { seen: pikoEntrySeen, markSeen: markPikoEntrySeen } =
-    useFeatureEntrySeen("piko-hub-v1", username);
   const queryClient = useQueryClient();
   // 退出登录是 SPA 内部跳转（不刷新页面），必须一并清掉 React Query 缓存和
   // 用户级 zustand/localStorage 状态，否则换账号登录后 projectSummaries 等
@@ -119,11 +91,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
     resetUserSessionState({ queryClient });
   };
   const avatarUrl = useAuthStore((s) => s.avatarUrl);
-  const companionKind = useAppStore((s) => s.companionKind);
-  const companionPet = useAppStore((s) => s.companionPet);
-  const pikoAccessory = useAppStore((s) => s.pikoAccessory);
-  const setCompanion = useAppStore((s) => s.setCompanion);
-  const setPikoAccessory = useAppStore((s) => s.setPikoAccessory);
   const showLogout = authRequired();
   const ceRuntime = isCeRuntime();
   const orgBranding = useOrgBranding(!ceRuntime && Boolean(username));
@@ -140,18 +107,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
   const displayName = accountSecurity.data?.phone_masked ?? storedDisplayName ?? username ?? "User";
   const avatarInitial = displayName.slice(0, 1).toUpperCase();
   const modelGatewayConfig = useModelGatewayConfig(ceRuntime);
-  const releaseNotifications = useReleaseNotifications(i18n.resolvedLanguage ?? i18n.language);
-  const releaseFeed = releaseNotifications.data?.data;
-  const announcements = useAnnouncements();
-  const announcementIds = useMemo(
-    () => announcements.map((announcement) => announcement.id),
-    [announcements],
-  );
-  const { markAllRead: markAllAnnouncementsRead, unreadCount: announcementUnreadCount } =
-    useAnnouncementReadState();
-  void releaseNotificationStateVersion;
-  const hasUnreadNotification =
-    shouldShowUpgradeNudge(releaseFeed) || announcementUnreadCount(announcementIds) > 0;
   const gatewayConfig = modelGatewayConfig.data?.data;
   // P1-2：黄标要说明缺了什么、点开去哪补。逐项列出未配置项，点击去第一项，
   // 悬停用 tooltip 说清每一项（媒体存储那项还点明会坏什么功能）。
@@ -191,19 +146,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
       setSettingsWarningBubbleDismissed(false);
     }
   }, [hasSettingsWarning]);
-
-  useEffect(() => {
-    if (notificationOpen) markAllAnnouncementsRead(announcementIds);
-  }, [announcementIds, markAllAnnouncementsRead, notificationOpen]);
-
-  const handleCompanionConfirm = (
-    selection: CompanionSelection,
-    accessory: typeof pikoAccessory,
-  ) => {
-    setCompanion(selection.kind, selection.pet);
-    setPikoAccessory(accessory);
-    window.dispatchEvent(new Event("mybuddy-companion-reset"));
-  };
 
   const clearAccountCloseTimer = () => {
     if (accountCloseTimerRef.current === null) return;
@@ -263,7 +205,7 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
   const scheduleCloseAccountPanel = () => {
     if (accountHoverTimerRef.current) clearTimeout(accountHoverTimerRef.current);
     // 钉住的面板只由 Escape、面板外交互或选中某一项关闭 —— 鼠标掠过就收走的话,
-    // 触屏和键盘用户点开后根本读不完里面的内容(公告中心现在只在这儿)。
+    // 触屏和键盘用户点开后根本读不完里面的内容。
     if (accountPanelPinnedRef.current) return;
     clearAccountCloseTimer();
     accountCloseTimerRef.current = window.setTimeout(() => {
@@ -286,7 +228,7 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
     openAccountPanel();
   };
 
-  // 账号面板是 header 里唯一的公告中心入口,必须在指针、触屏和键盘下都能开关。
+  // 账号面板必须在指针、触屏和键盘下都能开关。
   // 面板 portal 到 body,不在触发器的 DOM 子树里,所以「点到外面」「焦点移到外面」
   // 只能在 document 上判定。
   useEffect(() => {
@@ -321,25 +263,13 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
   }, [accountPanelOpen]);
 
   // 面板挂在 body 末尾,Tab 不会从触发器走进去。点击/键盘打开时把焦点送进第一项,
-  // 否则键盘用户能打开面板却够不到里面的公告中心。悬停打开的面板不抢焦点。
+  // 否则键盘用户能打开面板却够不到里面的选项。悬停打开的面板不抢焦点。
   useEffect(() => {
     if (!accountPanelOpen || !accountPanelPinnedRef.current) return;
     accountPanelRef.current
       ?.querySelector<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')
       ?.focus();
   }, [accountPanelOpen]);
-
-  const openNotifications = () => {
-    closeAccountPanelNow();
-    markUpgradeSeen(releaseFeed?.latest_tag);
-    markAllAnnouncementsRead(announcementIds);
-    setReleaseNotificationStateVersion((version) => version + 1);
-    setNotificationOpen(true);
-  };
-
-  const handleUpgradeStateChange = useCallback(() => {
-    setReleaseNotificationStateVersion((version) => version + 1);
-  }, []);
 
   const handlePasswordChanged = () => {
     resetUserSessionState({ queryClient });
@@ -382,7 +312,7 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
 
         {/* Actions */}
         <div className="flex min-w-0 flex-1 shrink-0 items-center justify-end gap-1">
-          {/* P2-2：顶栏直达设置。Piko 社区入口已移到头像菜单的「社区」分区（P2-10）。 */}
+          {/* P2-2：顶栏直达设置。 */}
           <Button
             type="button"
             variant="ghost"
@@ -427,7 +357,7 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
                   avatarInitial
                 )}
               </span>
-              {hasUnreadNotification || hasSettingsWarning ? (
+              {hasSettingsWarning ? (
                 <NotificationDot className="absolute right-0 top-0" />
               ) : null}
             </Button>
@@ -442,26 +372,7 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
               avatarInitial={avatarInitial}
               avatarUrl={avatarUrl}
               displayName={displayName}
-              hasUnreadNotification={hasUnreadNotification}
               hasSettingsWarning={hasSettingsWarning}
-              pikoEntrySeen={pikoEntrySeen}
-              onOpenPikoWorld={() => {
-                closeAccountPanelNow();
-                markPikoEntrySeen();
-                capturePikoTaskEntry(username, window.location.href);
-                playPikoUiSound("open");
-                void enterPikoWorld(() => navigate({ to: "/piko-world" }));
-              }}
-              onOpenCompanion={() => {
-                closeAccountPanelNow();
-                markPikoEntrySeen();
-                setCompanionOpen(true);
-              }}
-              onOpenPikoStation={() => {
-                closeAccountPanelNow();
-                markPikoEntrySeen();
-                window.dispatchEvent(new Event("piko-open-station"));
-              }}
               onSettings={() => {
                 closeAccountPanelNow();
                 setSettingsInitialPage(undefined);
@@ -471,7 +382,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
                 closeAccountPanelNow();
                 setPhoneBindingOpen(true);
               } : undefined}
-              onNotifications={openNotifications}
               onClose={scheduleCloseAccountPanel}
               onEnter={openAccountPanel}
               onLogout={showLogout ? () => void handleLogout() : undefined}
@@ -483,20 +393,6 @@ export function Header({ ambientBackground = false }: { ambientBackground?: bool
             document.body,
           )
         : null}
-      <PetGalleryDialog
-        open={companionOpen}
-        onOpenChange={setCompanionOpen}
-        currentKind={companionKind}
-        currentPet={companionPet}
-        currentAccessory={pikoAccessory}
-        onConfirm={handleCompanionConfirm}
-      />
-      <NotificationDrawer
-        open={notificationOpen}
-        onOpenChange={setNotificationOpen}
-        onUpgradeStateChange={handleUpgradeStateChange}
-        announcements={announcements}
-      />
       {phoneBindingOpen && canBindPhone ? <PhoneBindingDialog
         key={username}
         onClose={() => setPhoneBindingOpen(false)}
@@ -611,15 +507,9 @@ function AccountPanel({
   avatarInitial,
   avatarUrl,
   displayName,
-  hasUnreadNotification,
   hasSettingsWarning,
-  pikoEntrySeen,
-  onOpenPikoWorld,
-  onOpenCompanion,
-  onOpenPikoStation,
   onSettings,
   onBindPhone,
-  onNotifications,
   onClose,
   onEnter,
   onLogout,
@@ -631,15 +521,9 @@ function AccountPanel({
   avatarInitial: string;
   avatarUrl: string | null;
   displayName: string;
-  hasUnreadNotification: boolean;
   hasSettingsWarning: boolean;
-  pikoEntrySeen: boolean;
-  onOpenPikoWorld: () => void;
-  onOpenCompanion: () => void;
-  onOpenPikoStation: () => void;
   onSettings: () => void;
   onBindPhone?: () => void;
-  onNotifications: () => void;
   onClose: () => void;
   onEnter: () => void;
   onLogout?: () => void;
@@ -684,12 +568,6 @@ function AccountPanel({
             label={t("header.account.phoneBinding.title")}
             onClick={onBindPhone}
           /> : null}
-          <HeaderMenuRow
-            icon={<Bell className="size-3.5" />}
-            label={t("header.notifications")}
-            unread={hasUnreadNotification}
-            onClick={onNotifications}
-          />
           {onLogout ? (
             <HeaderMenuRow
               icon={<LogOut className="size-3.5" />}
@@ -697,33 +575,6 @@ function AccountPanel({
               onClick={onLogout}
             />
           ) : null}
-        </div>
-        {/* P2-10：社区功能不占主顶栏，收进头像菜单的「社区」分区，与做视频的工具入口分开。 */}
-        <div className="mt-2.5 border-t border-white/10 pt-2.5">
-          <div className="px-2 pb-1 text-[11px] text-white/40">
-            {t("header.pikoHub.section")}
-          </div>
-          <div className="space-y-0.5">
-            <HeaderMenuRow
-              id="piko-hub-entry"
-              icon={<Map className="size-3.5" />}
-              label={t("header.pikoHub.world")}
-              badge="New"
-              unread={!pikoEntrySeen}
-              onClick={onOpenPikoWorld}
-            />
-            <HeaderMenuRow
-              id="mybuddy-companion-entry"
-              icon={<Users className="size-3.5" />}
-              label={t("header.pikoHub.companion")}
-              onClick={onOpenCompanion}
-            />
-            <HeaderMenuRow
-              icon={<Gamepad2 className="size-3.5" />}
-              label={t("header.pikoHub.play")}
-              onClick={onOpenPikoStation}
-            />
-          </div>
         </div>
       </HeaderMenuPanel>
     </div>
@@ -741,15 +592,11 @@ function HeaderMenuRow({
   id,
   icon,
   label,
-  badge,
-  unread = false,
   onClick,
 }: {
   id?: string;
   icon: ReactNode;
   label: string;
-  badge?: string;
-  unread?: boolean;
   onClick?: () => void;
 }) {
   const content = (
@@ -759,11 +606,7 @@ function HeaderMenuRow({
       </span>
       <span className={`${entryStyles.menuLabel} flex min-w-0 flex-1 items-center gap-1.5`}>
         <span className="truncate">{label}</span>
-        {badge && <span className={entryStyles.newBadge}>{badge}</span>}
       </span>
-      {unread ? (
-        <NotificationDot />
-      ) : null}
       <ChevronRight
         className={`${entryStyles.menuChevron} mr-1 size-3.5 shrink-0`}
       />

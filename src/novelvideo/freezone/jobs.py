@@ -43,6 +43,16 @@ from novelvideo.task_backend.subprocesses import (
     RestrictedSubprocessPolicy,
     run_project_subprocess,
 )
+from novelvideo.utils import thumbnails
+
+
+def _prewarm_generated_image(project_dir: Path, path: Path) -> None:
+    """Queue multi-tier WebP variants (`card`, `thumb2x`, `thumb`) best-effort."""
+    try:
+        if path.exists() and path.is_file() and thumbnails.is_thumbnailable(path):
+            thumbnails.prewarm(project_dir, path, ("card", "thumb2x", "thumb"))
+    except Exception:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +154,7 @@ async def run_freezone_gen(
             egress_context=egress_context,
             egress_capability="freezone.image.generate",
         )
+    _prewarm_generated_image(project_dir, out)
     return out
 
 
@@ -229,6 +240,7 @@ async def run_freezone_mask_edit(
         ) from exc
     if not out.exists():
         raise RuntimeError(f"{provider_name} 图像擦除未生成输出文件")
+    _prewarm_generated_image(project_dir, out)
     return out
 
 
@@ -272,6 +284,7 @@ async def run_freezone_upscale(
             out.write_bytes(base64.b64decode(result.image_base64))
         else:
             raise RuntimeError("upscale produced no file or bytes")
+    _prewarm_generated_image(project_dir, out)
     return out
 
 
@@ -378,6 +391,7 @@ async def run_freezone_edit(
         egress_context=egress_context,
         egress_capability="freezone.image.generate",
     )
+    _prewarm_generated_image(project_dir, out)
     return out
 
 

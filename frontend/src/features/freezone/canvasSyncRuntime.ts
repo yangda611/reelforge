@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { getFreezoneCanvas, type FreezoneCanvasPayload } from "@/api/canvas";
-import type { CanvasEdge, CanvasNode } from "@/stores/canvasStore";
+import {
+  getFreezoneCanvas,
+  getFreezoneCanvasDelta,
+  type FreezoneCanvasPayload,
+} from "@/api/canvas";
+import { useCanvasStore, type CanvasEdge, type CanvasNode } from "@/stores/canvasStore";
+import { getFreezoneCanvasMetadata } from "./canvasMetadataContext";
 
 export type RemoteCanvasMerge = (
   remoteNodes: CanvasNode[],
@@ -136,6 +141,87 @@ export async function refreshRemoteFreezoneCanvas(
   // user leaves and later opens the same project/canvas URL again.
   if (currentRuntime !== runtime) return false;
   return applyRemoteFreezoneCanvas(project, canvasId, remote, undefined, options) === true;
+}
+
+function applyDeltaItemsById<T extends { id: string }>(
+  current: T[],
+  upserts: T[],
+  removeIds: string[],
+): T[] {
+  const removeSet = new Set(removeIds);
+  const upsertMap = new Map<string, T>();
+  const upsertOrder: string[] = [];
+  for (const item of upserts) {
+    if (!item || typeof item.id !== "string" || !item.id) continue;
+    removeSet.delete(item.id);
+    if (!upsertMap.has(item.id)) upsertOrder.push(item.id);
+    upsertMap.set(item.id, item);
+  }
+  const merged: T[] = [];
+  const seen = new Set<string>();
+  for (const item of current) {
+    if (removeSet.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(upsertMap.get(item.id) ?? item);
+  }
+  for (const id of upsertOrder) {
+    if (!seen.has(id)) {
+      const next = upsertMap.get(id);
+      if (next) merged.push(next);
+    }
+  }
+  return merged;
+}
+
+export async function refreshRemoteFreezoneCanvasDelta(
+  project: string,
+  canvasId: string,
+  sinceRevision: number,
+  options?: RemoteCanvasApplyOptions,
+): Promise<boolean> {
+  const runtime = currentRuntime;
+  if (!runtime || runtime.project !== project || runtime.canvasId !== canvasId) return false;
+  if (typeof getFreezoneCanvasDelta !== "function") {
+    return await refreshRemoteFreezoneCanvas(project, canvasId, options);
+  }
+  try {
+    const delta = await getFreezoneCanvasDelta(project, canvasId, sinceRevision);
+    if (currentRuntime !== runtime) return false;
+    if (delta.mode === "noop") {
+      return true;
+    }
+    if (delta.mode === "full") {
+      const fullPayload: FreezoneCanvasPayload = {
+        ...delta.canvas,
+        ...(delta.foreign_media ? { foreign_media: delta.foreign_media } : {}),
+      };
+      return applyRemoteFreezoneCanvas(project, canvasId, fullPayload, undefined, options) === true;
+    }
+    const storeState = useCanvasStore.getState();
+    const mergedNodes = applyDeltaItemsById(
+      storeState.nodes,
+      (delta.upsert_nodes ?? []) as CanvasNode[],
+      delta.remove_node_ids ?? [],
+    );
+    const mergedEdges = applyDeltaItemsById(
+      storeState.edges,
+      (delta.upsert_edges ?? []) as CanvasEdge[],
+      delta.remove_edge_ids ?? [],
+    );
+    const remotePayload: FreezoneCanvasPayload = {
+      canvas_id: canvasId,
+      project_id: project,
+      revision: delta.revision,
+      nodes: mergedNodes,
+      edges: mergedEdges,
+      metadata: delta.has_metadata ? (delta.metadata ?? null) : getFreezoneCanvasMetadata(),
+      ...(delta.has_viewport ? { viewport: delta.viewport } : { viewport: storeState.currentViewport }),
+      ...(delta.foreign_media ? { foreign_media: delta.foreign_media } : {}),
+    };
+    return applyRemoteFreezoneCanvas(project, canvasId, remotePayload, undefined, options) === true;
+  } catch {
+    return await refreshRemoteFreezoneCanvas(project, canvasId, options);
+  }
 }
 
 export async function flushFreezoneCanvasRuntime(

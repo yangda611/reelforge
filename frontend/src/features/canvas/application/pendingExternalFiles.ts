@@ -33,7 +33,7 @@ export type ExternalFileChannel = Extract<
  * 一直握着 File 的引用。超过上限就按插入顺序淘汰最老的一条 —— 待投递的 File 天然
  * 是「刚刚拖进来的那几个」，正常用法下 map 里同时不会有几条。
  */
-const MAX_PENDING = 64;
+const MAX_PENDING = 512;
 
 const pending = new Map<string, File>();
 

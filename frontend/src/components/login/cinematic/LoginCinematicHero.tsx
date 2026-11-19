@@ -11,7 +11,6 @@ import { PRODUCT_MANUAL_URL } from "@/lib/product-manual";
 import { detectDesktopPlatform, type DesktopPlatform } from "@/lib/desktop-download";
 import styles from "@/components/login/login.module.css";
 import layout from "./hero-layout.module.css";
-import { AnnouncementEntry } from "./AnnouncementEntry";
 import { MoreInfoMenu } from "./MoreInfoMenu";
 
 const GITHUB_URL = "https://github.com/yangda611/reelforge";
@@ -131,7 +130,6 @@ export function LoginCinematicHeader({
       <div className={styles.stageActions}>
         {/* 桌面端下载入口暂时隐藏，改回 true 即可恢复（组件代码保留）。 */}
         {SHOW_DESKTOP_DOWNLOAD && <DesktopDownload />}
-        <AnnouncementEntry />
         <MoreInfoMenu />
         <a
           className={styles.githubLink}

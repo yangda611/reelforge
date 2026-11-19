@@ -6,6 +6,13 @@ import {
   registerStorageReclaimer,
   safeLocalStorageSet,
 } from "@/lib/localStorageQuota";
+import {
+  deleteIdbDraft,
+  hasIndexedDbSupport,
+  pruneIdbCanvasStorage,
+  readIdbDraft,
+  writeIdbDraft,
+} from "./canvasIndexedDb";
 import type {
   CanvasEdge,
   CanvasHistoryState,
@@ -56,34 +63,41 @@ function draftStorageKey(project: string, canvasId: string): string {
   return `${CANVAS_DRAFT_PREFIX}${encodeURIComponent(project)}:${encodeURIComponent(canvasId)}`;
 }
 
-function stableCanvasShape(
-  nodes: CanvasNode[],
-  edges: CanvasEdge[],
-  metadata: Record<string, unknown> | null,
-): unknown {
-  return {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      position: node.position,
-      width: node.width,
-      height: node.height,
-      style: node.style,
-      parentId: node.parentId,
-      extent: node.extent,
-      data: node.data,
-    })),
-    edges: edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-      type: edge.type,
-      data: edge.data,
-    })),
-    metadata: metadata ?? null,
-  };
+const draftNodeSigCache = new WeakMap<object, string>();
+const draftEdgeSigCache = new WeakMap<object, string>();
+
+function draftNodeSignature(node: CanvasNode): string {
+  const cached = draftNodeSigCache.get(node);
+  if (cached !== undefined) return cached;
+  const serialized = stableStringify({
+    id: node.id,
+    type: node.type,
+    position: node.position,
+    width: node.width,
+    height: node.height,
+    style: node.style,
+    parentId: node.parentId,
+    extent: node.extent,
+    data: node.data,
+  });
+  draftNodeSigCache.set(node, serialized);
+  return serialized;
+}
+
+function draftEdgeSignature(edge: CanvasEdge): string {
+  const cached = draftEdgeSigCache.get(edge);
+  if (cached !== undefined) return cached;
+  const serialized = stableStringify({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    sourceHandle: edge.sourceHandle,
+    targetHandle: edge.targetHandle,
+    type: edge.type,
+    data: edge.data,
+  });
+  draftEdgeSigCache.set(edge, serialized);
+  return serialized;
 }
 
 export function canvasDraftSignature(
@@ -91,7 +105,7 @@ export function canvasDraftSignature(
   edges: CanvasEdge[],
   metadata: Record<string, unknown> | null,
 ): string {
-  return stableStringify(stableCanvasShape(nodes, edges, metadata));
+  return `{"edges":[${edges.map(draftEdgeSignature).join(",")}],"metadata":${stableStringify(metadata ?? null)},"nodes":[${nodes.map(draftNodeSignature).join(",")}]}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -191,6 +205,63 @@ export function clearCanvasDraft(project: string, canvasId: string): void {
   } catch {
     // Best-effort cleanup.
   }
+  if (hasIndexedDbSupport()) {
+    void deleteIdbDraft(project, canvasId);
+  }
+}
+
+export async function readCanvasDraftAsync(
+  project: string,
+  canvasId: string,
+): Promise<StoredCanvasDraft | null> {
+  if (hasIndexedDbSupport()) {
+    const idbValue = await readIdbDraft<unknown>(project, canvasId);
+    const parsedIdb = parseStoredDraft(idbValue, project, canvasId);
+    if (parsedIdb) {
+      return parsedIdb;
+    }
+  }
+  return readCanvasDraft(project, canvasId);
+}
+
+export async function writeCanvasDraftAsync(
+  project: string,
+  canvasId: string,
+  input: CanvasDraftInput,
+): Promise<boolean> {
+  const draft: StoredCanvasDraft = {
+    version: CANVAS_DRAFT_VERSION,
+    project,
+    canvasId,
+    ...input,
+    signature: canvasDraftSignature(input.nodes, input.edges, input.metadata),
+  };
+  if (hasIndexedDbSupport()) {
+    const ok = await writeIdbDraft(project, canvasId, draft);
+    if (ok) {
+      try {
+        localStorage.removeItem(draftStorageKey(project, canvasId));
+      } catch {
+        // Ignore cleanup failure.
+      }
+      return true;
+    }
+  }
+  return writeCanvasDraft(project, canvasId, input);
+}
+
+export async function clearCanvasDraftAsync(
+  project: string,
+  canvasId: string,
+): Promise<void> {
+  try {
+    localStorage.removeItem(draftStorageKey(project, canvasId));
+  } catch {
+    // Best-effort cleanup.
+  }
+  if (hasIndexedDbSupport()) {
+    await deleteIdbDraft(project, canvasId);
+  }
 }
 
 export function writeCanvasDraft(
@@ -283,6 +354,9 @@ export function pruneFreezoneCanvasStorage(now = Date.now()): void {
   pruneLocalStorageByPrefix(isFreezoneCanvasKey, (key, raw) =>
     shouldReclaimFreezoneEntry(key, raw, now),
   );
+  if (hasIndexedDbSupport()) {
+    void pruneIdbCanvasStorage(now, FREEZONE_CANVAS_TTL_MS);
+  }
 }
 
 /** @deprecated Back-compat alias — use {@link pruneFreezoneCanvasStorage}. */

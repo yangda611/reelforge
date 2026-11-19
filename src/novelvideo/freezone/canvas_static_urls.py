@@ -98,6 +98,8 @@ def _prefer_sog_project_static_url(value: str, *, project_dir: Path | None) -> s
         return value
 
     parsed = urlsplit(value)
+    if not parsed.path.lower().endswith(".ply"):
+        return value
     parts = parsed.path.split("/", 4)
     if len(parts) < 5 or parts[1] != "static" or parts[2] != "projects":
         return value
@@ -190,12 +192,24 @@ def migrate_canvas_static_urls_in_memory(
 
     def visit(value, *, key: str | None = None):
         if isinstance(value, dict):
-            return {
-                str(child_key): visit(child_value, key=str(child_key))
-                for child_key, child_value in value.items()
-            }
+            updated_dict: dict | None = None
+            for child_key, child_value in value.items():
+                key_str = str(child_key)
+                next_value = visit(child_value, key=key_str)
+                if next_value is not child_value or key_str != child_key:
+                    if updated_dict is None:
+                        updated_dict = {str(k): v for k, v in value.items()}
+                    updated_dict[key_str] = next_value
+            return updated_dict if updated_dict is not None else value
         if isinstance(value, list):
-            return [visit(item, key=key) for item in value]
+            updated_list: list | None = None
+            for index, item in enumerate(value):
+                next_item = visit(item, key=key)
+                if next_item is not item:
+                    if updated_list is None:
+                        updated_list = list(value)
+                    updated_list[index] = next_item
+            return updated_list if updated_list is not None else value
         if isinstance(value, str) and is_url_field_name(key):
             canonical = _rewrite_local_project_path_url(
                 value,
@@ -215,7 +229,7 @@ def migrate_canvas_static_urls_in_memory(
             return _prefer_sog_project_static_url(canonical, project_dir=project_dir)
         return value
 
-    return visit(deepcopy(payload))
+    return visit(payload)
 
 
 def sanitize_project_local_paths_in_memory(

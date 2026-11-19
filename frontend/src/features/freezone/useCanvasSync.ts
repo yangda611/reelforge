@@ -12,6 +12,7 @@ import {
   type CanvasNode,
 } from "@/stores/canvasStore";
 import { CANVAS_NODE_TYPES } from "@/features/canvas/domain/canvasNodes";
+import { prewarmFreezoneThumbnails } from "@/api/ops";
 import { syncStoryVideoReferencePrompt } from "@/features/canvas/application/videoContinuity";
 import {
   applyForeignMediaRepairToNodes,
@@ -22,6 +23,7 @@ import {
   createCanvasFromPreset,
   generateClientSaveId,
   getFreezoneCanvas,
+  patchFreezoneCanvas,
   putFreezoneCanvas,
   type CanvasBackupStatus,
   type FreezoneCanvasPayload,
@@ -31,6 +33,7 @@ import {
 import { ApiError } from "@/api/client";
 import type { TFn } from "@/lib/i18n-types";
 import {
+  buildIncrementalPatch,
   buildSavePayload,
   checkPayloadLimits,
   classifySaveError,
@@ -67,11 +70,20 @@ import {
 import {
   canvasDraftSignature,
   clearCanvasDraft,
+  clearCanvasDraftAsync,
   pruneOldCanvasDrafts,
   readCanvasDraft,
+  readCanvasDraftAsync,
   writeCanvasDraft,
+  writeCanvasDraftAsync,
   type StoredCanvasDraft,
 } from "./canvasDraftStorage";
+import {
+  deleteIdbHistory,
+  hasIndexedDbSupport,
+  readIdbHistory,
+  writeIdbHistory,
+} from "./canvasIndexedDb";
 import { safeLocalStorageSet } from "@/lib/localStorageQuota";
 import { clearCanvasSelection } from "@/features/canvas/application/nodeSelection";
 import {
@@ -600,6 +612,59 @@ function clearStoredHistory(project: string, canvasId: string): void {
   } catch {
     // Best-effort cleanup.
   }
+  if (hasIndexedDbSupport()) {
+    void deleteIdbHistory(project, canvasId);
+  }
+}
+
+async function readStoredHistoryAsync(
+  project: string,
+  canvasId: string,
+): Promise<StoredCanvasHistory | null> {
+  if (hasIndexedDbSupport()) {
+    const idbValue = await readIdbHistory<Partial<StoredCanvasHistory>>(project, canvasId);
+    if (
+      idbValue &&
+      typeof idbValue.signature === "string" &&
+      Array.isArray(idbValue.past) &&
+      Array.isArray(idbValue.future)
+    ) {
+      return {
+        signature: idbValue.signature,
+        past: idbValue.past,
+        future: idbValue.future,
+        updatedAt: typeof idbValue.updatedAt === "number" ? idbValue.updatedAt : 0,
+      };
+    }
+  }
+  return readStoredHistory(project, canvasId);
+}
+
+async function writeStoredHistoryAsync(
+  project: string,
+  canvasId: string,
+  signature: string,
+  history: CanvasHistoryState,
+  now = Date.now(),
+): Promise<void> {
+  if (hasIndexedDbSupport()) {
+    const trimmed = trimHistoryForStorage(history, 25);
+    const ok = await writeIdbHistory(project, canvasId, {
+      signature,
+      past: trimmed.past,
+      future: trimmed.future,
+      updatedAt: now,
+    });
+    if (ok) {
+      try {
+        localStorage.removeItem(historyStorageKey(project, canvasId));
+      } catch {
+        // Ignore cleanup error.
+      }
+      return;
+    }
+  }
+  writeStoredHistory(project, canvasId, signature, history, now);
 }
 
 // "conflict" is from the revision-aware save path (HEAD); kept across merge.
@@ -793,6 +858,10 @@ export function useCanvasSync(
   // detect the "remote had nodes, local is suddenly empty" pattern that
   // signals a Zustand reset / HMR accident.
   const lastRemoteNodeCountRef = useRef(0);
+  const lastRemoteNodesRef = useRef<unknown[]>([]);
+  const lastRemoteEdgesRef = useRef<unknown[]>([]);
+  const lastRemoteMetadataRef = useRef<Record<string, unknown> | null>(null);
+  const patchUnsupportedRef = useRef(false);
   // Last viewport we persisted. Pan/zoom alone never triggers a full PUT (that
   // would re-send the entire canvas blob on every gesture), so we track it here
   // and flush it on tab close, which is enough to restore position on refresh.
@@ -809,13 +878,10 @@ export function useCanvasSync(
     setStatus(next);
   };
 
-  const writeDraftNow = () => {
-    if (!hydratedRef.current || switchingRef.current) {
-      return false;
-    }
+  const buildDraftInput = () => {
     const canvasState = useCanvasStore.getState();
     const shot = useShotMetadataStore.getState().shot;
-    return writeCanvasDraft(project, canvasId, {
+    return {
       baseRevision: revisionRef.current,
       nodes: canvasState.nodes,
       edges: canvasState.edges,
@@ -828,7 +894,19 @@ export function useCanvasSync(
         pendingClearIntent: canvasState.pendingClearIntent,
       },
       updatedAt: Date.now(),
-    });
+    };
+  };
+  const writeDraftNow = () => {
+    if (!hydratedRef.current || switchingRef.current) {
+      return false;
+    }
+    return writeCanvasDraft(project, canvasId, buildDraftInput());
+  };
+  const writeDraftAsyncNow = () => {
+    if (!hydratedRef.current || switchingRef.current) {
+      return;
+    }
+    void writeCanvasDraftAsync(project, canvasId, buildDraftInput());
   };
   // Single source of truth for the persisted metadata blob so every save site
   // (draft write, debounced PUT, flush, beforeunload) carries shotMetadata AND
@@ -854,7 +932,7 @@ export function useCanvasSync(
     }
     draftTimerRef.current = window.setTimeout(() => {
       draftTimerRef.current = null;
-      writeDraftNow();
+      writeDraftAsyncNow();
     }, DRAFT_DEBOUNCE_MS);
   };
   const clearDraftTimerAndDraft = () => {
@@ -862,7 +940,11 @@ export function useCanvasSync(
       window.clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
     }
-    clearCanvasDraft(project, canvasId);
+    if (hasIndexedDbSupport()) {
+      void clearCanvasDraftAsync(project, canvasId);
+    } else {
+      clearCanvasDraft(project, canvasId);
+    }
   };
 
   // Stash local edits to localStorage so the user can grab them via the
@@ -917,6 +999,10 @@ export function useCanvasSync(
       hydratedRef,
       switchingRef,
       lastRemoteNodeCountRef,
+      lastRemoteNodesRef,
+      lastRemoteEdgesRef,
+      lastRemoteMetadataRef,
+      patchUnsupportedRef,
       setStatus: setSyncStatus,
       setError,
       snapshotConflict,
@@ -1079,12 +1165,15 @@ export function useCanvasSync(
       publishForeignMediaRefs(project, canvasId, remote.foreign_media ?? []);
       lastSignatureRef.current = nextSignature;
       lastRemoteNodeCountRef.current = remoteNodes.length;
+      lastRemoteNodesRef.current = remoteNodes;
+      lastRemoteEdgesRef.current = remoteEdges;
       pendingClientSaveIdRef.current = null;
       pendingClientSaveIdSignatureRef.current = null;
       clearCanvasDraft(project, canvasId);
       const meta = (remote.metadata ?? null) as
         | (Record<string, unknown> & { shotMetadata?: ShotMetadata })
         | null;
+      lastRemoteMetadataRef.current = meta;
       metadataRef.current = meta;
       setMetadata(meta);
       setFreezoneCanvasMetadata(meta);
@@ -1213,6 +1302,10 @@ export function useCanvasSync(
       setCanvasData([], []);
     }
     lastRemoteNodeCountRef.current = 0;
+    lastRemoteNodesRef.current = [];
+    lastRemoteEdgesRef.current = [];
+    lastRemoteMetadataRef.current = null;
+    patchUnsupportedRef.current = false;
     pendingClientSaveIdRef.current = null;
     pendingClientSaveIdSignatureRef.current = null;
     setBackupStatus(null);
@@ -1236,7 +1329,10 @@ export function useCanvasSync(
           | null;
         const remoteSignature = canvasDraftSignature(nodes, edges, meta);
         lastPersistedDraftSignatureRef.current = remoteSignature;
-        const draft = readCanvasDraft(project, canvasId);
+        const draft = hasIndexedDbSupport()
+          ? await readCanvasDraftAsync(project, canvasId)
+          : readCanvasDraft(project, canvasId);
+        if (cancelled) return;
         const draftDecision = decideHydrateDraft(
           draft,
           remoteRevision,
@@ -1247,6 +1343,9 @@ export function useCanvasSync(
           t,
         );
         lastRemoteNodeCountRef.current = nodes.length;
+        lastRemoteNodesRef.current = nodes;
+        lastRemoteEdgesRef.current = edges;
+        lastRemoteMetadataRef.current = meta;
         if (draftDecision.kind === "draft") {
           const draftMeta = draftDecision.draft.metadata as
             | (Record<string, unknown> & { shotMetadata?: ShotMetadata })
@@ -1360,32 +1459,41 @@ export function useCanvasSync(
         // 只是白白拉长切换那一帧。
         const hydratedSignature = lastSignatureRef.current;
         scheduleIdle(() => {
-          // Read-once: the mirror only exists to bridge this refresh. Drop it
-          // whether or not it was usable so undo stacks don't accumulate per
-          // canvas. The write effect re-persists it once the user edits again.
-          // 这张画布已经被更晚的一次 hydrate 接管（切走又切回来），盘上的镜像归
-          // 那一次所有，无论本次是否 cancelled 都不该动。
           if (!ownsHydrate(hydrateKey, hydrateToken)) return;
           if (cancelled) {
             clearStoredHistory(project, canvasId);
             return;
           }
-          const storedHistory = readStoredHistory(project, canvasId);
-          // 空闲期跑意味着中间可能已经有一次真实编辑；那次编辑的快照已经进了
-          // history，这时再整体替换会把它吞掉，所以只在完全没编辑过时恢复。
-          if (
-            storedHistory &&
-            storedHistory.signature === hydratedSignature &&
-            useCanvasStore.getState().userEditsSinceHydrate === 0
-          ) {
-            restoreHistory({ past: storedHistory.past, future: storedHistory.future });
+          const applyStoredHistory = (storedHistory: StoredCanvasHistory | null) => {
+            if (!ownsHydrate(hydrateKey, hydrateToken)) return;
+            if (
+              storedHistory &&
+              storedHistory.signature === hydratedSignature &&
+              useCanvasStore.getState().userEditsSinceHydrate === 0
+            ) {
+              restoreHistory({ past: storedHistory.past, future: storedHistory.future });
+            }
+            if (useCanvasStore.getState().userEditsSinceHydrate === 0) {
+              clearStoredHistory(project, canvasId);
+            }
+          };
+          if (hasIndexedDbSupport()) {
+            void readStoredHistoryAsync(project, canvasId).then(applyStoredHistory);
+          } else {
+            applyStoredHistory(readStoredHistory(project, canvasId));
           }
-          // 空闲期可能已经晚于 edit-gated 的镜像写入（那个 effect 400ms 防抖，而
-          // hydrate 之后主线程正忙着每帧升级 3 个壳）。这时候盘上那份镜像是用户
-          // 刚才那次编辑写的、不是我们要读完即弃的那份，清掉就等于把他的跨刷新
-          // undo 栈删了。
-          if (useCanvasStore.getState().userEditsSinceHydrate === 0) {
-            clearStoredHistory(project, canvasId);
+          const prewarmUrls: string[] = [];
+          for (const node of hydrated.nodes) {
+            const nodeData = node.data as { imageUrl?: unknown; previewImageUrl?: unknown } | undefined;
+            if (typeof nodeData?.imageUrl === "string" && nodeData.imageUrl.trim()) {
+              prewarmUrls.push(nodeData.imageUrl.trim());
+            }
+            if (typeof nodeData?.previewImageUrl === "string" && nodeData.previewImageUrl.trim()) {
+              prewarmUrls.push(nodeData.previewImageUrl.trim());
+            }
+          }
+          if (prewarmUrls.length > 0) {
+            void prewarmFreezoneThumbnails(project, prewarmUrls).catch(() => {});
           }
         });
         // Hydrate freezone-specific sidecar metadata.
@@ -1459,12 +1567,21 @@ export function useCanvasSync(
       if (state.userEditsSinceHydrate <= 0) {
         return;
       }
-      writeStoredHistory(
-        project,
-        canvasId,
-        canvasContentSignature(state.nodes, state.edges),
-        state.history,
-      );
+      if (hasIndexedDbSupport()) {
+        void writeStoredHistoryAsync(
+          project,
+          canvasId,
+          canvasContentSignature(state.nodes, state.edges),
+          state.history,
+        );
+      } else {
+        writeStoredHistory(
+          project,
+          canvasId,
+          canvasContentSignature(state.nodes, state.edges),
+          state.history,
+        );
+      }
     };
     const unsubscribe = useCanvasStore.subscribe((state, prev) => {
       if (state.history === prev.history) {
@@ -1473,7 +1590,9 @@ export function useCanvasSync(
       if (timer != null) {
         window.clearTimeout(timer);
       }
-      timer = window.setTimeout(writeNow, 400);
+      timer = window.setTimeout(() => {
+        scheduleIdle(writeNow);
+      }, 400);
     });
     const handleUnload = () => writeNow();
     window.addEventListener("beforeunload", handleUnload);
@@ -1660,12 +1779,13 @@ export function useCanvasSync(
       // Reuse the pending idempotency token if a save was already in flight,
       // otherwise mint a fresh one so a hypothetical browser-issued retry
       // after the tab reopens still dedupes.
-      const contentSignature = JSON.stringify({
-        nodes: canvasState.nodes,
-        edges: canvasState.edges,
+      const contentSignature = `${canvasContentSignature(
+        canvasState.nodes,
+        canvasState.edges,
+      )}\u0000${JSON.stringify({
         viewport: currentViewport,
         metadata: buildPersistMetadata(shot),
-      });
+      })}`;
       if (
         pendingClientSaveIdRef.current == null ||
         pendingClientSaveIdSignatureRef.current !== contentSignature
@@ -1855,6 +1975,10 @@ interface SaveArgs {
   hydratedRef: { current: boolean };
   switchingRef: { current: boolean };
   lastRemoteNodeCountRef: { current: number };
+  lastRemoteNodesRef?: { current: unknown[] };
+  lastRemoteEdgesRef?: { current: unknown[] };
+  lastRemoteMetadataRef?: { current: Record<string, unknown> | null };
+  patchUnsupportedRef?: { current: boolean };
   setStatus: (s: CanvasSyncStatus) => void;
   setError: (e: string | null) => void;
   /**
@@ -1924,12 +2048,13 @@ async function scheduleSave(args: SaveArgs): Promise<boolean> {
   // retryable code (503 canvas_lock_busy), the ref still holds the same id and
   // we reuse it so the backend can dedupe. If the content shape changed since
   // the last attempt, mint a fresh id instead.
-  const contentSignature = JSON.stringify({
-    nodes: args.nodes,
-    edges: args.edges,
+  const contentSignature = `${canvasContentSignature(
+    args.nodes as CanvasNode[],
+    args.edges as CanvasEdge[],
+  )}\u0000${JSON.stringify({
     viewport: args.viewport ?? null,
     metadata: args.metadata ?? null,
-  });
+  })}`;
   if (
     args.pendingClientSaveIdRef.current == null ||
     args.pendingClientSaveIdSignatureRef.current !== contentSignature
@@ -2015,7 +2140,41 @@ async function performSave(
   }
 
   try {
-    const response = await putFreezoneCanvas(args.project, args.canvasId, payload);
+    let response: FreezoneCanvasSaveResult;
+    const incrementalPatch =
+      !args.patchUnsupportedRef?.current &&
+      typeof patchFreezoneCanvas === "function" &&
+      args.lastRemoteNodesRef &&
+      args.lastRemoteEdgesRef &&
+      args.lastRemoteMetadataRef
+        ? buildIncrementalPatch({
+            baselineNodes: args.lastRemoteNodesRef.current,
+            baselineEdges: args.lastRemoteEdgesRef.current,
+            baselineMetadata: args.lastRemoteMetadataRef.current,
+            currentNodes: args.nodes,
+            currentEdges: args.edges,
+            currentMetadata: args.metadata ?? null,
+            viewport: args.viewport,
+            baseRevision: args.revisionRef.current,
+            clientSaveId,
+            decision,
+          })
+        : null;
+    if (incrementalPatch) {
+      try {
+        response = await patchFreezoneCanvas(args.project, args.canvasId, incrementalPatch);
+      } catch (patchErr) {
+        const patchStatus = statusFromError(patchErr);
+        if (patchStatus === 404 || patchStatus === 405 || patchStatus === 501) {
+          if (args.patchUnsupportedRef) args.patchUnsupportedRef.current = true;
+          response = await putFreezoneCanvas(args.project, args.canvasId, payload);
+        } else {
+          throw patchErr;
+        }
+      }
+    } else {
+      response = await putFreezoneCanvas(args.project, args.canvasId, payload);
+    }
     if (args.canvasGenerationRef.current !== dispatchGeneration) {
       // The user switched canvases while this PUT was on the wire. The save
       // itself succeeded server-side, but every ref the response would update
@@ -2063,6 +2222,9 @@ function consumeSaveResponse(
   // Record what the server now sees so the next dangerous-empty check has
   // an up-to-date baseline.
   args.lastRemoteNodeCountRef.current = args.nodes.length;
+  if (args.lastRemoteNodesRef) args.lastRemoteNodesRef.current = args.nodes;
+  if (args.lastRemoteEdgesRef) args.lastRemoteEdgesRef.current = args.edges;
+  if (args.lastRemoteMetadataRef) args.lastRemoteMetadataRef.current = args.metadata ?? null;
   args.markDraftPersisted?.(
     canvasDraftSignature(
       args.nodes as CanvasNode[],

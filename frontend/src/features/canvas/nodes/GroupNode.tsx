@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 
 
 import { uploadFreezoneImage } from '@/api/ops';
+import { withMediaVariant } from '@/lib/media-url';
 import { readUrl } from '@/lib/url-params';
 import { CanvasHistoryAssetsModal } from '@/features/canvas/ui/CanvasHistoryAssetsModal';
 import type { CanvasAsset } from '@/features/canvas/domain/canvasAssets';
@@ -558,8 +559,9 @@ export const GroupNode = memo(({ id, data, selected }: GroupNodeProps) => {
               >
                 {preview.imageUrl ? (
                   <img
-                    src={preview.imageUrl}
+                    src={withMediaVariant(preview.imageUrl, 'thumb')}
                     alt=""
+                    decoding="async"
                     draggable={false}
                     className="h-full w-full object-cover"
                   />
@@ -597,8 +599,9 @@ export const GroupNode = memo(({ id, data, selected }: GroupNodeProps) => {
         >
           {floating.preview.imageUrl ? (
             <img
-              src={floating.preview.imageUrl}
+              src={withMediaVariant(floating.preview.imageUrl, 'thumb')}
               alt=""
+              decoding="async"
               draggable={false}
               className="h-full w-full object-cover"
             />

@@ -184,6 +184,143 @@ def _clear_decline(dest: Path) -> None:
         logger.debug("stale thumbnail decline marker kept for %s", dest, exc_info=True)
 
 
+def probe_image_dimensions(source: Path) -> Optional[tuple[int, int]]:
+    """Return display-oriented (width, height) from image header without full decode."""
+
+    if not is_thumbnailable(source):
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(source) as opened:
+            width, height = opened.size
+            if width <= 0 or height <= 0:
+                return None
+            try:
+                orientation = opened.getexif().get(274)
+            except Exception:
+                orientation = None
+            if orientation in {5, 6, 7, 8}:
+                return (height, width)
+            return (width, height)
+    except Exception:
+        logger.debug("image dimension probe skipped for %s", source, exc_info=True)
+        return None
+
+
+def _write_webp_atomic(dest: Path, image, source_mtime_ns: int) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        image.save(tmp, "WEBP", quality=_WEBP_QUALITY, method=_WEBP_METHOD)
+        os.utime(tmp, ns=(source_mtime_ns, source_mtime_ns))
+        os.replace(tmp, dest)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dest
+
+
+def ensure_variants(
+    project_dir: Path,
+    source: Path,
+    variants: Iterable[str] | None = None,
+) -> dict[str, Path]:
+    """Build multiple current thumbnails in a single decode pass (largest-first).
+
+    Best-effort: returns a mapping of built/current variant name -> Path.
+    """
+
+    result: dict[str, Path] = {}
+    if not is_thumbnailable(source):
+        return result
+
+    requested: list[tuple[str, int, Path]] = []
+    seen: set[str] = set()
+    try:
+        stat = source.stat()
+    except OSError:
+        return result
+    source_mtime_ns = stat.st_mtime_ns
+
+    for raw in VARIANTS if variants is None else variants:
+        name = normalize_variant(raw)
+        if name is None or name in seen:
+            continue
+        seen.add(name)
+        dest = thumbnail_path(project_dir, source, name)
+        if dest is None:
+            continue
+        if stat.st_size > _MAX_SOURCE_BYTES:
+            _record_decline(dest, source_mtime_ns)
+            continue
+        if _is_current(dest, source_mtime_ns):
+            result[name] = dest
+            continue
+        if _is_current(_declined_path(dest), source_mtime_ns):
+            continue
+        requested.append((name, VARIANTS[name], dest))
+
+    if not requested:
+        return result
+
+    # Process largest budget first so smaller tiers shrink an already-resized image.
+    requested.sort(key=lambda item: item[1], reverse=True)
+    largest_edge = requested[0][1]
+
+    try:
+        from PIL import Image, ImageOps
+
+        with _render_slots:
+            with Image.open(source) as opened:
+                if getattr(opened, "is_animated", False):
+                    for _name, _edge, dest in requested:
+                        _record_decline(dest, source_mtime_ns)
+                    return result
+                width, height = opened.size
+                if width <= 0 or height <= 0 or width * height > _MAX_SOURCE_PIXELS:
+                    for _name, _edge, dest in requested:
+                        _record_decline(dest, source_mtime_ns)
+                    return result
+
+                source_long_edge = max(width, height)
+                need_any = any(source_long_edge > edge for _name, edge, _dest in requested)
+                if not need_any:
+                    for _name, _edge, dest in requested:
+                        _record_decline(dest, source_mtime_ns)
+                    return result
+
+                opened.draft("RGB", (largest_edge, largest_edge))
+                im = ImageOps.exif_transpose(opened) or opened
+                try:
+                    has_alpha = im.mode in {"RGBA", "LA"} or (
+                        im.mode == "P" and "transparency" in im.info
+                    )
+                    working = im.convert("RGBA" if has_alpha else "RGB")
+                finally:
+                    if im is not opened:
+                        im.close()
+
+                try:
+                    for name, max_edge, dest in requested:
+                        if source_long_edge <= max_edge:
+                            _record_decline(dest, source_mtime_ns)
+                            continue
+                        with _stripe_for(dest):
+                            if _is_current(dest, source_mtime_ns):
+                                result[name] = dest
+                                continue
+                            working.thumbnail((max_edge, max_edge), Image.LANCZOS)
+                            written = _write_webp_atomic(dest, working, source_mtime_ns)
+                            _clear_decline(dest)
+                            result[name] = written
+                finally:
+                    working.close()
+    except Exception:
+        logger.debug("multi-variant thumbnail skipped for %s", source, exc_info=True)
+    return result
+
+
 def ensure_thumbnail(
     project_dir: Path, source: Path, variant: str | None
 ) -> Optional[Path]:

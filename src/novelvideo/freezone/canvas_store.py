@@ -20,6 +20,7 @@ from novelvideo.utils.async_ops import call_blocking
 
 CANVAS_HISTORY_TS_FORMAT = "%Y%m%d_%H%M%S_%f"
 HISTORY_RETENTION_LIMIT = 100
+DELTA_LOG_LIMIT = 50
 IDEMPOTENCY_LIMIT = 50
 IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 # 「最近有别人写过这张画布」的提示窗口(秒)。取值与 EE 的租约 TTL 对齐:一个写者
@@ -241,6 +242,7 @@ def atomic_write_json(
     payload: dict,
     *,
     fence: Callable[[], None] | None = None,
+    serialized_data: str | None = None,
 ) -> None:
     """写临时文件 → fsync → rename。`fence` 挂在 rename 之前的最后一刻。
 
@@ -254,7 +256,11 @@ def atomic_write_json(
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    data = json.dumps(payload, ensure_ascii=False, indent=2)
+    data = (
+        serialized_data
+        if serialized_data is not None
+        else json.dumps(payload, ensure_ascii=False, indent=2)
+    )
     try:
         with tmp.open("w", encoding="utf-8") as fh:
             fh.write(data)
@@ -333,11 +339,17 @@ def oversized_canvas_diagnostics(payload: dict, *, limit: int) -> list[dict]:
     return result
 
 
-def canvas_payload_size_warning(payload: dict) -> dict | None:
+def canvas_payload_size_warning(
+    payload: dict, *, serialized_bytes: int | None = None
+) -> dict | None:
     limit = CANVAS_PAYLOAD_SIZE_LIMIT_BYTES
     if limit <= 0:
         return None
-    actual = serialized_canvas_size_bytes(payload)
+    actual = (
+        serialized_bytes
+        if serialized_bytes is not None
+        else serialized_canvas_size_bytes(payload)
+    )
     if actual <= limit:
         return None
     top_fields = oversized_canvas_diagnostics(
@@ -776,9 +788,18 @@ def save_canvas(
             save_source=save_source,
             allow_empty_overwrite=allow_empty_overwrite,
         )
-        size_warning = canvas_payload_size_warning(payload)
+        serialized_payload = json.dumps(payload, ensure_ascii=False, indent=2)
+        size_warning = canvas_payload_size_warning(
+            payload, serialized_bytes=len(serialized_payload.encode("utf-8"))
+        )
         backup_path = backup_canvas_snapshot(path, existing)
-        atomic_write_json(path, payload, fence=guard.reassert)
+        atomic_write_json(
+            path,
+            payload,
+            fence=guard.reassert,
+            serialized_data=serialized_payload,
+        )
+        _append_canvas_delta_entry(project_dir, canvas_id, existing=existing, payload=payload)
         prune_canvas_history(project_dir, canvas_id)
         response_cache = {
             "saved": True,
@@ -818,6 +839,252 @@ async def save_canvas_async(*args, **kwargs) -> CanvasSaveResult:
     """
 
     return await call_blocking(save_canvas, *args, **kwargs)
+
+
+def canvas_deltas_path(project_dir: Path, canvas_id: str) -> Path:
+    return canvases_dir(project_dir) / "_deltas" / f"{canvas_id}.json"
+
+
+def _compute_canvas_delta(existing: dict | None, payload: dict) -> dict | None:
+    if not isinstance(existing, dict) or not isinstance(payload, dict):
+        return None
+    prev_rev = existing.get("revision")
+    next_rev = payload.get("revision")
+    if not isinstance(prev_rev, int) or not isinstance(next_rev, int) or next_rev != prev_rev + 1:
+        return None
+
+    old_nodes = {
+        str(n.get("id")): n
+        for n in (existing.get("nodes") or [])
+        if isinstance(n, dict) and n.get("id")
+    }
+    new_nodes_list = [n for n in (payload.get("nodes") or []) if isinstance(n, dict) and n.get("id")]
+    new_node_ids = {str(n.get("id")) for n in new_nodes_list}
+    upsert_nodes = [
+        n for n in new_nodes_list if old_nodes.get(str(n.get("id"))) != n
+    ]
+    remove_node_ids = [nid for nid in old_nodes if nid not in new_node_ids]
+
+    old_edges = {
+        str(e.get("id")): e
+        for e in (existing.get("edges") or [])
+        if isinstance(e, dict) and e.get("id")
+    }
+    new_edges_list = [e for e in (payload.get("edges") or []) if isinstance(e, dict) and e.get("id")]
+    new_edge_ids = {str(e.get("id")) for e in new_edges_list}
+    upsert_edges = [
+        e for e in new_edges_list if old_edges.get(str(e.get("id"))) != e
+    ]
+    remove_edge_ids = [eid for eid in old_edges if eid not in new_edge_ids]
+
+    entry: dict = {
+        "from_revision": prev_rev,
+        "to_revision": next_rev,
+        "upsert_nodes": upsert_nodes,
+        "remove_node_ids": remove_node_ids,
+        "upsert_edges": upsert_edges,
+        "remove_edge_ids": remove_edge_ids,
+    }
+    if payload.get("metadata") != existing.get("metadata"):
+        entry["has_metadata"] = True
+        entry["metadata"] = payload.get("metadata")
+    if payload.get("viewport") != existing.get("viewport"):
+        entry["has_viewport"] = True
+        entry["viewport"] = payload.get("viewport")
+    return entry
+
+
+def _append_canvas_delta_entry(
+    project_dir: Path,
+    canvas_id: str,
+    *,
+    existing: dict | None,
+    payload: dict,
+) -> None:
+    entry = _compute_canvas_delta(existing, payload)
+    if entry is None:
+        return
+    delta_path = canvas_deltas_path(project_dir, canvas_id)
+    try:
+        current = load_canvas_json(delta_path)
+        entries = list(current.get("entries") or []) if isinstance(current, dict) else []
+        entries = [
+            item for item in entries
+            if isinstance(item, dict) and item.get("to_revision") != entry["to_revision"]
+        ]
+        entries.append(entry)
+        if len(entries) > DELTA_LOG_LIMIT:
+            entries = entries[-DELTA_LOG_LIMIT:]
+        atomic_write_json(delta_path, {"canvas_id": canvas_id, "entries": entries})
+    except OSError:
+        logger.debug("canvas delta append skipped for %s", canvas_id, exc_info=True)
+
+
+def apply_canvas_patch_to_existing(
+    existing: dict | None,
+    patch: dict,
+) -> dict:
+    """Apply an incremental node/edge/metadata patch onto an existing canvas dict."""
+    base_nodes = [
+        n for n in ((existing or {}).get("nodes") or [])
+        if isinstance(n, dict) and n.get("id")
+    ]
+    base_edges = [
+        e for e in ((existing or {}).get("edges") or [])
+        if isinstance(e, dict) and e.get("id")
+    ]
+
+    remove_node_ids = {str(nid) for nid in (patch.get("remove_node_ids") or []) if nid}
+    upsert_nodes_by_id: dict[str, dict] = {}
+    upsert_order: list[str] = []
+    for node in patch.get("upsert_nodes") or []:
+        if not isinstance(node, dict) or not node.get("id"):
+            continue
+        nid = str(node["id"])
+        if nid not in upsert_nodes_by_id:
+            upsert_order.append(nid)
+        upsert_nodes_by_id[nid] = node
+        remove_node_ids.discard(nid)
+
+    merged_nodes: list[dict] = []
+    seen_nodes: set[str] = set()
+    for node in base_nodes:
+        nid = str(node["id"])
+        if nid in remove_node_ids:
+            continue
+        seen_nodes.add(nid)
+        merged_nodes.append(upsert_nodes_by_id.get(nid, node))
+    for nid in upsert_order:
+        if nid not in seen_nodes:
+            merged_nodes.append(upsert_nodes_by_id[nid])
+
+    remove_edge_ids = {str(eid) for eid in (patch.get("remove_edge_ids") or []) if eid}
+    upsert_edges_by_id: dict[str, dict] = {}
+    edge_order: list[str] = []
+    for edge in patch.get("upsert_edges") or []:
+        if not isinstance(edge, dict) or not edge.get("id"):
+            continue
+        eid = str(edge["id"])
+        if eid not in upsert_edges_by_id:
+            edge_order.append(eid)
+        upsert_edges_by_id[eid] = edge
+        remove_edge_ids.discard(eid)
+
+    merged_edges: list[dict] = []
+    seen_edges: set[str] = set()
+    for edge in base_edges:
+        eid = str(edge["id"])
+        if eid in remove_edge_ids:
+            continue
+        seen_edges.add(eid)
+        merged_edges.append(upsert_edges_by_id.get(eid, edge))
+    for eid in edge_order:
+        if eid not in seen_edges:
+            merged_edges.append(upsert_edges_by_id[eid])
+
+    merged = dict(existing or {})
+    merged["nodes"] = merged_nodes
+    merged["edges"] = merged_edges
+    if patch.get("has_viewport"):
+        merged["viewport"] = patch.get("viewport")
+    if patch.get("has_metadata"):
+        merged["metadata"] = patch.get("metadata")
+    if patch.get("save_source"):
+        merged["save_source"] = patch["save_source"]
+    return merged
+
+
+def read_canvas_delta(
+    project_dir: Path,
+    canvas_id: str,
+    *,
+    since_revision: int,
+) -> dict:
+    """Return noop, folded delta, or full fallback for a canvas since `since_revision`."""
+    current = read_canvas(project_dir, canvas_id)
+    if current is None:
+        return {"mode": "full", "revision": None, "canvas": None}
+    current_rev = current.get("revision")
+    if not isinstance(current_rev, int):
+        return {"mode": "full", "revision": None, "canvas": current}
+    if since_revision == current_rev:
+        return {"mode": "noop", "revision": current_rev}
+    if since_revision <= 0 or since_revision > current_rev:
+        return {"mode": "full", "revision": current_rev, "canvas": current}
+
+    delta_doc = load_canvas_json(canvas_deltas_path(project_dir, canvas_id))
+    entries = list(delta_doc.get("entries") or []) if isinstance(delta_doc, dict) else []
+    by_to_rev = {
+        item.get("to_revision"): item
+        for item in entries
+        if isinstance(item, dict) and isinstance(item.get("to_revision"), int)
+    }
+
+    steps: list[dict] = []
+    expected_from = since_revision
+    for rev in range(since_revision + 1, current_rev + 1):
+        step = by_to_rev.get(rev)
+        if step is None or step.get("from_revision") != expected_from:
+            return {"mode": "full", "revision": current_rev, "canvas": current}
+        steps.append(step)
+        expected_from = rev
+
+    upserted_nodes: dict[str, dict] = {}
+    removed_nodes: set[str] = set()
+    upserted_edges: dict[str, dict] = {}
+    removed_edges: set[str] = set()
+    has_metadata = False
+    latest_metadata = None
+    has_viewport = False
+    latest_viewport = None
+
+    for step in steps:
+        for nid in step.get("remove_node_ids") or []:
+            nid_s = str(nid)
+            upserted_nodes.pop(nid_s, None)
+            removed_nodes.add(nid_s)
+        for node in step.get("upsert_nodes") or []:
+            if isinstance(node, dict) and node.get("id"):
+                nid_s = str(node["id"])
+                removed_nodes.discard(nid_s)
+                upserted_nodes[nid_s] = node
+        for eid in step.get("remove_edge_ids") or []:
+            eid_s = str(eid)
+            upserted_edges.pop(eid_s, None)
+            removed_edges.add(eid_s)
+        for edge in step.get("upsert_edges") or []:
+            if isinstance(edge, dict) and edge.get("id"):
+                eid_s = str(edge["id"])
+                removed_edges.discard(eid_s)
+                upserted_edges[eid_s] = edge
+        if step.get("has_metadata"):
+            has_metadata = True
+            latest_metadata = step.get("metadata")
+        if step.get("has_viewport"):
+            has_viewport = True
+            latest_viewport = step.get("viewport")
+
+    folded: dict = {
+        "mode": "delta",
+        "from_revision": since_revision,
+        "revision": current_rev,
+        "upsert_nodes": list(upserted_nodes.values()),
+        "remove_node_ids": sorted(removed_nodes),
+        "upsert_edges": list(upserted_edges.values()),
+        "remove_edge_ids": sorted(removed_edges),
+    }
+    if has_metadata:
+        folded["has_metadata"] = True
+        folded["metadata"] = latest_metadata
+    if has_viewport:
+        folded["has_viewport"] = True
+        folded["viewport"] = latest_viewport
+    return folded
+
+
+async def patch_canvas_async(*args, **kwargs) -> CanvasSaveResult:
+    """Apply an incremental patch under the same async write mutex & durability path."""
+    return await save_canvas_async(*args, **kwargs)
 
 
 def restore_canvas_version(

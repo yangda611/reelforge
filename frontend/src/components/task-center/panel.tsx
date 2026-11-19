@@ -67,18 +67,20 @@ export function TaskPanel() {
 
   return (
     <>
-      <div
-        className={cn(
-          "absolute inset-x-0 top-0 bottom-9 z-30 bg-background/10 backdrop-blur-sm transition-opacity duration-500 ease-[var(--ease-out-quint)]",
-          open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
-        )}
-        onClick={() => setOpen(false)}
-        aria-hidden
-      />
+      {contentMounted && (
+        <div
+          className={cn(
+            "absolute inset-x-0 top-0 bottom-9 z-30 bg-black/45 transition-opacity duration-200 ease-out",
+            open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+          )}
+          onClick={() => setOpen(false)}
+          aria-hidden
+        />
+      )}
       <div
         ref={panelRef}
         className={cn(
-          "absolute inset-x-0 bottom-9 z-40 flex flex-col overflow-hidden bg-background outline-none transition-all duration-500 ease-[var(--ease-out-quint)]",
+          "absolute inset-x-0 bottom-9 z-40 flex flex-col overflow-hidden bg-background outline-none transition-[opacity,border-color] duration-200 ease-out",
           open
             ? "border-t border-border/70 opacity-100"
             : "pointer-events-none border-t border-transparent opacity-0",

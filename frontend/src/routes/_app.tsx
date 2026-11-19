@@ -32,10 +32,7 @@ import { initObservability } from "@/lib/observability";
 import { TaskCenterProvider } from "@/task-center/provider";
 import { TaskStatusBar } from "@/components/task-center/status-bar";
 import { TaskPanel } from "@/components/task-center/panel";
-import { MyBuddyCompanion } from "@/features/companion/MyBuddyCompanion";
-import { AccessoryUnlockPrompt } from "@/features/rewards/AccessoryUnlockPrompt";
 import { VersionUpdateDialog } from "@/features/version-update/VersionUpdateDialog";
-import { PikoInspirationStation } from "@/features/piko-mini-game/PikoInspirationStation";
 import { ProductSurfaceUnavailable } from "@/components/product-surface-unavailable";
 import { CinematicSideRays } from "@/components/login/cinematic/CinematicSideRays";
 import {
@@ -57,12 +54,6 @@ function AppLayout() {
   const validateSession = useAuthStore((s) => s.validateSession);
   const refreshAvatar = useAuthStore((s) => s.refreshAvatar);
   const [validated, setValidated] = useState(false);
-  const [pikoStationOpen, setPikoStationOpen] = useState(false);
-  useEffect(() => {
-    const open = () => setPikoStationOpen(true);
-    window.addEventListener("piko-open-station", open);
-    return () => window.removeEventListener("piko-open-station", open);
-  }, []);
   const validatedUsernameRef = useRef<string | null>(null);
   const params = useParams({ strict: false }) as { project?: string };
   const routeProject = params.project ?? null;
@@ -253,13 +244,7 @@ function AppLayout() {
               </div>
             ) : null}
             {!isFreezoneCompose && <Header ambientBackground={isProjectDashboard} />}
-            {!isFreezoneCompose && <MyBuddyCompanion />}
-            <AccessoryUnlockPrompt />
             <VersionUpdateDialog />
-            <PikoInspirationStation
-              open={pikoStationOpen}
-              onClose={() => setPikoStationOpen(false)}
-            />
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
               <main
                 id="main-content"

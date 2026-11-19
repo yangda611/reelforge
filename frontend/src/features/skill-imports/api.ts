@@ -3,6 +3,17 @@ import i18n from 'i18next';
 import { apiCall } from '@/api/client';
 
 export interface SkillImportFile { name: string; content_base64: string }
+export type SkillImportMode = 'workflow' | 'native';
+export interface NativeSkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  source_name?: string;
+  file_count: number;
+  files: string[];
+  warnings?: string[];
+  installed_at?: number;
+}
 export interface SkillImportCheck {
   status: 'passed' | 'failed' | 'not_run';
   issues: string[];
@@ -23,20 +34,25 @@ export interface SkillImportItem {
   id: string;
   batch_id: string;
   name: string;
+  mode?: SkillImportMode;
   status: 'queued' | 'running' | 'ready' | 'needs_review' | 'failed' | 'installed';
   stage: string;
   task_id?: string | null;
   error?: string | null;
   warnings: string[];
   bundle: Record<string, unknown> | null;
+  native_skill?: NativeSkillInfo | null;
   quality_report?: SkillImportQualityReport | null;
   current_conversion_version?: number;
   created_at: string | number;
 }
 const root = (project: string) => `projects/${encodeURIComponent(project)}/freezone/skill-imports`;
 export const listSkillImports = (project: string) => apiCall<{items: SkillImportItem[]}>(root(project));
-export const submitSkillImports = (project: string, files: SkillImportFile[]) =>
-  apiCall<{batch_id: string; items: SkillImportItem[]}>(root(project), { method: 'POST', json: { files } });
+export const submitSkillImports = (project: string, files: SkillImportFile[], mode: SkillImportMode = 'workflow') =>
+  apiCall<{batch_id: string; items: SkillImportItem[]}>(root(project), { method: 'POST', json: { files, mode } });
+export const listNativeSkills = () => apiCall<NativeSkillInfo[]>('freezone/native-skills');
+export const deleteNativeSkill = (skillId: string) =>
+  apiCall<{deleted: boolean}>(`freezone/native-skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
 export const retrySkillImport = (project: string, id: string) =>
   apiCall<SkillImportItem>(`${root(project)}/${encodeURIComponent(id)}/retry`, { method: 'POST' });
 export const validateSkillImport = (project: string, id: string, bundle: Record<string, unknown>) =>

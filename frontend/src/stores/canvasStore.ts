@@ -262,6 +262,13 @@ interface CanvasState {
     position: { x: number; y: number },
     data?: Partial<CanvasNodeData>
   ) => string;
+  addNodes: (
+    items: ReadonlyArray<{
+      type: CanvasNodeType;
+      position: { x: number; y: number };
+      data?: Partial<CanvasNodeData>;
+    }>
+  ) => string[];
   addEdge: (source: string, target: string) => string | null;
   addEdgeWithData: (
     source: string,
@@ -1758,6 +1765,52 @@ function restoreStoryboardEdges(
   });
 }
 
+const persistableNodeKeyCache = new WeakMap<object, string>();
+
+function persistableNodeKey(node: CanvasNode): string {
+  const cached = persistableNodeKeyCache.get(node);
+  if (cached !== undefined) return cached;
+  const serialized = JSON.stringify({
+    id: node.id,
+    type: node.type,
+    position: node.position,
+    width: node.width,
+    height: node.height,
+    style: node.style,
+    parentId: node.parentId,
+    extent: node.extent,
+    data: node.data,
+  });
+  persistableNodeKeyCache.set(node, serialized);
+  return serialized;
+}
+
+function preserveUnchangedNodes(
+  previousNodes: CanvasNode[],
+  nextNodes: CanvasNode[],
+): CanvasNode[] {
+  if (previousNodes.length === 0 || nextNodes.length === 0) {
+    return nextNodes;
+  }
+  const byId = new Map<string, CanvasNode>();
+  for (const node of previousNodes) {
+    byId.set(node.id, node);
+  }
+  let reusedAny = false;
+  const merged = nextNodes.map((next) => {
+    const prev = byId.get(next.id);
+    if (!prev || prev.selected) {
+      return next;
+    }
+    if (persistableNodeKey(prev) === persistableNodeKey(next)) {
+      reusedAny = true;
+      return prev;
+    }
+    return next;
+  });
+  return reusedAny ? merged : nextNodes;
+}
+
 function pushSnapshot(
   snapshots: CanvasHistorySnapshot[],
   snapshot: CanvasHistorySnapshot
@@ -2099,9 +2152,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     // 出来的图片节点会被当成「同一个节点接着算」，该补建的判成用户删了节点。
     resetStyleNodeSyncStates();
     const normalizedCanvas = clearTransientEdgeSelection(normalizeCanvasData(nodes, edges));
+    const placedNodes = placeGroupsOutsideStory(normalizedCanvas.nodes);
 
-    set({
-      nodes: placeGroupsOutsideStory(normalizedCanvas.nodes),
+    set((state) => ({
+      nodes: preserveUnchangedNodes(state.nodes, placedNodes),
       edges: normalizedCanvas.edges,
       selectedNodeId: null,
       activeToolDialog: null,
@@ -2112,7 +2166,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       userEditsSinceHydrate: 0,
       lastMutationSource: null,
       pendingClearIntent: false,
-    });
+    }));
   },
 
   applyCanvasDataEdit: (nodes, edges) => {
@@ -2311,6 +2365,39 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ...trackEdit(state),
     });
     return newNode.id;
+  },
+
+  addNodes: (items) => {
+    if (items.length === 0) return [];
+    const state = get();
+    const createdIds: string[] = [];
+    let runningNodes = state.nodes;
+    for (const item of items) {
+      const data = item.data ?? {};
+      const dataWithAutoTitle = withAutoTitleIndex(item.type, data, runningNodes);
+      const createdNode = maybeApplyImageAutoResize(
+        canvasNodeFactory.createNode(item.type, item.position, dataWithAutoTitle),
+        dataWithAutoTitle,
+      );
+      const newNode =
+        createdNode.type === CANVAS_NODE_TYPES.skill && !createdNode.measured
+          ? ({ ...createdNode, measured: SKILL_NODE_DEFAULT_MEASURED } as CanvasNode)
+          : createdNode.type === CANVAS_NODE_TYPES.beatContext && !createdNode.measured
+            ? ({ ...createdNode, measured: BEAT_CONTEXT_NODE_DEFAULT_MEASURED } as CanvasNode)
+            : createdNode;
+      runningNodes = [...runningNodes, newNode];
+      createdIds.push(newNode.id);
+    }
+    set({
+      nodes: runningNodes,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+      ...trackEdit(state),
+    });
+    return createdIds;
   },
 
   duplicateNodeAsSibling: (sourceNodeId, index, dataOverrides = {}) => {

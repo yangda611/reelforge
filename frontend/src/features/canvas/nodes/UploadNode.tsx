@@ -58,8 +58,8 @@ import {
   nodeBodyImageSrc,
   nodeBodyRecordDescribesImage,
   planNaturalSizeRecordWrite,
-  prepareNodeImageFromFile,
   readNodeNaturalSize,
+  reduceAspectRatio,
   resolveImageDisplayUrl,
   shouldUseOriginalImageByZoom,
   withImageCacheBust,
@@ -157,6 +157,30 @@ function imageSize(dataUrl: string): Promise<{ width: number; height: number }> 
     image.onerror = () => reject(new Error(i18n.t('node.threeDWorld.directorCaptureSizeFailed')));
     image.src = dataUrl;
   });
+}
+
+async function measureLocalImageDimensions(
+  file: File,
+  blobUrl: string,
+): Promise<{ width: number; height: number } | null> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const dims = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+      if (dims.width > 0 && dims.height > 0) {
+        return dims;
+      }
+    } catch {
+      // Fall back to <img> header decode on the already-created blob URL.
+    }
+  }
+  try {
+    const dims = await imageSize(blobUrl);
+    return dims.width > 0 && dims.height > 0 ? dims : null;
+  } catch {
+    return null;
+  }
 }
 
 function directorControlBundleFromData(value: unknown): DirectorControlFrameBundle | null {
@@ -409,29 +433,43 @@ export const UploadNode = memo(({ id, data, selected, width, height }: UploadNod
       updateNodeData(id, { isUploading: true, uploadError: null });
 
       try {
-        // Local prep is best-effort: it gives us aspect ratio + a small preview
-        // URL for instant display. Backend upload is the authoritative source
-        // for `imageUrl` — downstream nodes need a real http(s) URL.
-        const [preparedSettled, uploaded] = await Promise.all([
-          prepareNodeImageFromFile(file).catch((err: unknown) => {
-            console.warn('[upload-node] local prepare failed, continuing with backend URL only', err);
-            return null;
-          }),
-          uploadFreezoneImage(projectId, file, file.name),
-        ]);
+        // Upload directly without FileReader base64 + canvas re-encode. Backend
+        // probes header dimensions and prewarms WebP thumbnails in the same
+        // upload worker; fall back to local blob measurement only when absent.
+        const uploaded = await uploadFreezoneImage(projectId, file, file.name);
 
         if (uploadSequenceRef.current !== sequence) {
           return;
         }
 
+        let naturalWidth =
+          typeof uploaded.width === 'number' && uploaded.width > 0 ? uploaded.width : 0;
+        let naturalHeight =
+          typeof uploaded.height === 'number' && uploaded.height > 0 ? uploaded.height : 0;
+        if (!(naturalWidth > 0 && naturalHeight > 0)) {
+          const measured = await measureLocalImageDimensions(file, optimisticPreviewUrl);
+          if (uploadSequenceRef.current !== sequence) {
+            return;
+          }
+          if (measured) {
+            naturalWidth = measured.width;
+            naturalHeight = measured.height;
+          }
+        }
+
         const nextData: Partial<UploadImageNodeData> = {
           imageUrl: uploaded.url,
-          // Always mirror the uploaded URL — preparedSettled.previewImageUrl
-          // is a base64 data URL on the web (persistImageLocally is a
-          // passthrough), and persisting that would bloat PUT /default.
-          // transientPreviewUrl already covers instant pre-upload display.
           previewImageUrl: uploaded.url,
-          aspectRatio: preparedSettled?.aspectRatio || '1:1',
+          aspectRatio:
+            naturalWidth > 0 && naturalHeight > 0
+              ? reduceAspectRatio(naturalWidth, naturalHeight)
+              : '1:1',
+          ...(naturalWidth > 0 && naturalHeight > 0
+            ? {
+                imageNaturalWidth: naturalWidth,
+                imageNaturalHeight: naturalHeight,
+              }
+            : {}),
           sourceFileName: file.name,
           isUploading: false,
           uploadError: null,

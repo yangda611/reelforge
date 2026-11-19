@@ -1,8 +1,10 @@
 """Requester-scoped external Skill conversion jobs and candidate installation."""
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -27,6 +29,7 @@ class SourceFile(BaseModel):
 class ImportRequest(BaseModel):
     files: list[SourceFile] = Field(min_length=1, max_length=20)
     batch_name: str = Field(default='', max_length=200)
+    mode: Literal['workflow', 'native'] = 'workflow'
 
 
 class InstallRequest(BaseModel):
@@ -79,11 +82,63 @@ async def submit(project: str, payload: ImportRequest, user: dict = Depends(get_
     ctx, root, username = await scope(project, user)
     if sum(len(item.content_base64) for item in payload.files) > 10 * 1024 * 1024 * 4 // 3 + 100:
         raise HTTPException(400, 'Batch exceeds 10 MiB')
+    batch_id = uuid.uuid4().hex
+    if payload.mode == 'native':
+        from novelvideo.chat.hermes_workspace import sync_freezone_hermes_workflow_skills
+        from novelvideo.freezone.native_skill_store import (
+            install_native_skill,
+            parse_native_skill_package,
+        )
+
+        try:
+            for item in payload.files:
+                parse_native_skill_package(item.name, item.content_base64)
+        except (ValueError, UnicodeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        items = []
+        for item in payload.files:
+            manifest = install_native_skill(
+                username=username,
+                name=item.name,
+                content_base64=item.content_base64,
+            )
+            record = {
+                'id': uuid.uuid4().hex,
+                'batch_id': batch_id,
+                'batch_name': payload.batch_name,
+                'name': manifest['source_name'],
+                'mode': 'native',
+                'status': 'installed',
+                'stage': 'done',
+                'task_id': '',
+                'error': None,
+                'warnings': list(manifest.get('warnings') or []),
+                'bundle': None,
+                'native_skill': {
+                    'id': manifest['id'],
+                    'name': manifest['name'],
+                    'description': manifest['description'],
+                    'file_count': manifest['file_count'],
+                    'files': manifest['files'],
+                },
+                'created_at': time.time(),
+                'source_sha256': manifest['source_sha256'],
+                'conversion_version': 1,
+            }
+            save_record(root, username, record)
+            items.append(public_record(record))
+        sync_freezone_hermes_workflow_skills(username)
+        try:
+            from novelvideo.chat.hermes_pool import pool as hermes_pool
+
+            hermes_pool.mark_user_freezone_profiles_dirty(username)
+        except Exception:
+            pass
+        return {'ok': True, 'data': {'batch_id': batch_id, 'items': items}}
     try:
         sources = [read_source(item.name, item.content_base64) for item in payload.files]
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    batch_id = uuid.uuid4().hex
     records = [create_record(root, username, source, batch_id, payload.batch_name) for source in sources]
     items = []
     for record in records:

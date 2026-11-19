@@ -738,3 +738,75 @@ def test_restore_cannot_reintroduce_multiple_story_groups(tmp_path, monkeypatch)
             build_payload=lambda _, historical: {**historical, "revision": 2},
         )
     assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_patch_canvas_async_and_read_canvas_delta_fold_revisions(tmp_path: Path) -> None:
+    initial = {
+        "schema_version": 2,
+        "canvas_id": "c",
+        "revision": 1,
+        "nodes": [
+            {"id": "n1", "type": "uploadNode", "position": {"x": 0, "y": 0}, "data": {"a": 1}},
+            {"id": "n2", "type": "uploadNode", "position": {"x": 100, "y": 0}, "data": {"a": 2}},
+        ],
+        "edges": [{"id": "e1", "source": "n1", "target": "n2"}],
+        "metadata": {"title": "v1"},
+    }
+    canvas_store.save_canvas(tmp_path, "c", base_revision=0, build_payload=lambda _: initial)
+
+    # rev 1 -> 2: update n1, add n3, remove n2
+    await canvas_store.patch_canvas_async(
+        tmp_path,
+        "c",
+        base_revision=1,
+        build_payload=lambda existing: {
+            **canvas_store.apply_canvas_patch_to_existing(
+                existing,
+                {
+                    "upsert_nodes": [
+                        {"id": "n1", "type": "uploadNode", "position": {"x": 50, "y": 0}, "data": {"a": 1}},
+                        {"id": "n3", "type": "uploadNode", "position": {"x": 200, "y": 0}, "data": {"a": 3}},
+                    ],
+                    "remove_node_ids": ["n2"],
+                    "remove_edge_ids": ["e1"],
+                },
+            ),
+            "revision": 2,
+        },
+    )
+    # rev 2 -> 3: update n3, remove n1
+    await canvas_store.patch_canvas_async(
+        tmp_path,
+        "c",
+        base_revision=2,
+        build_payload=lambda existing: {
+            **canvas_store.apply_canvas_patch_to_existing(
+                existing,
+                {
+                    "upsert_nodes": [
+                        {"id": "n3", "type": "uploadNode", "position": {"x": 300, "y": 0}, "data": {"a": 3}},
+                    ],
+                    "remove_node_ids": ["n1"],
+                },
+            ),
+            "revision": 3,
+        },
+    )
+
+    noop = canvas_store.read_canvas_delta(tmp_path, "c", since_revision=3)
+    assert noop == {"mode": "noop", "revision": 3}
+
+    folded = canvas_store.read_canvas_delta(tmp_path, "c", since_revision=1)
+    assert folded["mode"] == "delta"
+    assert folded["from_revision"] == 1
+    assert folded["revision"] == 3
+    assert [n["id"] for n in folded["upsert_nodes"]] == ["n3"]
+    assert folded["upsert_nodes"][0]["position"] == {"x": 300, "y": 0}
+    assert folded["remove_node_ids"] == ["n1", "n2"]
+    assert folded["remove_edge_ids"] == ["e1"]
+
+    fallback = canvas_store.read_canvas_delta(tmp_path, "c", since_revision=0)
+    assert fallback["mode"] == "full"
+    assert fallback["revision"] == 3
+    assert [n["id"] for n in fallback["canvas"]["nodes"]] == ["n3"]

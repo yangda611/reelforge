@@ -12,7 +12,7 @@ from anyio.lowlevel import RunVar
 
 from novelvideo.utils.async_ops import run_sync_bounded
 
-ASSET_UPLOAD_CONCURRENCY = 2
+ASSET_UPLOAD_CONCURRENCY = 4
 SCENE_PLY_UPLOAD_CONCURRENCY = 1
 _asset_upload_limiter_var: RunVar[anyio.CapacityLimiter] = RunVar(
     "asset_upload_limiter"

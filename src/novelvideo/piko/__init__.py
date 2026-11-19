@@ -1,1 +1,0 @@
-"""Piko social scene services."""

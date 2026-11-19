@@ -7,7 +7,6 @@ import { cloneElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Header } from "@/components/layout/header";
-import { featureEntrySeenKey } from "@/lib/feature-entry-state";
 
 const runtimeState = vi.hoisted(() => ({ authRequired: true, isCe: false, phoneVisible: false }));
 const authState = vi.hoisted(() => ({ username: "local", logout: vi.fn() }));
@@ -82,9 +81,6 @@ vi.mock("react-i18next", () => ({
         "app.logoHomeTooltip": "Home",
         "header.settings": "Feature Settings",
         "header.account.open": "Open account",
-        "header.pikoHub.section": "Community",
-        "header.pikoHub.world": "Piko Town",
-        "header.notifications": "Announcement Center",
         "header.account.changeAvatar": "Change avatar",
         "header.account.changePassword": "Change password",
         "header.account.setPassword": "Set password",
@@ -157,54 +153,6 @@ describe("Header runtime gating", () => {
     brandingState.enabled = null;
     brandingState.data = undefined;
     securityState.data = undefined;
-  });
-
-  // P2-10：Piko 社区入口已从主顶栏移进头像菜单的「社区」分区——先开头像菜单再找它。
-  async function openPikoRow(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: "Open account" }));
-    const entry = await screen.findByRole("button", { name: /Piko Town/ });
-    return entry;
-  }
-
-  it("keeps the Piko reminder, then dismisses and persists it on entry click", async () => {
-    const user = userEvent.setup();
-    const view = renderHeader();
-    const entry = await openPikoRow(user);
-    const dot = () => entry.querySelector('[data-slot="notification-dot"]');
-    expect(dot()).not.toBeNull();
-    expect(screen.getByText("Community")).toBeInTheDocument();
-
-    await user.click(entry);
-    // 点开社区入口会先关掉头像菜单（entry 随之卸载），所以小红点是否消失
-    // 要到重新打开的菜单里看，而不是查已卸载的旧节点。
-    expect(localStorage.getItem(featureEntrySeenKey("piko-hub-v1", "local"))).toBe("seen");
-
-    const reopened = await openPikoRow(user);
-    expect(reopened.querySelector('[data-slot="notification-dot"]')).toBeNull();
-
-    view.unmount();
-    renderHeader();
-    const reopenedAgain = await openPikoRow(user);
-    expect(reopenedAgain.querySelector('[data-slot="notification-dot"]')).toBeNull();
-  });
-
-  it.each(["{Enter}", " "])("dismisses the Piko reminder on keyboard activation (%s)", async (key) => {
-    const user = userEvent.setup();
-    renderHeader();
-    const entry = await openPikoRow(user);
-    entry.focus();
-    await user.keyboard(key);
-    expect(localStorage.getItem(featureEntrySeenKey("piko-hub-v1", "local"))).toBe("seen");
-    const reopened = await openPikoRow(user);
-    expect(reopened.querySelector('[data-slot="notification-dot"]')).toBeNull();
-  });
-
-  it("does not show Piko entries in the main top bar", async () => {
-    const user = userEvent.setup();
-    renderHeader();
-    expect(screen.queryByRole("button", { name: /Piko Town/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Open account" }));
-    expect(await screen.findByRole("button", { name: /Piko Town/ })).toBeInTheDocument();
   });
 
   it("reads branding only for an authenticated EE session and renders it in the home link", () => {
@@ -302,21 +250,7 @@ describe("Header runtime gating", () => {
     expect(screen.queryByText("Bind phone")).not.toBeInTheDocument();
   });
 
-  it("moves the announcement entry from the header actions into the account panel", async () => {
-    renderHeader();
-
-    expect(screen.queryByRole("button", { name: "Announcement Center" })).not.toBeInTheDocument();
-
-    fireEvent.mouseEnter(screen.getByLabelText("Open account").parentElement!);
-
-    expect(
-      await screen.findByRole("button", { name: "Announcement Center" }),
-    ).toBeInTheDocument();
-  });
-
-  // 回归用例：独立公告按钮被删掉后，账号头像成了公告中心的唯一入口。它当时只绑了
-  // onMouseEnter —— 触屏没有 hover、键盘也激活不了，公告中心等于对这两类用户消失。
-  it("opens the account panel on click so the announcement entry survives without hover", async () => {
+  it("opens the account panel on click as well as hover", async () => {
     const user = userEvent.setup();
     renderHeader();
 
@@ -326,8 +260,10 @@ describe("Header runtime gating", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const panel = document.getElementById("header-account-panel");
+    expect(panel).not.toBeNull();
     expect(
-      await screen.findByRole("button", { name: "Announcement Center" }),
+      within(panel!).getByRole("button", { name: "Feature Settings" }),
     ).toBeInTheDocument();
   });
 
@@ -361,9 +297,7 @@ describe("Header runtime gating", () => {
     await user.keyboard("{Escape}");
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Announcement Center" }),
-      ).not.toBeInTheDocument();
+      expect(document.getElementById("header-account-panel")).toBeNull();
     });
     expect(trigger).toHaveFocus();
   });
@@ -375,21 +309,17 @@ describe("Header runtime gating", () => {
     const trigger = screen.getByLabelText("Open account");
 
     await user.click(trigger);
-    await screen.findByRole("button", { name: "Announcement Center" });
+    await screen.findByText("Log out");
     await user.click(trigger);
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Announcement Center" }),
-      ).not.toBeInTheDocument();
+      expect(document.getElementById("header-account-panel")).toBeNull();
     });
 
     await user.click(trigger);
-    await screen.findByRole("button", { name: "Announcement Center" });
+    await screen.findByText("Log out");
     fireEvent.pointerDown(document.body);
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Announcement Center" }),
-      ).not.toBeInTheDocument();
+      expect(document.getElementById("header-account-panel")).toBeNull();
     });
   });
 
@@ -399,14 +329,14 @@ describe("Header runtime gating", () => {
 
     const trigger = screen.getByLabelText("Open account");
     await user.click(trigger);
-    await screen.findByRole("button", { name: "Announcement Center" });
+    await screen.findByText("Log out");
 
     // 悬停打开的面板移开就收；点击「钉住」的不该被 mouseleave 收走，
     // 否则触屏点开后手指一抬内容就没了。
     fireEvent.mouseLeave(trigger.parentElement!);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Announcement Center" })).toBeInTheDocument();
+      expect(screen.getByText("Log out")).toBeInTheDocument();
     });
   });
 

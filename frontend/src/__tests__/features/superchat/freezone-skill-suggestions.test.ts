@@ -28,6 +28,15 @@ describe("freezone skill slash suggestions", () => {
         description: "海报视觉风格",
         triggers: { keywords: ["海报", { keyword: "视觉" }] },
       },
+      {
+        id: "yd-cinematic-storyboard",
+        name: "YD分镜skills",
+        enabled: true,
+        source: "hermes_native_markdown_skill",
+        allowed_recipe_ids: [],
+        category: "native_skill",
+        description: "原生无损分镜",
+      },
       { id: "general", enabled: true, description: "没有 Recipe 边界" },
       { id: "disabled_skill", enabled: false, description: "不展示" },
       { enabled: true, description: "没有 id" },
@@ -40,6 +49,13 @@ describe("freezone skill slash suggestions", () => {
         category: "visual",
         description: "海报视觉风格",
         keywords: ["海报", "视觉"],
+      },
+      {
+        id: "yd-cinematic-storyboard",
+        label: "YD分镜skills",
+        category: "native_skill",
+        description: "原生无损分镜",
+        keywords: [],
       },
     ]);
   });

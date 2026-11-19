@@ -58,8 +58,6 @@ path = [
   "public/contact/**",
   "public/icons.svg",
   "public/favicon.svg",
-  "public/piko/**",
-  "public/petdex/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 ClaymoreLab"

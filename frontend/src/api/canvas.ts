@@ -376,6 +376,67 @@ export async function putFreezoneCanvas(
   );
 }
 
+export interface FreezoneCanvasPatchPayload {
+  base_revision: number;
+  client_save_id?: string;
+  save_source?: "autosave" | "manual_save" | "agent_patch";
+  upsert_nodes: unknown[];
+  remove_node_ids: string[];
+  upsert_edges: unknown[];
+  remove_edge_ids: string[];
+  viewport?: unknown;
+  has_viewport?: boolean;
+  metadata?: Record<string, unknown> | null;
+  has_metadata?: boolean;
+  allow_empty_overwrite?: boolean;
+}
+
+export async function patchFreezoneCanvas(
+  projectId: string,
+  canvasId: string,
+  payload: FreezoneCanvasPatchPayload,
+): Promise<FreezoneCanvasSaveResult> {
+  return await apiCall<FreezoneCanvasSaveResult>(
+    `projects/${encodeURIComponent(projectId)}/freezone/canvases/${encodeURIComponent(canvasId)}`,
+    { method: "PATCH", json: payload },
+  );
+}
+
+export type FreezoneCanvasDeltaResponse =
+  | { mode: "noop"; revision: number }
+  | {
+      mode: "delta";
+      from_revision: number;
+      revision: number;
+      upsert_nodes: unknown[];
+      remove_node_ids: string[];
+      upsert_edges: unknown[];
+      remove_edge_ids: string[];
+      has_metadata?: boolean;
+      metadata?: Record<string, unknown> | null;
+      has_viewport?: boolean;
+      viewport?: unknown;
+      foreign_media?: CanvasForeignMediaRef[];
+    }
+  | {
+      mode: "full";
+      revision: number | null;
+      canvas: FreezoneCanvasPayload;
+      foreign_media?: CanvasForeignMediaRef[];
+    };
+
+export async function getFreezoneCanvasDelta(
+  projectId: string,
+  canvasId: string,
+  sinceRevision: number,
+  options?: { signal?: AbortSignal },
+): Promise<FreezoneCanvasDeltaResponse> {
+  return await apiCall<FreezoneCanvasDeltaResponse>(
+    `projects/${encodeURIComponent(projectId)}/freezone/canvases/${encodeURIComponent(canvasId)}/delta?since_revision=${encodeURIComponent(String(sinceRevision))}`,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export interface CreateBlankFreezoneCanvasRequest {
   canvasId: string;
   name: string;

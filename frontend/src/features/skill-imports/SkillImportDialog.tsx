@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Download, FolderOpen, FileText, ChevronRight, ChevronDown, RotateCcw } from 'lucide-react';
+import { Download, FolderOpen, FileText, ChevronRight, ChevronDown, RotateCcw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CreditCostInline } from '@/components/credit-cost-inline';
 import { useCreditDisplayHidden } from '@/components/credits/credit-visual';
@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { BillingRuleNotConfiguredError } from '@/lib/api-errors';
 import { useGenerationCreditCost } from '@/lib/queries/generation-credit-cost';
 import { isCeRuntime } from '@/lib/runtime-config';
-import { encodeSkillFiles, installSkillImport, listSkillImports, parseCandidateBundle, retrySkillImport, skillImportStudioPrompt, submitSkillImports, validateSkillImport, sameCandidateBundle, type SkillImportItem } from './api';
+import { deleteNativeSkill, encodeSkillFiles, installSkillImport, listNativeSkills, listSkillImports, parseCandidateBundle, retrySkillImport, skillImportStudioPrompt, submitSkillImports, validateSkillImport, sameCandidateBundle, type SkillImportItem, type SkillImportMode } from './api';
 
 const hasCurrentReport = (item: SkillImportItem | null) => typeof item?.current_conversion_version === 'number' && item.quality_report?.version === item.current_conversion_version;
 
@@ -23,6 +23,7 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
   const client = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [importMode, setImportMode] = useState<SkillImportMode>('native');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [selected, setSelected] = useState<SkillImportItem | null>(null);
@@ -41,7 +42,14 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
     enabled: open && Boolean(project),
     refetchInterval: open ? 3000 : false,
   });
+  const nativeQuery = useQuery({
+    queryKey: ['freezone-native-skills'],
+    queryFn: () => listNativeSkills(),
+    enabled: open && Boolean(project),
+    retry: false,
+  });
   const items = query.data?.items ?? [];
+  const nativeSkills = nativeQuery.data ?? [];
   const failed = items.filter(item => item.status === 'failed');
   const report = selected?.quality_report;
   const draftChanged = Boolean(selected) && !sameCandidateBundle(draft, selected?.bundle ?? null);
@@ -65,7 +73,10 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
     setSelected(latest);
     setAcknowledged(false);
   }, [query.data, selected?.id]);
-  const refresh = () => client.invalidateQueries({ queryKey: ['skill-imports', project] });
+  const refresh = () => Promise.all([
+    client.invalidateQueries({ queryKey: ['skill-imports', project] }),
+    client.invalidateQueries({ queryKey: ['freezone-native-skills'] }),
+  ]);
   async function action(fn: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
     try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -105,24 +116,78 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>{tr('backToSettings', 'Back to settings')}</Button>
         </div>
       </> : <div className="flex min-h-0 flex-1 flex-col gap-4 p-5 sm:p-6">
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-background/30 p-4">
+        <div className="flex flex-col gap-3 rounded-lg border border-dashed border-border bg-background/30 p-4">
+          <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={tr('importModeLabel', 'Import mode')}>
+            <Button
+              type="button"
+              size="sm"
+              variant={importMode === 'native' ? 'default' : 'outline'}
+              disabled={busy}
+              aria-pressed={importMode === 'native'}
+              onClick={() => setImportMode('native')}
+            >
+              {tr('modeNative', 'Lossless native Skill (Markdown)')}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={importMode === 'workflow' ? 'default' : 'outline'}
+              disabled={busy}
+              aria-pressed={importMode === 'workflow'}
+              onClick={() => setImportMode('workflow')}
+            >
+              {tr('modeWorkflow', 'Convert to canvas Workflow JSON')}
+            </Button>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {importMode === 'native'
+              ? tr('modeNativeHint', 'Preserves SKILL.md and all references/assets verbatim without LLM compression or conversion delay. Invoke with / in chat.')
+              : tr('modeWorkflowHint', 'Uses AI to compile into native Skill + Recipes JSON for multi-node canvas workflow automation.')}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
           <input ref={input} type="file" multiple accept=".md,.zip" className="hidden" aria-label={tr('chooseFiles', 'Choose Markdown or ZIP files')} disabled={busy} onChange={event => {
             const files = Array.from(event.target.files ?? []); event.target.value = '';
             if (!files.length) return;
-            void action(async () => { await submitSkillImports(project, await encodeSkillFiles(files)); await refresh(); setNotice(tr('submitted', 'Submitted. Conversion continues in the task center after this window closes.')); });
+            void action(async () => {
+              await submitSkillImports(project, await encodeSkillFiles(files), importMode);
+              await refresh();
+              setNotice(importMode === 'native'
+                ? tr('nativeSubmitted', 'Installed losslessly. Type / in canvas chat to use the Skill.')
+                : tr('submitted', 'Submitted. Conversion continues in the task center after this window closes.'));
+            });
           }} />
           <Button size="sm" disabled={busy} onClick={() => input.current?.click()}><Download aria-hidden="true" className="mr-1 size-3.5" />{tr('upload', 'Upload MD / ZIP')}</Button>
           <Button size="sm" variant="outline" disabled={busy || !failed.length} onClick={() => void retry(failed)}>{tr('retryFailed', 'Retry failed')}</Button>
-          {showImportCost && <span className="inline-flex items-center text-xs text-muted-foreground">
+          {showImportCost && importMode === 'workflow' && <span className="inline-flex items-center text-xs text-muted-foreground">
             {tr('perFileCost', 'Per file')}
             <CreditCostInline display={importCostDisplay} promotion={importCost.data?.data.promotion} />
           </span>}
           <span className="mt-1 w-full text-xs leading-relaxed text-muted-foreground">{tr('limits', 'Up to 20 files; 2 MB each, 10 MB total. One skill per file or ZIP.')}</span>
+          </div>
         </div>
         {query.isLoading && <p role="status">{tr('loading', 'Loading…')}</p>}
         {(error || query.error) && <p role="alert" className="whitespace-pre-wrap text-sm text-destructive">{error || String(query.error)}</p>}
         {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          {nativeSkills.length > 0 && <div className="rounded-lg border border-border bg-background/20 p-3">
+            <h3 className="text-xs font-medium text-muted-foreground">{tr('nativeInstalledListTitle', 'Installed lossless native Skills')}</h3>
+            <ul className="mt-2 divide-y divide-border/60">
+              {nativeSkills.map(skill => <li key={skill.id} className="flex items-center justify-between gap-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-foreground">{skill.name}</span>
+                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">/{skill.id}</code>
+                    <span className="text-muted-foreground">{t('skillImport.nativeFileCount', { count: skill.file_count, defaultValue: '{{count}} files' })}</span>
+                  </div>
+                </div>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => void action(async () => {
+                  await deleteNativeSkill(skill.id);
+                  await refresh();
+                  setNotice(tr('nativeRemoved', 'Removed native Skill.'));
+                })}><Trash2 aria-hidden="true" className="size-3.5" />{tr('removeNative', 'Uninstall')}</Button>
+              </li>)}
+            </ul>
+          </div>}
           {!query.isLoading && !query.error && !items.length && <p className="py-6 text-sm text-muted-foreground">{tr('empty', 'Upload a skill to start. Existing native JSON imports remain available in skill settings.')}</p>}
           {items.length > 0 && <div className="flex items-baseline justify-between gap-3 pb-1">
             <h3 className="text-sm font-medium">{tr('historyTitle', 'Conversion history')} <span className="ml-2 text-xs font-normal text-muted-foreground">{t('skillImport.recordCount', { count: items.length, defaultValue: 'Records: {{count}}' })}</span></h3>
@@ -130,12 +195,14 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
           </div>}
           <ul className="divide-y divide-border border-y border-border">
           {items.map(item => {
-            const title = typeof item.bundle?.name === 'string' ? item.bundle.name : item.name;
+            const isNative = item.mode === 'native' && Boolean(item.native_skill);
+            const title = isNative ? item.native_skill!.name : (typeof item.bundle?.name === 'string' ? item.bundle.name : item.name);
             const active = ['queued', 'running'].includes(item.status);
-            const legacy = !hasCurrentReport(item) && Boolean(item.bundle) && !active && item.status !== 'installed';
+            const legacy = !isNative && !hasCurrentReport(item) && Boolean(item.bundle) && !active && item.status !== 'installed';
             const date = new Date(typeof item.created_at === 'number' ? item.created_at * 1000 : item.created_at);
             const issues = [...new Set([...(item.quality_report?.blockers ?? []), ...(item.warnings ?? []), ...(item.error ? [item.error] : [])])];
             const summary = active ? tr('recordRunning', 'Conversion is running in the background. You can close this window.')
+              : isNative ? `${tr('recordNativeInstalled', 'Installed losslessly without compression. Invoke in chat with')} /${item.native_skill!.id}`
               : item.status === 'installed' ? tr('recordInstalled', 'Added to your skill library.')
               : item.status === 'failed' ? tr('recordFailed', 'Conversion stopped. Expand the details, then retry.')
               : legacy ? tr('recordLegacy', 'This draft needs the latest checks. Open it to submit validation.')
@@ -147,6 +214,7 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h4 className="break-words text-sm font-medium">{title}</h4>
+                    {isNative && <span className="rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">{tr('nativeBadge', 'Lossless native')}</span>}
                     <span className="rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">{legacy ? tr('recordLegacyBadge', 'Needs revalidation') : tr(`status.${item.status}`, item.status)}</span>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{title !== item.name && <span>{item.name} · </span>}{!Number.isNaN(date.getTime()) && <time dateTime={date.toISOString()}>{date.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>}</p>
@@ -160,7 +228,11 @@ export function SkillImportDialog({ open, onOpenChange, project, taskId }: { ope
               </div>
                 {!active && <details className="min-w-0 pl-6 text-xs text-muted-foreground sm:col-span-2">
                   <summary className="cursor-pointer py-1.5">{tr('recordDetails', 'Details')}{issues.length > 0 ? ` · ${t('skillImport.issueCount', { count: issues.length, defaultValue: '{{count}} notices' })}` : ''}</summary>
-                  <div className="space-y-2 py-2"><p className="break-all font-mono text-[11px]">ID: {item.id}</p>{issues.map((issue, index) => <p className="break-words leading-relaxed" key={index}>{issue}</p>)}</div>
+                  <div className="space-y-2 py-2">
+                    <p className="break-all font-mono text-[11px]">ID: {item.id}</p>
+                    {isNative && item.native_skill!.files.length > 0 && <p className="break-all font-mono text-[11px]">{tr('nativeFilesLabel', 'Preserved files')}: {item.native_skill!.files.join(', ')}</p>}
+                    {issues.map((issue, index) => <p className="break-words leading-relaxed" key={index}>{issue}</p>)}
+                  </div>
                 </details>}
           {resultOpen && selected?.id === item.id && canReview(selected) && <section id={`skill-import-result-${item.id}`} className="min-w-0 space-y-3 border-l-2 border-border py-3 pl-4 sm:col-span-2">
             <p className="text-sm font-medium">{selected.name} · {tr('candidate', 'Conversion draft')}</p>

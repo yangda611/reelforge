@@ -1168,6 +1168,7 @@ export function Canvas({
   const replaceEdges = useCanvasStore((state) => state.replaceEdges);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const addNode = useCanvasStore((state) => state.addNode);
+  const addNodes = useCanvasStore((state) => state.addNodes);
   const addStorySegment = useCanvasStore((state) => state.addStorySegment);
   const addStoryImport = useCanvasStore((state) => state.addStoryImport);
   const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
@@ -2923,25 +2924,28 @@ export function Canvas({
       }
       const basePosition = reactFlowInstance.screenToFlowPosition(clientPosition);
 
-      let lastNodeId: string | null = null;
-      mediaFiles.forEach((file, index) => {
-        const position = {
-          x: basePosition.x + index * 36,
-          y: basePosition.y + index * 36,
-        };
-        // 与文件拖放同样标记 user_spawned，见 handleCanvasDrop 的说明。
-        const newNodeId = addNode(
-          CANVAS_NODE_TYPES.upload,
-          position,
-          { user_spawned: true } as Partial<CanvasNodeData>,
-        );
-        lastNodeId = newNodeId;
-        // 与文件拖放同样先暂存再发事件，见 handleCanvasDrop 的说明。
-        stashExternalFile('upload-node/external-file', newNodeId, file);
-        requestAnimationFrame(() => {
-          canvasEventBus.publish('upload-node/external-file', { nodeId: newNodeId });
-        });
+      const cols = mediaFiles.length > 1 ? Math.min(5, Math.ceil(Math.sqrt(mediaFiles.length))) : 1;
+      const cellGapX = 356;
+      const cellGapY = 386;
+      const newNodeIds = addNodes(
+        mediaFiles.map((_file, index) => ({
+          type: CANVAS_NODE_TYPES.upload,
+          position: {
+            x: basePosition.x + (index % cols) * cellGapX,
+            y: basePosition.y + Math.floor(index / cols) * cellGapY,
+          },
+          data: { user_spawned: true } as Partial<CanvasNodeData>,
+        })),
+      );
+      newNodeIds.forEach((newNodeId, index) => {
+        stashExternalFile('upload-node/external-file', newNodeId, mediaFiles[index]);
       });
+      requestAnimationFrame(() => {
+        for (const newNodeId of newNodeIds) {
+          canvasEventBus.publish('upload-node/external-file', { nodeId: newNodeId });
+        }
+      });
+      const lastNodeId = newNodeIds[newNodeIds.length - 1] ?? null;
 
       if (lastNodeId) {
         selectNodeExclusively(lastNodeId);
@@ -2955,7 +2959,7 @@ export function Canvas({
       document.removeEventListener('paste', handlePaste);
     };
   }, [
-    addNode,
+    addNodes,
     focusNewNodeIfLowZoom,
     reactFlowInstance,
     scheduleCanvasPersist,
@@ -3300,35 +3304,31 @@ export function Canvas({
         return;
       }
 
-      let lastNodeId: string | null = null;
-      mediaFiles.forEach((file, index) => {
-        const position = {
-          x: basePosition.x + index * 36,
-          y: basePosition.y + index * 36,
-        };
-        // File drops are user actions by definition — stamp user_spawned: true
-        // so the new node is correctly classified by `nodeMainlineFlags` and
-        // survives `_merge_restored_preset_canvas` refresh (the backend's
-        // `_is_replaceable_projection_node` refuses to overwrite it).
-        //
-        // NB: this is NOT about unlocking. The canvas-level fallback that used
-        // to lock unmarked nodes on preset canvases is gone — NodeActionToolbar
-        // now locks on `isPresetManaged` alone, and an unmarked node classifies
-        // as "ordinary" (see system-managed-node-data.test.ts).
-        const newNodeId = addNode(
-          CANVAS_NODE_TYPES.upload,
-          position,
-          { user_spawned: true } as Partial<CanvasNodeData>,
-        );
-        lastNodeId = newNodeId;
-        // File 本体走暂存，事件只是敲一下已挂载的节点：低缩放档下新节点先以 LOD
-        // shell 挂载，完整组件要等升级队列放行，必然晚于下面这一帧才挂上订阅，
-        // 只发事件会被总线的无重放语义直接丢掉（见 [[pendingExternalFiles]]）。
-        stashExternalFile('upload-node/external-file', newNodeId, file);
-        requestAnimationFrame(() => {
-          canvasEventBus.publish('upload-node/external-file', { nodeId: newNodeId });
-        });
+      const cols = mediaFiles.length > 1 ? Math.min(5, Math.ceil(Math.sqrt(mediaFiles.length))) : 1;
+      const cellGapX = 356;
+      const cellGapY = 386;
+      const newNodeIds = addNodes(
+        mediaFiles.map((_file, index) => ({
+          type: CANVAS_NODE_TYPES.upload,
+          position: {
+            x: basePosition.x + (index % cols) * cellGapX,
+            y: basePosition.y + Math.floor(index / cols) * cellGapY,
+          },
+          // File drops are user actions by definition — stamp user_spawned: true
+          // so the new node is correctly classified by `nodeMainlineFlags` and
+          // survives `_merge_restored_preset_canvas` refresh.
+          data: { user_spawned: true } as Partial<CanvasNodeData>,
+        })),
+      );
+      newNodeIds.forEach((newNodeId, index) => {
+        stashExternalFile('upload-node/external-file', newNodeId, mediaFiles[index]);
       });
+      requestAnimationFrame(() => {
+        for (const newNodeId of newNodeIds) {
+          canvasEventBus.publish('upload-node/external-file', { nodeId: newNodeId });
+        }
+      });
+      const lastNodeId = newNodeIds[newNodeIds.length - 1] ?? null;
 
       if (lastNodeId) {
         selectNodeExclusively(lastNodeId);
@@ -3339,7 +3339,7 @@ export function Canvas({
       scheduleCanvasPersist(0);
     },
     [
-      addNode,
+      addNodes,
       focusNewNodeIfLowZoom,
       hasDraggedAnyPayload,
       reactFlowInstance,

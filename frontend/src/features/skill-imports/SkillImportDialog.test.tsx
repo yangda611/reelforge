@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillImportDialog } from './SkillImportDialog';
 import * as api from './api';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: { defaultValue?: string }) => options?.defaultValue ?? key }) }));
-vi.mock('./api', async importOriginal => ({ ...await importOriginal<typeof api>(), listSkillImports: vi.fn(), installSkillImport: vi.fn(), retrySkillImport: vi.fn(), validateSkillImport: vi.fn() }));
+vi.mock('./api', async importOriginal => ({ ...await importOriginal<typeof api>(), listSkillImports: vi.fn(), listNativeSkills: vi.fn(), submitSkillImports: vi.fn(), deleteNativeSkill: vi.fn(), installSkillImport: vi.fn(), retrySkillImport: vi.fn(), validateSkillImport: vi.fn() }));
 const bundle = { schema_version: 'dramaclaw.skill-bundle.v1', skill: { id: 'ad' }, recipes: [] };
 const quality_report = { version: 3 as const, bundle_sha256: 'bundle-hash', capability_sha256: 'capability-hash', structure: { status: 'passed' as const, issues: [] }, coverage: { status: 'passed' as const, issues: [] }, planning: { status: 'passed' as const, issues: [] }, blockers: [], adaptations: [], validated: true };
 const item: api.SkillImportItem = { current_conversion_version: 3, id: 'i', batch_id: 'b', name: 'ad.md', status: 'ready', stage: 'done', warnings: [], bundle, quality_report, created_at: '' };
@@ -12,7 +12,7 @@ function mount(project = 'project', taskId?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return { ...render(<QueryClientProvider client={client}><SkillImportDialog open onOpenChange={() => {}} project={project} taskId={taskId} /></QueryClientProvider>), client };
 }
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.listSkillImports).mockResolvedValue({ items: [item] }); });
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.listSkillImports).mockResolvedValue({ items: [item] }); vi.mocked(api.listNativeSkills).mockResolvedValue([]); });
 describe('SkillImportDialog', () => {
   it.each([9, undefined])('blocks an outdated report or missing server version (%s)', async currentVersion => {
     vi.mocked(api.listSkillImports).mockResolvedValue({ items: [{ ...item,
@@ -164,5 +164,15 @@ describe('SkillImportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry failed' }));
     await waitFor(() => expect(api.retrySkillImport).toHaveBeenCalledWith('project', 'bad'));
     expect(api.retrySkillImport).toHaveBeenCalledTimes(1);
+  });
+  it('lists and uninstalls lossless native skills', async () => {
+    vi.mocked(api.listNativeSkills).mockResolvedValue([
+      { id: 'yd-cinematic-storyboard', name: 'YD分镜skills', description: 'YD', file_count: 25, files: ['SKILL.md'] },
+    ]);
+    vi.mocked(api.deleteNativeSkill).mockResolvedValue({ deleted: true });
+    mount();
+    await screen.findByText('/yd-cinematic-storyboard');
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }));
+    await waitFor(() => expect(api.deleteNativeSkill).toHaveBeenCalledWith('yd-cinematic-storyboard'));
   });
 });

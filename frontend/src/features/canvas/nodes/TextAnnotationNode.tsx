@@ -164,6 +164,33 @@ const MODES: ReadonlyArray<{
 
 const EDIT_VIEW_ZOOM = 1.4;
 
+const TEXT_MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
+const TEXT_MARKDOWN_COMPONENTS = {
+  h1: ({ ...props }) => <h1 className="mb-1 mt-2 text-base font-semibold" {...props} />,
+  h2: ({ ...props }) => <h2 className="mb-1 mt-2 text-sm font-semibold" {...props} />,
+  h3: ({ ...props }) => <h3 className="mb-1 mt-1 text-sm font-semibold" {...props} />,
+  p: ({ ...props }) => <p className="my-1" {...props} />,
+  strong: ({ ...props }) => <strong className="font-semibold text-text-dark" {...props} />,
+  em: ({ ...props }) => <em className="italic" {...props} />,
+  ul: ({ ...props }) => <ul className="my-1 ml-5 list-disc" {...props} />,
+  ol: ({ ...props }) => <ol className="my-1 ml-5 list-decimal" {...props} />,
+  li: ({ ...props }) => <li className="my-0.5" {...props} />,
+  code: ({ ...props }) => (
+    <code className="rounded bg-white/10 px-1 py-0.5 text-xs" {...props} />
+  ),
+  hr: () => <hr className="my-2 border-white/10" />,
+};
+
+const MemoizedTextMarkdown = memo(({ content }: { content: string }) => (
+  <ReactMarkdown
+    remarkPlugins={TEXT_MARKDOWN_PLUGINS}
+    components={TEXT_MARKDOWN_COMPONENTS}
+  >
+    {content}
+  </ReactMarkdown>
+));
+MemoizedTextMarkdown.displayName = 'MemoizedTextMarkdown';
+
 export const TextAnnotationNode = memo(({
   id,
   data,
@@ -736,26 +763,7 @@ export const TextAnnotationNode = memo(({
               />
             ) : hasUserContent ? (
               <div className="ui-scrollbar nowheel max-h-full w-full overflow-y-auto px-4 py-4 text-sm leading-6 text-text-dark">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks]}
-                  components={{
-                    h1: ({ ...props }) => <h1 className="mb-1 mt-2 text-base font-semibold" {...props} />,
-                    h2: ({ ...props }) => <h2 className="mb-1 mt-2 text-sm font-semibold" {...props} />,
-                    h3: ({ ...props }) => <h3 className="mb-1 mt-1 text-sm font-semibold" {...props} />,
-                    p: ({ ...props }) => <p className="my-1" {...props} />,
-                    strong: ({ ...props }) => <strong className="font-semibold text-text-dark" {...props} />,
-                    em: ({ ...props }) => <em className="italic" {...props} />,
-                    ul: ({ ...props }) => <ul className="my-1 ml-5 list-disc" {...props} />,
-                    ol: ({ ...props }) => <ol className="my-1 ml-5 list-decimal" {...props} />,
-                    li: ({ ...props }) => <li className="my-0.5" {...props} />,
-                    code: ({ ...props }) => (
-                      <code className="rounded bg-white/10 px-1 py-0.5 text-xs" {...props} />
-                    ),
-                    hr: () => <hr className="my-2 border-white/10" />,
-                  }}
-                >
-                  {content}
-                </ReactMarkdown>
+                <MemoizedTextMarkdown content={content} />
               </div>
             ) : (
               <AlignJustify className="h-12 w-12 stroke-[1.5] text-text-muted/40" />
@@ -947,26 +955,7 @@ export const TextAnnotationNode = memo(({
             />
           ) : hasUserContent ? (
             <div className="ui-scrollbar nowheel max-h-full w-full flex-1 overflow-y-auto px-4 py-4 text-sm leading-6 text-text-dark">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks]}
-                components={{
-                  h1: ({ ...props }) => <h1 className="mb-1 mt-2 text-base font-semibold" {...props} />,
-                  h2: ({ ...props }) => <h2 className="mb-1 mt-2 text-sm font-semibold" {...props} />,
-                  h3: ({ ...props }) => <h3 className="mb-1 mt-1 text-sm font-semibold" {...props} />,
-                  p: ({ ...props }) => <p className="my-1" {...props} />,
-                  strong: ({ ...props }) => <strong className="font-semibold text-text-dark" {...props} />,
-                  em: ({ ...props }) => <em className="italic" {...props} />,
-                  ul: ({ ...props }) => <ul className="my-1 ml-5 list-disc" {...props} />,
-                  ol: ({ ...props }) => <ol className="my-1 ml-5 list-decimal" {...props} />,
-                  li: ({ ...props }) => <li className="my-0.5" {...props} />,
-                  code: ({ ...props }) => (
-                    <code className="rounded bg-white/10 px-1 py-0.5 text-xs" {...props} />
-                  ),
-                  hr: () => <hr className="my-2 border-white/10" />,
-                }}
-              >
-                {content}
-              </ReactMarkdown>
+              <MemoizedTextMarkdown content={content} />
             </div>
           ) : isSystemManaged ? (
             <div className="flex min-h-0 flex-1 items-center justify-center py-4">

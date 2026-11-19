@@ -62,11 +62,9 @@ from novelvideo.api.routes import (  # noqa: E402
     model_credits,
     openfilm,
     pipeline,
-    piko,
     product_surfaces,
     projects,
     props,
-    release_notifications,
     scenes,
     scripts,
     styles,
@@ -117,7 +115,6 @@ api_router.include_router(product_surfaces.router, tags=["product-surfaces"])
 api_router.include_router(chat.router, tags=["chat"])
 api_router.include_router(web.router, tags=["web"])
 api_router.include_router(assistant.router, tags=["assistant"])
-api_router.include_router(piko.router, tags=["piko"])
 api_router.include_router(projects.router, tags=["projects"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(interactive_stories.router)
@@ -140,7 +137,6 @@ api_router.include_router(model_credits.router, tags=["model-credits"])
 api_router.include_router(freezone.router)
 api_router.include_router(skill_imports.router)
 api_router.include_router(html_artifacts.router)
-api_router.include_router(release_notifications.router, tags=["release-notifications"])
 _verification_routes_registered = False
 
 

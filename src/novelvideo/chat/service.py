@@ -1008,6 +1008,7 @@ _CODEX_FREEZONE_EXECUTION_TOOLS = (
     "freezone_get_node_detail",
     "freezone_get_workflow",
     "freezone_observe_workflow_run",
+    "freezone_read_native_skill_file",
     "freezone_request_user_clarification",
     "freezone_run_node_action",
     "freezone_run_workflow",
@@ -2031,6 +2032,70 @@ def _freezone_skill_studio_context(username: str, prompt: str | None) -> str:
     )
 
 
+def _freezone_native_skill_context(username: str, prompt: str | None) -> str:
+    prompt_text = str(prompt or "")
+    if "/" not in prompt_text or not str(username or "").strip():
+        return ""
+    try:
+        from novelvideo.freezone.native_skill_store import (
+            list_user_native_skills,
+            read_user_native_skill_file,
+        )
+
+        native_skills = {
+            str(item["id"]): item
+            for item in list_user_native_skills(username)
+            if item.get("enabled") is not False and str(item.get("id") or "").strip()
+        }
+    except Exception:
+        return ""
+    if not native_skills:
+        return ""
+    matched_ids: list[str] = []
+    for match in re.finditer(r"(?:^|\s)/([a-z0-9][a-z0-9_-]{0,127})(?=$|\s)", prompt_text):
+        skill_id = match.group(1)
+        if skill_id in native_skills and skill_id not in matched_ids:
+            matched_ids.append(skill_id)
+    if not matched_ids:
+        return ""
+    blocks = []
+    for skill_id in matched_ids:
+        item = native_skills[skill_id]
+        name = str(item.get("name") or skill_id)
+        try:
+            loaded = read_user_native_skill_file(
+                username=username,
+                skill_id=skill_id,
+                file_path="SKILL.md",
+            )
+            skill_md_content = str(loaded.get("content") or "")
+        except Exception:
+            skill_md_content = ""
+        files = [str(f) for f in (item.get("files") or []) if str(f) != "SKILL.md"]
+        files_block = (
+            f"Available reference/asset files (read on demand via `freezone_read_native_skill_file(skill_id=\"{skill_id}\", file_path=...)`):\n"
+            + "\n".join(f"- {path}" for path in files)
+            if files
+            else "No extra reference files."
+        )
+        blocks.append(
+            "\n\n[FREEZONE_NATIVE_MARKDOWN_SKILL]\n"
+            f"The user explicitly selected native Markdown Skill `{skill_id}` (`{name}`).\n"
+            "The full `SKILL.md` is provided verbatim below (you do NOT need `skill_view`).\n"
+            f"Whenever `SKILL.md` instructs you to read a reference or asset file, call "
+            f'`freezone_read_native_skill_file(skill_id="{skill_id}", file_path="<relative/path>")`.\n'
+            "Follow that Skill's exact workflow, confirmation cards, output structure, and delivery "
+            "boundaries verbatim; do NOT replace it with `dramaclaw-workflows`, "
+            "`freezone_get_workflow_skill`, or a canvas workflow draft unless the user explicitly "
+            "asks to build canvas nodes.\n\n"
+            f"{files_block}\n\n"
+            f"--- SKILL.md ({skill_id}) ---\n"
+            f"{skill_md_content}\n"
+            "[/FREEZONE_NATIVE_MARKDOWN_SKILL]"
+        )
+    return "".join(blocks)
+
+
 def _write_hermes_tool_mode(username: str, *, mode: str) -> None:
     try:
         from novelvideo.chat.hermes_workspace import ensure_user_hermes_workspace
@@ -2174,6 +2239,7 @@ def _prompt_with_user_context(
     surface_instructions = (
         f"{assistant_instructions_block}"
         f"{_freezone_skill_studio_context(username, route_prompt if route_prompt is not None else prompt)}"
+        f"{_freezone_native_skill_context(username, route_prompt if route_prompt is not None else prompt)}"
         f"{canvas_context}"
         if tool_mode == "freezone_canvas"
         else (

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ClaymoreLab
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Waypoints, Wand2 } from 'lucide-react';
-import { useReactFlow, useViewport } from '@xyflow/react';
+import { useReactFlow, useStore } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 
 import { isImmersiveViewerActive } from '@/features/viewer-kit/useViewerImmersiveBody';
@@ -38,13 +38,11 @@ export function CanvasZoomControl({
   placement = 'bottom-right',
 }: CanvasZoomControlProps) {
   const { zoomTo, getZoom, fitView } = useReactFlow();
-  const { zoom } = useViewport();
+  const percent = useStore((state) => Math.round(state.transform[2] * 100));
   const { t } = useTranslation();
 
   const edgesHidden = useEdgeVisibilityStore((state) => state.hidden);
   const toggleEdgesHidden = useEdgeVisibilityStore((state) => state.toggle);
-
-  const percent = Math.round(zoom * 100);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [draft, setDraft] = useState<string>('');

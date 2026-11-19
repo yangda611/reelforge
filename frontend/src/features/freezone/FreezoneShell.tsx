@@ -119,6 +119,7 @@ import {
 import {
   consumeQueuedLocalFreezoneProjections,
   queueLocalFreezoneProjection,
+  refreshRemoteFreezoneCanvasDelta,
   removeLocalFreezoneProjection,
 } from "@/features/freezone/canvasSyncRuntime";
 import {
@@ -173,7 +174,6 @@ import {
 } from "@/features/freezone/chatNodeReferences";
 import {
   buildCanvasOntologyContext,
-  type CanvasOntologyContext,
 } from "@/features/canvas/ontology/canvasOntology";
 import type { ServerFrame } from "@/features/superchat/types";
 import { initializeEmptyFreezoneAgentChat } from "@/features/superchat/freezoneChatScopeCache";
@@ -946,6 +946,40 @@ const canvasKey = (projectId: string, canvasId: string) => `${projectId}::${canv
 /** 上一次真正画出来的画布；跨挂载保留，用来判断重进时能否直接复用 store 里的内容。 */
 let lastRenderedCanvasKey: string | null = null;
 
+const EMPTY_CANVAS_NODES: CanvasNode[] = [];
+const EMPTY_CANVAS_EDGES: CanvasEdge[] = [];
+
+function resolveVisibleSelectedCanvasNodes(
+  canvasNodes: CanvasNode[],
+  selectedNodeId: string | null,
+): CanvasNode[] {
+  const selectedNodes = canvasNodes.filter((node) => node.selected);
+  return selectedNodes.length > 0
+    ? selectedNodes
+    : selectedNodeId
+      ? canvasNodes.filter((node) => node.id === selectedNodeId)
+      : [];
+}
+
+function expandChatReferenceCanvasNodes(
+  canvasNodes: CanvasNode[],
+  visibleSelectedCanvasNodes: CanvasNode[],
+): CanvasNode[] {
+  if (visibleSelectedCanvasNodes.length === 0) return [];
+  const selectedIds = new Set(visibleSelectedCanvasNodes.map((node) => node.id));
+  const expandedIds = new Set(selectedIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of canvasNodes) {
+      if (!node.parentId || !expandedIds.has(node.parentId) || expandedIds.has(node.id)) continue;
+      expandedIds.add(node.id);
+      changed = true;
+    }
+  }
+  return canvasNodes.filter((node) => expandedIds.has(node.id));
+}
+
 export function FreezoneShell({
   project,
   canvasId,
@@ -1164,73 +1198,30 @@ export function FreezoneShell({
     () => parsePendingStoryOutline(sync.metadata),
     [sync.metadata],
   );
-  const canvasNodes = useCanvasStore((state) => state.nodes);
-  const canvasEdges = useCanvasStore((state) => state.edges);
-  const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
   const syncRetryRef = useRef(sync.retry);
   useEffect(() => {
     syncRetryRef.current = sync.retry;
   }, [sync.retry]);
-  const visibleSelectedCanvasNodes = useMemo(() => {
-    const selectedNodes = canvasNodes.filter((node) => node.selected);
-    return selectedNodes.length > 0
-      ? selectedNodes
-      : selectedNodeId
-        ? canvasNodes.filter((node) => node.id === selectedNodeId)
-        : [];
-  }, [canvasNodes, selectedNodeId]);
-  const chatReferenceCanvasNodes = useMemo(() => {
-    if (visibleSelectedCanvasNodes.length === 0) return [];
-    const selectedIds = new Set(visibleSelectedCanvasNodes.map((node) => node.id));
-    const expandedIds = new Set(selectedIds);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const node of canvasNodes) {
-        if (!node.parentId || !expandedIds.has(node.parentId) || expandedIds.has(node.id)) continue;
-        expandedIds.add(node.id);
-        changed = true;
-      }
-    }
-    return canvasNodes.filter((node) => expandedIds.has(node.id));
-  }, [canvasNodes, visibleSelectedCanvasNodes]);
-  const currentCanvasSelectionAttachmentKey = useMemo(
-    () =>
-      canvasSelectionAttachmentDeliveryKey(
-        visibleSelectedCanvasNodes,
-        chatReferenceCanvasNodes,
-      ),
-    [chatReferenceCanvasNodes, visibleSelectedCanvasNodes],
-  );
-  const currentCanvasSelection = useMemo<CurrentCanvasSelectionItem[]>(
-    () =>
-      visibleSelectedCanvasNodes.map((node) => ({
-        nodeId: node.id,
-        nodeType: node.type ?? null,
-        label: resolveNodeDisplayName(node.type, node.data),
-      })),
-    [visibleSelectedCanvasNodes],
-  );
-  const currentCanvasSelectionAttachment = useMemo(
-    () =>
-      buildCanvasNodeReferenceAttachment(
-        projectId,
-        canvasId,
-        chatReferenceCanvasNodes,
-        canvasEdges,
-        canvasNodes,
-        { displayNodes: visibleSelectedCanvasNodes },
-      ),
-    [canvasEdges, canvasId, canvasNodes, chatReferenceCanvasNodes, projectId, visibleSelectedCanvasNodes],
-  );
   const attachCurrentSelectionToChat = useCallback(() => {
-    if (!currentCanvasSelectionAttachment || !currentCanvasSelectionAttachmentKey) {
+    const state = useCanvasStore.getState();
+    const visibleSelected = resolveVisibleSelectedCanvasNodes(state.nodes, state.selectedNodeId);
+    const chatRefNodes = expandChatReferenceCanvasNodes(state.nodes, visibleSelected);
+    const key = canvasSelectionAttachmentDeliveryKey(visibleSelected, chatRefNodes);
+    const attachment = buildCanvasNodeReferenceAttachment(
+      projectId,
+      canvasId,
+      chatRefNodes,
+      state.edges,
+      state.nodes,
+      { displayNodes: visibleSelected },
+    );
+    if (!attachment || !key) {
       return false;
     }
-    deliveredSelectionAttachmentKeyRef.current = currentCanvasSelectionAttachmentKey;
-    setPendingChatAttachments([currentCanvasSelectionAttachment]);
+    deliveredSelectionAttachmentKeyRef.current = key;
+    setPendingChatAttachments([attachment]);
     return true;
-  }, [currentCanvasSelectionAttachment, currentCanvasSelectionAttachmentKey]);
+  }, [canvasId, projectId]);
   const handleChatOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) {
@@ -1240,38 +1231,6 @@ export function FreezoneShell({
     },
     [attachCurrentSelectionToChat],
   );
-  const currentCanvasOntologyContext = useMemo(
-    () =>
-      buildCanvasOntologyContext(canvasNodes, canvasEdges, {
-        canvasId,
-        selectedNodeIds: chatReferenceCanvasNodes.map((node) => node.id),
-      }),
-    [canvasEdges, canvasId, canvasNodes, chatReferenceCanvasNodes],
-  );
-  useEffect(() => {
-    if (
-      !chatOpen ||
-      !currentCanvasSelectionAttachment ||
-      !currentCanvasSelectionAttachmentKey
-    ) {
-      deliveredSelectionAttachmentKeyRef.current = null;
-      return;
-    }
-    // React Flow updates node geometry repeatedly while a large approved graph
-    // mounts. The attachment payload includes positions, so rebuilding it on
-    // every measurement used to make this effect publish again while
-    // SuperChatPanel consumed the previous value. Parent and child then kept
-    // setting state until React raised "Maximum update depth exceeded".
-    // Delivery identity follows the semantic selection/topology instead of
-    // transient node geometry.
-    if (
-      deliveredSelectionAttachmentKeyRef.current === currentCanvasSelectionAttachmentKey
-    ) {
-      return;
-    }
-    deliveredSelectionAttachmentKeyRef.current = currentCanvasSelectionAttachmentKey;
-    setPendingChatAttachments([currentCanvasSelectionAttachment]);
-  }, [chatOpen, currentCanvasSelectionAttachment, currentCanvasSelectionAttachmentKey]);
   useEffect(() => {
     if (!productSurfaces.isPending && !showChatDock) {
       setChatOpen(false);
@@ -1360,7 +1319,14 @@ export function FreezoneShell({
           sync.revision != null &&
           remoteRevision > sync.revision
         ) {
-          syncRetryRef.current();
+          void refreshRemoteFreezoneCanvasDelta(
+            projectId,
+            canvasId,
+            sync.revision,
+            { protectUnsavedLocalEdits: true },
+          ).catch(() => {
+            if (!cancelled) syncRetryRef.current();
+          });
         }
       } catch {
         // Best effort: missing a poll is fine; the next tick or page refresh catches up.
@@ -2360,10 +2326,10 @@ export function FreezoneShell({
             projectId={projectId}
             canvasId={canvasId}
             currentCanvasMetadata={sync.metadata}
-            currentCanvasSelection={currentCanvasSelection}
-            currentCanvasOntologyContext={currentCanvasOntologyContext}
             pendingAttachments={pendingChatAttachments}
             onPendingAttachmentsConsumed={handlePendingChatAttachmentsConsumed}
+            onDeliverSelectionAttachments={setPendingChatAttachments}
+            deliveredSelectionAttachmentKeyRef={deliveredSelectionAttachmentKeyRef}
             pendingNodeMentions={pendingChatNodeMentions}
             onPendingNodeMentionsConsumed={handlePendingChatNodeMentionsConsumed}
             pendingExternalSubmit={pendingChatExternalSubmit}
@@ -2444,10 +2410,10 @@ function FreezoneChatDock({
   projectId,
   canvasId,
   currentCanvasMetadata,
-  currentCanvasSelection,
-  currentCanvasOntologyContext,
   pendingAttachments,
   onPendingAttachmentsConsumed,
+  onDeliverSelectionAttachments,
+  deliveredSelectionAttachmentKeyRef,
   pendingNodeMentions,
   onPendingNodeMentionsConsumed,
   pendingExternalSubmit,
@@ -2465,10 +2431,10 @@ function FreezoneChatDock({
   projectId: string;
   canvasId: string;
   currentCanvasMetadata: Record<string, unknown> | null;
-  currentCanvasSelection: CurrentCanvasSelectionItem[];
-  currentCanvasOntologyContext: CanvasOntologyContext;
   pendingAttachments: ChatAttachment[];
   onPendingAttachmentsConsumed: () => void;
+  onDeliverSelectionAttachments: (attachments: ChatAttachment[]) => void;
+  deliveredSelectionAttachmentKeyRef: { current: string | null };
   pendingNodeMentions: string[];
   onPendingNodeMentionsConsumed: () => void;
   pendingExternalSubmit: { id: string; text: string; mode?: "send" | "draft" } | null;
@@ -2486,6 +2452,78 @@ function FreezoneChatDock({
   toggleLabel: string;
 }) {
   const { t } = useTranslation();
+  const canvasNodes = useCanvasStore((state) => (open ? state.nodes : EMPTY_CANVAS_NODES));
+  const canvasEdges = useCanvasStore((state) => (open ? state.edges : EMPTY_CANVAS_EDGES));
+  const selectedNodeId = useCanvasStore((state) => (open ? state.selectedNodeId : null));
+  const visibleSelectedCanvasNodes = useMemo(
+    () => (open ? resolveVisibleSelectedCanvasNodes(canvasNodes, selectedNodeId) : EMPTY_CANVAS_NODES),
+    [canvasNodes, open, selectedNodeId],
+  );
+  const chatReferenceCanvasNodes = useMemo(
+    () => (open ? expandChatReferenceCanvasNodes(canvasNodes, visibleSelectedCanvasNodes) : EMPTY_CANVAS_NODES),
+    [canvasNodes, open, visibleSelectedCanvasNodes],
+  );
+  const currentCanvasSelectionAttachmentKey = useMemo(
+    () =>
+      open
+        ? canvasSelectionAttachmentDeliveryKey(visibleSelectedCanvasNodes, chatReferenceCanvasNodes)
+        : null,
+    [chatReferenceCanvasNodes, open, visibleSelectedCanvasNodes],
+  );
+  const currentCanvasSelection = useMemo<CurrentCanvasSelectionItem[]>(
+    () =>
+      visibleSelectedCanvasNodes.map((node) => ({
+        nodeId: node.id,
+        nodeType: node.type ?? null,
+        label: resolveNodeDisplayName(node.type, node.data),
+      })),
+    [visibleSelectedCanvasNodes],
+  );
+  const currentCanvasSelectionAttachment = useMemo(
+    () =>
+      open
+        ? buildCanvasNodeReferenceAttachment(
+            projectId,
+            canvasId,
+            chatReferenceCanvasNodes,
+            canvasEdges,
+            canvasNodes,
+            { displayNodes: visibleSelectedCanvasNodes },
+          )
+        : null,
+    [canvasEdges, canvasId, canvasNodes, chatReferenceCanvasNodes, open, projectId, visibleSelectedCanvasNodes],
+  );
+  const currentCanvasOntologyContext = useMemo(
+    () =>
+      buildCanvasOntologyContext(canvasNodes, canvasEdges, {
+        canvasId,
+        selectedNodeIds: chatReferenceCanvasNodes.map((node) => node.id),
+      }),
+    [canvasEdges, canvasId, canvasNodes, chatReferenceCanvasNodes],
+  );
+  useEffect(() => {
+    if (
+      !open ||
+      !currentCanvasSelectionAttachment ||
+      !currentCanvasSelectionAttachmentKey
+    ) {
+      deliveredSelectionAttachmentKeyRef.current = null;
+      return;
+    }
+    if (
+      deliveredSelectionAttachmentKeyRef.current === currentCanvasSelectionAttachmentKey
+    ) {
+      return;
+    }
+    deliveredSelectionAttachmentKeyRef.current = currentCanvasSelectionAttachmentKey;
+    onDeliverSelectionAttachments([currentCanvasSelectionAttachment]);
+  }, [
+    currentCanvasSelectionAttachment,
+    currentCanvasSelectionAttachmentKey,
+    deliveredSelectionAttachmentKeyRef,
+    onDeliverSelectionAttachments,
+    open,
+  ]);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [shouldRenderPanel, setShouldRenderPanel] = useState(open);
   const [panelVisible, setPanelVisible] = useState(false);

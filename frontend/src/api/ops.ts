@@ -2964,6 +2964,82 @@ export interface FreezoneUploadResult {
   url: string;
   filename: string;
   size: number;
+  width?: number;
+  height?: number;
+  deduplicated?: boolean;
+}
+
+const MAX_CLIENT_SHA256_PRECHECK_BYTES = 32 * 1024 * 1024;
+
+async function computeBlobSha256Hex(file: File | Blob): Promise<string | null> {
+  if (
+    file.size <= 0 ||
+    file.size > MAX_CLIENT_SHA256_PRECHECK_BYTES ||
+    typeof globalThis.crypto === "undefined" ||
+    typeof globalThis.crypto.subtle?.digest !== "function" ||
+    typeof file.arrayBuffer !== "function"
+  ) {
+    return null;
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+    const bytes = new Uint8Array(digest);
+    let hex = "";
+    for (let i = 0; i < bytes.length; i += 1) {
+      hex += bytes[i].toString(16).padStart(2, "0");
+    }
+    return hex;
+  } catch {
+    return null;
+  }
+}
+
+async function tryCheckFreezoneUploadDedup(
+  project: string,
+  file: File | Blob,
+  filename?: string,
+  signal?: AbortSignal,
+): Promise<FreezoneUploadResult | null> {
+  const sha256 = await computeBlobSha256Hex(file);
+  if (!sha256) return null;
+  try {
+    const resp = await apiClient(
+      `projects/${encodeURIComponent(project)}/freezone/upload/check`,
+      {
+        method: "POST",
+        json: {
+          sha256,
+          size: file.size,
+          filename: filename ?? (file instanceof File ? file.name : undefined),
+        },
+        timeout: 5_000,
+        retry: 0,
+        signal,
+      },
+    ).json<{
+      ok?: boolean;
+      data?: { found?: boolean } & Partial<FreezoneUploadResult>;
+    }>();
+    if (
+      resp?.ok &&
+      resp.data?.found === true &&
+      typeof resp.data.url === "string" &&
+      resp.data.url.length > 0
+    ) {
+      return {
+        url: resp.data.url,
+        filename: resp.data.filename ?? filename ?? "upload.png",
+        size: typeof resp.data.size === "number" ? resp.data.size : file.size,
+        ...(typeof resp.data.width === "number" ? { width: resp.data.width } : {}),
+        ...(typeof resp.data.height === "number" ? { height: resp.data.height } : {}),
+        deduplicated: true,
+      };
+    }
+  } catch {
+    // Best-effort precheck; fall through to standard multipart upload.
+  }
+  return null;
 }
 
 export interface FreezoneUploadOptions {
@@ -2977,28 +3053,81 @@ export interface FreezoneUploadOptions {
   signal?: AbortSignal;
 }
 
+const MAX_CONCURRENT_FREEZONE_UPLOADS = 4;
+let activeFreezoneUploads = 0;
+const freezoneUploadWaiters: Array<() => void> = [];
+
+async function runWithFreezoneUploadSlot<T>(
+  fn: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException("Aborted", "AbortError");
+  }
+  if (activeFreezoneUploads >= MAX_CONCURRENT_FREEZONE_UPLOADS) {
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        const index = freezoneUploadWaiters.indexOf(grant);
+        if (index !== -1) freezoneUploadWaiters.splice(index, 1);
+        reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new DOMException("Aborted", "AbortError"),
+        );
+      };
+      const grant = () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      freezoneUploadWaiters.push(grant);
+    });
+  }
+  activeFreezoneUploads += 1;
+  try {
+    return await fn();
+  } finally {
+    activeFreezoneUploads = Math.max(0, activeFreezoneUploads - 1);
+    const next = freezoneUploadWaiters.shift();
+    if (next) next();
+  }
+}
+
 export async function uploadFreezoneImage(
   project: string,
   file: File | Blob,
   filename?: string,
   options?: FreezoneUploadOptions,
 ): Promise<FreezoneUploadResult> {
-  const fd = new FormData();
-  fd.append("file", file, filename ?? (file instanceof File ? file.name : "upload.png"));
-  // ky's `body: FormData` skips the json envelope helper, so we go direct.
-  const resp = await apiClient(
-    `projects/${encodeURIComponent(project)}/freezone/upload`,
-    {
-      method: "POST",
-      body: fd,
-      timeout: options?.timeoutMs ?? false,
-      signal: options?.signal,
-    },
-  ).json<{ ok: boolean; data?: FreezoneUploadResult; error?: string }>();
-  if (!resp.ok || !resp.data) {
-    throw new Error(resp.error ?? "upload failed");
-  }
-  return resp.data;
+  return await runWithFreezoneUploadSlot(async () => {
+    const dedupHit = await tryCheckFreezoneUploadDedup(
+      project,
+      file,
+      filename,
+      options?.signal,
+    );
+    if (dedupHit) {
+      return dedupHit;
+    }
+    const fd = new FormData();
+    fd.append("file", file, filename ?? (file instanceof File ? file.name : "upload.png"));
+    // ky's `body: FormData` skips the json envelope helper, so we go direct.
+    const resp = await apiClient(
+      `projects/${encodeURIComponent(project)}/freezone/upload`,
+      {
+        method: "POST",
+        body: fd,
+        timeout: options?.timeoutMs ?? false,
+        signal: options?.signal,
+      },
+    ).json<{ ok: boolean; data?: FreezoneUploadResult; error?: string }>();
+    if (!resp.ok || !resp.data) {
+      throw new Error(resp.error ?? "upload failed");
+    }
+    return resp.data;
+  }, options?.signal);
 }
 
 export async function uploadFreezoneReferenceFile(
@@ -3019,6 +3148,32 @@ export async function uploadFreezoneReferenceFile(
     throw new Error(resp.error ?? "upload failed");
   }
   return resp.data;
+}
+
+const PREWARM_THUMBNAIL_URL_LIMIT = 128;
+
+export async function prewarmFreezoneThumbnails(
+  project: string,
+  urls: ReadonlyArray<string>,
+): Promise<void> {
+  const unique = Array.from(
+    new Set(
+      urls
+        .map((url) => url.trim())
+        .filter((url) => url.startsWith("/static/projects/") || url.includes("/media/")),
+    ),
+  ).slice(0, PREWARM_THUMBNAIL_URL_LIMIT);
+  if (unique.length === 0) {
+    return;
+  }
+  await apiClient(
+    `projects/${encodeURIComponent(project)}/freezone/thumbnails/prewarm`,
+    {
+      method: "POST",
+      json: { urls: unique },
+      timeout: 10000,
+    },
+  ).json<{ ok: boolean }>();
 }
 
 // /freezone/assets/copy ---------------------------------------------------- //
