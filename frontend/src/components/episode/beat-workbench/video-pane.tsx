@@ -1073,7 +1073,9 @@ export function VideoPane({
     showSeedance2Config,
   ]);
   useEffect(() => {
-    if (!showPromptConfig || !seedance2Dirty) return;
+    if (!showPromptConfig || !seedance2Dirty || generateSeedance2Prompt.isPending) {
+      return;
+    }
     const nextConfig = showGrokVideoConfig
       ? serializeGrokVideoConfig(seedance2Draft, seedance2Config)
       : showHappyHorseConfig
@@ -1089,6 +1091,7 @@ export function VideoPane({
     return () => window.clearTimeout(timer);
   }, [
     beat.beat_number,
+    generateSeedance2Prompt.isPending,
     seedance2Config,
     seedance2Dirty,
     seedance2Draft,

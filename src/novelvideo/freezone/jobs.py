@@ -1841,7 +1841,10 @@ async def run_freezone_video_gen(
             raise RuntimeError(
                 f"backend {backend} requires a first-frame image reference"
             )
-        extra_kwargs: dict[str, object] = {}
+        extra_kwargs: dict[str, object] = {
+            "project_output_dir": str(project_dir),
+            "task_type": "freezone_video_gen",
+        }
         if audio_setting:
             extra_kwargs["audio_setting"] = audio_setting
         result = await video_gen.generate(

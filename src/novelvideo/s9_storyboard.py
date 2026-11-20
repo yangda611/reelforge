@@ -1118,6 +1118,7 @@ def build_s9_stage2_task_prompt(
     prev_episode_context: str = "",
     user_guidance: str = "",
     source_text: str = "",
+    current_prompt: str = "",
 ) -> str:
     """Build Stage 2 user prompt for compiling one 大段 into a full Seedance prompt."""
 
@@ -1184,6 +1185,37 @@ def build_s9_stage2_task_prompt(
         else ""
     )
 
+    current_clean = str(current_prompt or "").strip()
+    current_block = ""
+    if current_clean:
+        draft_issues = _audit_s9_stage2_completeness(
+            current_clean,
+            segment=segment,
+            slots=slots,
+        )
+        if draft_issues:
+            current_block = (
+                "\n【当前待补全与优化的提示词草稿（检测到内容不完整）】\n"
+                f"{current_clean}\n\n"
+                "【补全与优化指令】\n"
+                f"检测到当前草稿存在未完成问题：{'；'.join(draft_issues)}。\n"
+                f"请保留草稿中合理的镜头质感与已写设定，**完整补齐所有缺失栏目、缺失分镜与未写完句子**，"
+                f"确保完整覆盖从 0秒 到 {segment.planned_duration_seconds}秒 的全部 {max(1, len(segment.shots))} 个分镜，"
+                "严禁中途截断、省略或只输出片段。\n"
+            )
+        else:
+            current_block = (
+                "\n【当前版本提示词（用户点击「AI 优化」的基准稿）】\n"
+                f"{current_clean}\n\n"
+                "【AI 优化指令】\n"
+                "用户主动发起了「AI 优化」。请在保留逐字台词原文、正确 @图片N/@音频N 绑定、"
+                f"用户手动修改意图以及完整 0秒—{segment.planned_duration_seconds}秒（共 {max(1, len(segment.shots))} 镜）结构的前提下，"
+                "进行**实质性的导演级精修升级**（不要原封不动照抄原文）：\n"
+                "1. 若上方存在【用户附加微调要求】，优先落实用户指定维度（主体/场景/光影/镜头/风格/无字幕等）；\n"
+                "2. 细化镜内亚区间动态时间轴中的眼神落点、微表情时程错峰、身体重心传导与道具拿放最终归属；\n"
+                "3. 强化机位动机、景别转换与物理光影/贴动作拟音细节，删去空泛套话，完整输出到最后一镜结束。\n"
+            )
+
     return f"""请为「大段{segment.segment_number}：{segment.title}」（计划总时长 **{segment.planned_duration_seconds}秒**，必须在这 {segment.planned_duration_seconds} 秒内讲完本段故事闭环、零空等拖秒）生成完整的 Seedance 2.0/2.5 生成提示词：
 
 【项目视觉与画风要求】
@@ -1200,7 +1232,7 @@ def build_s9_stage2_task_prompt(
 {source_block}
 【本大段内部各分镜规划（时间轴共 {segment.planned_duration_seconds} 秒）】
 {chr(10).join(shots_lines)}
-{guidance_block}
+{guidance_block}{current_block}
 请立即直接输出纯净的 Stage 2 完整生成提示词文本（严格执行 YD分镜skills 的参考职责、全局光影画风、适用场景布局、注意事项、角色声音与分亚区间动态时间轴表演写法，禁止出现任何代码字段名）。"""
 
 
@@ -1429,12 +1461,98 @@ def build_s9_stage2_fallback_prompt(
     return "\n\n".join(sections)
 
 
+_STAGE2_DEFAULT_MAX_TOKENS = 8192
+_STAGE2_MAX_CONTINUATIONS = 2
+_STAGE2_TERMINAL_CHARS = frozenset("。！？.!?'\"”’」』）)]】~…")
+
+
 def _strip_code_fences(text: str) -> str:
     cleaned = str(text or "").strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\s*\n?", "", cleaned)
         cleaned = re.sub(r"\n?```\s*$", "", cleaned)
     return cleaned.strip()
+
+
+def _audit_s9_stage2_completeness(
+    text: str,
+    *,
+    segment: S9SegmentPlan,
+    slots: list[S9SegmentAssetSlot],
+    finish_reason: str | None = None,
+) -> list[str]:
+    """Verify a Stage 2 prompt is not truncated and covers every planned shot & timeline end."""
+
+    issues: list[str] = []
+    if finish_reason == "length":
+        issues.append("输出达到 token 上限被截断")
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return [*issues, "输出为空"]
+
+    if cleaned[-1] not in _STAGE2_TERMINAL_CHARS:
+        issues.append(f"输出在句中意外中断（结尾字符：{cleaned[-1]!r}）")
+
+    if slots and "【参考职责】" not in cleaned:
+        issues.append("缺少【参考职责】说明")
+    if "【全局光影画风】" not in cleaned:
+        issues.append("缺少【全局光影画风】")
+    if "【注意事项】" not in cleaned:
+        issues.append("缺少【注意事项】")
+
+    missing_shots: list[str] = []
+    for shot in segment.shots or []:
+        marker = f"分镜{shot.shot_number}"
+        if marker not in cleaned and (not shot.label or shot.label not in cleaned):
+            missing_shots.append(marker)
+    if missing_shots:
+        issues.append(f"缺少分镜：{'、'.join(missing_shots)}")
+
+    if segment.shots:
+        last_end = _format_seconds_label(segment.shots[-1].end_seconds)
+        planned_end = str(int(segment.planned_duration_seconds or 0))
+        end_candidates = {f"{last_end}秒", f"{last_end}s"}
+        if planned_end and planned_end != "0":
+            end_candidates.update({f"{planned_end}秒", f"{planned_end}s"})
+        if not any(tok in cleaned for tok in end_candidates):
+            issues.append(f"时间轴未覆盖至末镜结束时间 {last_end}秒")
+
+    return issues
+
+
+def _merge_stage2_continuation(prefix: str, continuation: str) -> str:
+    """Concatenate a truncated Stage 2 prefix with a model continuation seamlessly."""
+
+    head = str(prefix or "").rstrip()
+    tail = _strip_code_fences(continuation)
+    if not head:
+        return tail
+    if not tail:
+        return head
+
+    max_overlap = min(len(head), len(tail), 120)
+    for overlap in range(max_overlap, 0, -1):
+        if head.endswith(tail[:overlap]):
+            tail = tail[overlap:]
+            break
+    if not tail:
+        return head
+
+    if tail[0] in {"分", "【", "-"} and head[-1] in _STAGE2_TERMINAL_CHARS:
+        return f"{head}\n{tail}"
+    return f"{head}{tail}"
+
+
+def _s9_stage2_model_settings(model_env: str) -> dict[str, Any]:
+    """Build Stage 2 model settings with an explicit completion token floor."""
+
+    from novelvideo.config import get_newapi_structured_output_model_settings
+    from novelvideo.utils.model_context_budget import TextContextBudget
+
+    settings = dict(get_newapi_structured_output_model_settings(model_env))
+    if TextContextBudget.from_env() is None:
+        settings.setdefault("max_tokens", _STAGE2_DEFAULT_MAX_TOKENS)
+    return settings
 
 
 def _estimate_spoken_seconds(spoken_text: str) -> float:
@@ -1584,7 +1702,7 @@ async def run_s9_stage1_plan(
 
     agent = Agent(
         get_newapi_text_pydantic_model(
-            "LITERAL_SCRIPT_MODEL",
+            "LITERAL_BEAT_META_MODEL",
             brainclaw_profile=BrainClawProfile.LITERAL_BEAT_METADATA,
             capability="text.generate.agent",
         ),
@@ -1630,6 +1748,17 @@ async def run_s9_stage1_plan(
     return plan
 
 
+def _has_stage2_truncation_issue(issues: list[str]) -> bool:
+    return any(
+        "token 上限" in issue
+        or "意外中断" in issue
+        or "缺少分镜" in issue
+        or "时间轴未覆盖" in issue
+        or "输出为空" in issue
+        for issue in issues
+    )
+
+
 async def run_s9_stage2_segment_prompt(
     *,
     segment: S9SegmentPlan,
@@ -1642,6 +1771,7 @@ async def run_s9_stage2_segment_prompt(
     include_first_frame: bool = False,
     user_guidance: str = "",
     source_text: str = "",
+    current_prompt: str = "",
 ) -> str:
     """Invoke LLM to compile Stage 2 full Seedance 2.0/2.5 prompt for one 大段."""
 
@@ -1663,23 +1793,102 @@ async def run_s9_stage2_segment_prompt(
         prev_episode_context=prev_episode_context,
         user_guidance=user_guidance,
         source_text=source_text,
+        current_prompt=current_prompt,
     )
+    model_env = "SEEDANCE2_PROMPT_COMPOSER_MODEL"
     agent = Agent(
         get_newapi_text_pydantic_model(
-            "SEEDANCE2_PROMPT_MODEL",
+            model_env,
             brainclaw_profile=BrainClawProfile.SEEDANCE2_PROMPT_COMPOSITION,
             capability="text.generate.agent",
         ),
         system_prompt=system_prompt,
         output_type=str,
+        model_settings=_s9_stage2_model_settings(model_env),
         retries=2,
         name="YD Stage2 Segment Prompt Director",
     )
-    try:
-        result = await agent.run(task_prompt)
+
+    async def _run_with_continuation(initial_prompt: str) -> tuple[str, list[str]]:
+        result = await agent.run(initial_prompt)
         rendered = _strip_code_fences(result.output)
-        if rendered:
+        finish_reason = getattr(getattr(result, "response", None), "finish_reason", None)
+        issues = _audit_s9_stage2_completeness(
+            rendered,
+            segment=segment,
+            slots=slots,
+            finish_reason=finish_reason,
+        )
+        if not issues or not rendered:
+            return rendered, issues
+
+        can_continue = _has_stage2_truncation_issue(issues) and (
+            "分镜1" in rendered or not segment.shots
+        )
+        all_messages_fn = getattr(result, "all_messages", None)
+        if not can_continue or not callable(all_messages_fn):
+            return rendered, issues
+
+        history = all_messages_fn()
+        for _ in range(_STAGE2_MAX_CONTINUATIONS):
+            if not _has_stage2_truncation_issue(issues):
+                break
+            cont_prompt = (
+                f"你上一条输出未写完整（{'；'.join(issues)}）。"
+                "请紧接着上一条输出最后一个字之后无缝续写剩余内容，补全到最后一个分镜及收束状态，"
+                "禁止重复前面已经输出过的文字，禁止添加解释或代码块标记。"
+            )
+            cont_result = await agent.run(cont_prompt, message_history=history)
+            cont_text = _strip_code_fences(cont_result.output)
+            if not cont_text:
+                break
+            rendered = _merge_stage2_continuation(rendered, cont_text)
+            next_history_fn = getattr(cont_result, "all_messages", None)
+            if not callable(next_history_fn):
+                break
+            history = next_history_fn()
+            finish_reason = getattr(
+                getattr(cont_result, "response", None), "finish_reason", None
+            )
+            issues = _audit_s9_stage2_completeness(
+                rendered,
+                segment=segment,
+                slots=slots,
+                finish_reason=finish_reason,
+            )
+            if not issues:
+                break
+        return rendered, issues
+
+    try:
+        rendered, issues = await _run_with_continuation(task_prompt)
+        if not issues and rendered:
             return rendered
+        if issues:
+            logger.warning(
+                "S9 Stage 2 prompt incomplete for segment %s (%s); running repair pass",
+                segment.segment_number,
+                "; ".join(issues),
+            )
+            repair_prompt = (
+                f"{task_prompt}\n\n"
+                f"【上一次输出校验未通过：{'；'.join(issues)}】\n"
+                f"请严格补齐以上缺失栏目与全部 {max(1, len(segment.shots))} 个分镜"
+                f"（完整覆盖 0秒 至 {segment.planned_duration_seconds}秒），"
+                "保持表演细节扎实但精炼不啰嗦，一次性完整输出到最后一镜结束。"
+            )
+            repaired, repair_issues = await _run_with_continuation(repair_prompt)
+            if not repair_issues and repaired:
+                return repaired
+            if repaired and not _has_stage2_truncation_issue(repair_issues):
+                return repaired
+            if rendered and not _has_stage2_truncation_issue(issues):
+                return rendered
+            logger.warning(
+                "S9 Stage 2 prompt repair remained truncated for segment %s (%s); falling back",
+                segment.segment_number,
+                "; ".join(repair_issues or issues),
+            )
     except Exception as exc:
         logger.warning(
             "S9 Stage 2 prompt LLM failed for segment %s, using structured fallback: %s",

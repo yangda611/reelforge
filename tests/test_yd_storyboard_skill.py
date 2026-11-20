@@ -887,3 +887,221 @@ def test_fallback_prompt_generates_sub_interval_timeline_and_splits_multispeaker
     assert "@音频2音色" in prompt
     assert "@音频1音色" in prompt
     assert "|" not in prompt
+
+
+def test_stage2_completeness_audit_and_task_prompt_for_incomplete_and_optimize():
+    from novelvideo.s9_storyboard import _audit_s9_stage2_completeness
+
+    style = resolve_s9_style_context(visual_style="realistic_modern", aspect_ratio="16:9")
+    seg = S9SegmentPlan(
+        segment_number=1,
+        title="试探",
+        planned_duration_seconds=23,
+        story_beat="林默敲代码，黑衣男人点破十六进制心跳包。",
+        exit_state="黑衣男人盯着屏幕，林默手停键盘。",
+        shots=[
+            S9SubShot(shot_number=1, planned_duration_seconds=4, start_seconds=0, end_seconds=4, content="镜1"),
+            S9SubShot(shot_number=2, planned_duration_seconds=3, start_seconds=4, end_seconds=7, content="镜2"),
+            S9SubShot(shot_number=3, planned_duration_seconds=10, start_seconds=7, end_seconds=17, content="镜3"),
+            S9SubShot(shot_number=4, planned_duration_seconds=6, start_seconds=17, end_seconds=23, content="镜4"),
+        ],
+    )
+    slots = [
+        S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="identity", name="林默", asset_id="林默_青年"),
+    ]
+    truncated = (
+        "【全局光影画风】\n真人电影。\n"
+        "【注意事项】\n无字幕。\n"
+        "分镜1（局部0秒到4秒）：林默看屏幕。\n"
+        "分镜2（局部4秒到7秒）：男人开口。\n"
+        "分镜3（局部7秒到17秒）：8秒—11秒，他开口，说话时嘴角带着轻笑后的余意，语"
+    )
+    issues = _audit_s9_stage2_completeness(
+        truncated, segment=seg, slots=slots, finish_reason="length"
+    )
+    assert any("token 上限" in i for i in issues)
+    assert any("意外中断" in i for i in issues)
+    assert any("【参考职责】" in i for i in issues)
+    assert any("分镜4" in i for i in issues)
+    assert any("23秒" in i for i in issues)
+
+    repair_task = build_s9_stage2_task_prompt(
+        segment=seg,
+        slots=slots,
+        style_context=style,
+        current_prompt=truncated,
+    )
+    assert "当前待补全与优化的提示词草稿" in repair_task
+    assert "完整补齐所有缺失栏目、缺失分镜" in repair_task
+
+    complete_prompt = (
+        "【参考职责】\n@图片1绑定林默。\n"
+        "【全局光影画风】\n真人电影。\n"
+        "【注意事项】\n无字幕。\n"
+        "分镜1（0秒到4秒）：镜1。\n"
+        "分镜2（4秒到7秒）：镜2。\n"
+        "分镜3（7秒到17秒）：镜3。\n"
+        "分镜4（17秒到23秒）：镜4，23秒落定。"
+    )
+    assert _audit_s9_stage2_completeness(complete_prompt, segment=seg, slots=slots) == []
+    opt_task = build_s9_stage2_task_prompt(
+        segment=seg,
+        slots=slots,
+        style_context=style,
+        current_prompt=complete_prompt,
+        user_guidance="镜头：强化压迫感推镜。",
+    )
+    assert "AI 优化指令" in opt_task
+    assert "强化压迫感推镜" in opt_task
+
+
+@pytest.mark.asyncio
+async def test_run_s9_stage2_uses_composer_route_max_tokens_and_continues_truncated_output(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from novelvideo import config as cfg_mod
+    from novelvideo import s9_storyboard as s9_mod
+
+    monkeypatch.delenv("NEWAPI_TEXT_CONTEXT_TOKENS", raising=False)
+
+    style = resolve_s9_style_context(visual_style="realistic_modern", aspect_ratio="16:9")
+    seg = S9SegmentPlan(
+        segment_number=1,
+        title="试探",
+        planned_duration_seconds=23,
+        story_beat="林默敲代码，黑衣男人点破十六进制心跳包。",
+        exit_state="黑衣男人盯着屏幕。",
+        shots=[
+            S9SubShot(shot_number=1, planned_duration_seconds=4, start_seconds=0, end_seconds=4, content="镜1"),
+            S9SubShot(shot_number=2, planned_duration_seconds=3, start_seconds=4, end_seconds=7, content="镜2"),
+            S9SubShot(shot_number=3, planned_duration_seconds=10, start_seconds=7, end_seconds=17, content="镜3"),
+            S9SubShot(shot_number=4, planned_duration_seconds=6, start_seconds=17, end_seconds=23, content="镜4"),
+        ],
+    )
+    slots = [
+        S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="identity", name="林默", asset_id="林默_青年"),
+    ]
+
+    captured_model_envs: list[str] = []
+    captured_settings: list[dict] = []
+    run_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_text_pydantic_model",
+        lambda model_env, **kwargs: captured_model_envs.append(model_env) or "dummy-model",
+    )
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_structured_output_model_settings",
+        lambda model_env=None: {"openai_reasoning_effort": "high"},
+    )
+
+    class _FakeAgent:
+        def __init__(self, *args, **kwargs):
+            captured_settings.append(dict(kwargs.get("model_settings") or {}))
+
+        async def run(self, prompt, **kwargs):
+            run_calls.append({"prompt": prompt, "has_history": "message_history" in kwargs})
+            if len(run_calls) == 1:
+                return SimpleNamespace(
+                    output=(
+                        "【参考职责】\n@图片1绑定林默。\n"
+                        "【全局光影画风】\n真人电影。\n"
+                        "【注意事项】\n无字幕。\n"
+                        "分镜1（0秒到4秒）：林默看屏幕。\n"
+                        "分镜2（4秒到7秒）：男人走近。\n"
+                        "分镜3（7秒到17秒）：8秒—11秒，他开口，说话时嘴角带着轻笑后的余意，语"
+                    ),
+                    response=SimpleNamespace(finish_reason="length"),
+                    all_messages=lambda: ["m1"],
+                )
+            return SimpleNamespace(
+                output=(
+                    "气里透着试探；11秒—17秒，男人指尖敲击桌面。\n"
+                    "分镜4（17秒到23秒）：林默抬眼对视，17秒—23秒两人僵持落定。"
+                ),
+                response=SimpleNamespace(finish_reason="stop"),
+                all_messages=lambda: ["m1", "m2"],
+            )
+
+    import pydantic_ai
+
+    monkeypatch.setattr(pydantic_ai, "Agent", _FakeAgent)
+
+    rendered = await s9_mod.run_s9_stage2_segment_prompt(
+        segment=seg,
+        slots=slots,
+        style_context=style,
+    )
+    assert captured_model_envs == ["SEEDANCE2_PROMPT_COMPOSER_MODEL"]
+    assert captured_settings[0]["max_tokens"] == 8192
+    assert len(run_calls) == 2
+    assert run_calls[1]["has_history"] is True
+    assert "余意，语气里透着试探" in rendered
+    assert "分镜4（17秒到23秒）" in rendered
+
+
+@pytest.mark.asyncio
+async def test_panel_service_s9_ai_optimize_forwards_current_prompt_and_template_keys(
+    tmp_path, monkeypatch
+):
+    from novelvideo import project_config as pc
+    from novelvideo import s9_storyboard as s9_mod
+    from novelvideo.models import NovelEpisode
+    from novelvideo.seedance2_i2v.panel_service import generate_seedance2_prompt_for_panel
+
+    monkeypatch.setattr(pc, "OUTPUT_DIR", tmp_path / "state")
+    project_dir = tmp_path / "output" / "alice" / "opt_s9"
+    state_dir = tmp_path / "state" / "alice" / "opt_s9"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    captured_stage2: dict[str, object] = {}
+
+    class _FakeStore:
+        def get_episode(self, ep_num: int):
+            return NovelEpisode(number=ep_num, title="ep1", beat_source_text="原稿正文")
+
+        async def update_beat_asset(self, **kwargs):
+            return True
+
+    async def _fake_stage2(**kwargs):
+        captured_stage2.update(kwargs)
+        return "【参考职责】\n@图片1\n【全局光影画风】\n实拍。\n【注意事项】\n无字幕。\n分镜1（0秒到8秒）：完成。"
+
+    monkeypatch.setattr(s9_mod, "run_s9_stage2_segment_prompt", _fake_stage2)
+
+    beat = {
+        "beat_number": 1,
+        "narration_segment": "对白",
+        "visual_description": "便利店",
+        "s9_subshots": [
+            {"shot_number": 1, "planned_duration_seconds": 8.0, "start_seconds": 0.0, "end_seconds": 8.0, "content": "镜头1"}
+        ],
+        "s9_segment_meta": {
+            "segment_number": 1,
+            "title": "段落1",
+            "planned_duration_seconds": 8,
+            "story_beat": "核心动作",
+        },
+    }
+
+    await generate_seedance2_prompt_for_panel(
+        store=_FakeStore(),
+        state_dir=state_dir,
+        episode=1,
+        beat=beat,
+        project_dir=project_dir,
+        manual_prompt_reference="当前残缺提示词，语",
+        prompt_guidance="增强紧张感",
+        prompt_guidance_template_keys=["camera", "lighting"],
+    )
+
+    assert captured_stage2.get("current_prompt") == "当前残缺提示词，语"
+    guidance = str(captured_stage2.get("user_guidance") or "")
+    assert "增强紧张感" in guidance
+    assert "镜头：" in guidance
+    assert "光影：" in guidance

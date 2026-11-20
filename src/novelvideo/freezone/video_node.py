@@ -861,6 +861,7 @@ async def run_trusted_freezone_video_gen(
         "episode": episode,
         "beat_num": beat_num,
         "scope": scope,
+        "project_output_dir": str(project_dir),
     }
     if audio_setting:
         generate_kwargs["audio_setting"] = audio_setting

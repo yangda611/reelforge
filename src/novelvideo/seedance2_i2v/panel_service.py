@@ -40,6 +40,7 @@ from novelvideo.seedance2_i2v.models import (
     parse_seedance2_config,
 )
 from novelvideo.seedance2_i2v.prompt import (
+    _localized_prompt_guidance,
     build_seedance2_prompt_draft,
     compute_seedance2_prompt_inputs_hash,
     detect_seedance2_prompt_language,
@@ -375,6 +376,12 @@ async def generate_seedance2_prompt_for_panel(
         language=output_language,
     )
 
+    reference_prompt = str(
+        manual_prompt_reference
+        if manual_prompt_reference is not None
+        else (config.final_prompt or initial_prompt or "")
+    ).strip()
+
     from novelvideo.s9_storyboard import (
         S9AssetManifestItem,
         S9SegmentAssetSlot,
@@ -485,6 +492,11 @@ async def generate_seedance2_prompt_for_panel(
                 ).strip()
         except Exception:
             episode_source_text = ""
+        effective_s9_guidance = _localized_prompt_guidance(
+            config.prompt_guidance,
+            config.prompt_guidance_template_keys,
+            output_language,
+        )
         rendered_s9 = await run_s9_stage2_segment_prompt(
             segment=segment_plan,
             slots=stage2_slots,
@@ -493,8 +505,9 @@ async def generate_seedance2_prompt_for_panel(
             next_segment=_summary_seg(next_beat),
             tail_anchor=bool(config.s9_tail_anchor),
             include_first_frame=bool(config.s9_include_first_frame and any(s.asset_kind == "first_frame" for s in stage2_slots)),
-            user_guidance=config.prompt_guidance,
+            user_guidance=effective_s9_guidance,
             source_text=episode_source_text,
+            current_prompt=reference_prompt,
         )
         config.final_prompt = mark_seedance2_prompt_references_for_editor(rendered_s9)
         if not config.duration_user_set:
@@ -539,11 +552,6 @@ async def generate_seedance2_prompt_for_panel(
         )
         return saved_json
 
-    reference_prompt = str(
-        manual_prompt_reference
-        if manual_prompt_reference is not None
-        else (config.final_prompt or initial_prompt or "")
-    ).strip()
     generate_kwargs: dict[str, Any] = {
         "mode": config.mode,
         "beat": prompt_beat,

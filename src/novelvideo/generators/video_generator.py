@@ -54,6 +54,7 @@ from novelvideo.ports.video_delivery import (
     VideoDeliveryReceipt,
 )
 from novelvideo.video_request_usage import (
+    find_resumable_video_request,
     record_video_request,
     update_video_request_status,
 )
@@ -77,6 +78,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 NEWAPI_VIDEO_HTTP_TIMEOUT_SECONDS = 1800.0
+NEWAPI_VIDEO_POLL_HTTP_TIMEOUT_SECONDS = 60.0
+NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS = 60
+NEWAPI_POLL_ERROR_MAX_BACKOFF_SECONDS = 30.0
 NEWAPI_MEDIA_INPUT_MIN_TTL_SECONDS = 2 * 60 * 60
 _POST_ACCEPT_AUTHZ_MAX_RETRIES = 5
 _POST_ACCEPT_AUTHZ_RETRY_BASE_SECONDS = 2.0
@@ -2081,6 +2085,73 @@ class NewApiVideoGenerator(VideoGeneratorBase):
     def _client_timeout() -> aiohttp.ClientTimeout:
         return aiohttp.ClientTimeout(total=NEWAPI_VIDEO_HTTP_TIMEOUT_SECONDS)
 
+    @staticmethod
+    def _poll_timeout() -> aiohttp.ClientTimeout:
+        return aiohttp.ClientTimeout(
+            total=NEWAPI_VIDEO_POLL_HTTP_TIMEOUT_SECONDS,
+            sock_connect=20.0,
+            sock_read=45.0,
+        )
+
+    @staticmethod
+    def _is_retryable_poll_error(exc: BaseException) -> bool:
+        if isinstance(
+            exc,
+            (
+                TaskCancelled,
+                TaskTimedOut,
+                asyncio.CancelledError,
+                RunningTaskAuthorityIndeterminate,
+                VideoEgressError,
+                AuthzError,
+            ),
+        ):
+            return False
+        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, OSError)):
+            return True
+        if isinstance(exc, NewApiVideoError):
+            return exc.status_code in {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+        if isinstance(exc, RuntimeError) and "returned invalid JSON" in str(exc):
+            return True
+        return False
+
+    @staticmethod
+    def _is_missing_task_poll_error(exc: BaseException) -> bool:
+        return isinstance(exc, NewApiVideoError) and exc.status_code == 404
+
+    @staticmethod
+    def _is_fatal_client_rejection(exc: BaseException) -> bool:
+        return isinstance(exc, NewApiVideoError) and exc.status_code in {400, 401, 403, 404, 422}
+
+    @staticmethod
+    def _task_outcome_from_response(
+        polled: dict, *, lingke_target: bool
+    ) -> tuple[dict, str, str, str]:
+        task = NewApiVideoGenerator._task_response_data(polled)
+        lingke_detail = ""
+        if lingke_target:
+            outcome, lingke_detail = lingke_task_outcome(task)
+            status = (
+                lingke_detail
+                or str(task.get("state") or task.get("status") or "").lower()
+            )
+        else:
+            status = str(task.get("status") or "").lower()
+            if status in {"completed", "succeeded", "success", "done"}:
+                outcome = "completed"
+            elif status in {
+                "failure",
+                "failed",
+                "error",
+                "canceled",
+                "cancelled",
+                "expired",
+            }:
+                outcome = "failed"
+            else:
+                outcome = "pending"
+        return task, outcome, status, lingke_detail
+
     async def _post_json(
         self,
         url: str,
@@ -2118,7 +2189,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         *,
         headers: dict[str, str] | None = None,
     ) -> dict:
-        async with aiohttp.ClientSession(timeout=self._client_timeout()) as session:
+        async with aiohttp.ClientSession(timeout=self._poll_timeout()) as session:
             async with session.get(url, headers=headers or self.headers) as resp:
                 text = await resp.text()
                 if resp.status < 200 or resp.status >= 300:
@@ -2590,7 +2661,10 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             metadata["reference_videos"] = [legacy_video.strip(), *existing]
 
         if promote_reference_media:
-            reference_images = metadata.pop("reference_images", None)
+            # Keep reference_images/reference_audios in metadata for native
+            # adapters (e.g. Seedance / LingJing) while also promoting them to
+            # top-level fields for generic OpenAI/NewAPI video channels.
+            reference_images = metadata.get("reference_images")
             if isinstance(reference_images, list):
                 image_values = [
                     str(value).strip()
@@ -2598,8 +2672,9 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     if isinstance(value, str) and str(value).strip()
                 ]
                 if image_values:
+                    metadata["reference_images"] = image_values
                     payload.setdefault("images", image_values)
-            reference_audios = metadata.pop("reference_audios", None)
+            reference_audios = metadata.get("reference_audios")
             if isinstance(reference_audios, list):
                 audio_values = [
                     str(value).strip()
@@ -2607,6 +2682,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     if isinstance(value, str) and str(value).strip()
                 ]
                 if audio_values:
+                    metadata["reference_audios"] = audio_values
                     payload["audios"] = audio_values
 
         if first_frame:
@@ -2916,6 +2992,56 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             handle_kind=HandleKind.PROVIDER_JOB,
         )
 
+    @classmethod
+    def _compute_resume_digest(
+        cls,
+        *,
+        base_url: str,
+        request_model: str,
+        prompt: str,
+        duration: float,
+        resolution: str,
+        ratio: str,
+        generate_audio: bool,
+        requested_mode: str,
+        image_path: str,
+        last_frame_path: object,
+        seedance2_config: dict[str, Any],
+        model_params: dict[str, Any],
+        request_schema: dict[str, Any],
+        processing_metadata: object,
+        kwargs: dict[str, Any],
+    ) -> str:
+        references = [
+            {
+                "type": str(getattr(ref, "type", "") or "image"),
+                "media": cls._media_request_identity(getattr(ref, "path", "")),
+                "role": str(getattr(ref, "role", "") or ""),
+            }
+            for ref in (kwargs.get("references") or [])
+        ]
+        digest_input = {
+            "base_url": str(base_url or "").rstrip("/"),
+            "model": request_model,
+            "prompt": prompt,
+            "duration": duration,
+            "resolution": str(resolution or "").strip().lower(),
+            "ratio": ratio,
+            "generate_audio": bool(generate_audio),
+            "gen_mode": requested_mode,
+            "human_review": bool(kwargs.get("human_review", False)),
+            "audio_setting": str(kwargs.get("audio_setting") or ""),
+            "image": cls._media_request_identity(image_path),
+            "last_frame": cls._media_request_identity(last_frame_path),
+            "references": references,
+            "seedance2_config": seedance2_config,
+            "model_params": model_params,
+            "request_schema": request_schema,
+            "processing_metadata": processing_metadata,
+        }
+        encoded = json.dumps(digest_input, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     @staticmethod
     def _media_request_identity(value: object) -> dict[str, object]:
         text = str(value or "").strip()
@@ -3075,7 +3201,13 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         tracking_task_type = kwargs.get("task_type", "")
         tracking_cost_estimate = kwargs.get("cost_estimate")
 
-        def record_accepted(request_id: str):
+        def record_accepted(
+            request_id: str,
+            *,
+            request_digest: str | None = None,
+            poll_url: str | None = None,
+            resumable: bool = False,
+        ):
             if not project_output_dir or not request_id:
                 return
             try:
@@ -3089,6 +3221,9 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     task_type=tracking_task_type,
                     duration_seconds=float(duration),
                     cost_estimate=tracking_cost_estimate,
+                    request_digest=request_digest,
+                    poll_url=poll_url,
+                    resumable=resumable,
                 )
             except Exception as exc:
                 log(f"记账失败(accepted): {exc}")
@@ -3097,6 +3232,8 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             request_id: str,
             status: str,
             error_message: str | None = None,
+            *,
+            resumable: bool | None = None,
         ):
             if not project_output_dir or not request_id:
                 return
@@ -3106,6 +3243,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     request_id=request_id,
                     status=status,
                     error_message=error_message,
+                    resumable=resumable,
                 )
             except Exception as exc:
                 log(f"记账失败({status}): {exc}")
@@ -3247,477 +3385,645 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             )
             return VideoGenResult(status=VideoGenStatus.FAILED, error=safe_error)
 
-        if requested_mode and not is_seedance2_model:
-            try:
-                await self._apply_huimeng_protocol_media_inputs(
-                    metadata,
-                    mode=requested_mode,
-                    image_path=image_path,
-                    last_frame_path=last_frame_path,
-                    references=kwargs.get("references"),
-                    log=log,
-                )
-            except (ValueError, FileNotFoundError) as exc:
-                return await fail_before_submit(str(exc))
-            seedance2_config = _seedance2_config_mapping(kwargs.get("seedance2_config"))
-            scene_optimize = str(seedance2_config.get("scene_optimize") or "").strip()
-            if scene_optimize:
-                metadata["scene_optimize"] = scene_optimize
-            if kwargs.get("human_review"):
-                metadata["human_review"] = True
-            audio_setting = str(kwargs.get("audio_setting") or "").strip()
-            if audio_setting:
-                metadata["audio_setting"] = audio_setting
-            metadata["return_last_frame"] = bool(
-                seedance2_config.get("return_last_frame", False)
-            )
-        elif self._is_happyhorse_model():
-            if len(prompt) > 2500:
-                prompt = prompt[:2500]
-                payload["prompt"] = prompt
-                log("提示词已截断到 HappyHorse 1.0 上限 2500 字符")
+        lingke_target = is_lingke_target(
+            "" if organization_request else self.direct_provider,
+            request_base_url,
+        )
+        resumed_existing_task = False
+        initial_polled: dict | None = None
+        poll_url = ""
+        resume_digest = ""
+        raw_seedance2_config = _seedance2_config_mapping(kwargs.get("seedance2_config"))
 
-            duration_int = int(math.ceil(duration))
-            metadata.pop("generate_audio", None)
-            metadata["ratio"] = self._happyhorse_ratio(ratio)
-            metadata["resolution"] = self._happyhorse_resolution(self.resolution)
-            payload["duration"] = duration_int
-            payload["seconds"] = str(duration_int)
-
-            first_frame_path = ""
-            reference_image_paths: list[str] = []
-            video_reference_paths: list[str] = []
-            for ref in kwargs.get("references") or []:
-                ref_type = str(getattr(ref, "type", "") or "image").strip().lower()
-                path = str(getattr(ref, "path", "") or "").strip()
-                if not path:
-                    continue
-                if ref_type == "video":
-                    video_reference_paths.append(path)
-                    continue
-                if ref_type != "image":
-                    continue
-                role = str(getattr(ref, "role", "") or "").strip()
-                if "首帧" in role and not first_frame_path:
-                    first_frame_path = path
-                else:
-                    reference_image_paths.append(path)
-
-            # image_path 是 run_freezone_video_gen 无条件传进来的「首张图」。仅当它
-            # 还没作为参考图存在时，才把它被动提升为首帧——否则参考模式(所有图都在
-            # reference_image_paths 里)会把首张图重复算一次（首帧位 + 参考位）。
-            if (
-                not first_frame_path
-                and image_path
-                and image_path not in reference_image_paths
-            ):
-                first_frame_path = image_path
-
-            # HappyHorse 没有尾帧能力，且把尾帧混进 reference_images 会误触发 r2v，
-            # 与首帧的 image_url 冲突（上游 INVALID_PARAMS）。这里直接忽略尾帧。
-            if last_frame_path:
-                log("HappyHorse 不支持尾帧，已忽略尾帧输入")
-
-            # HappyHorse 的 image_url(i2v) 与 reference_images(r2v/视频编辑) 互斥，
-            # 不能出现在同一次请求里。策略：参考优先——只要带了参考图或参考视频，就走
-            # r2v/视频编辑。此时首帧不能再走 image_url，但它的画面仍是有效参考，
-            # 应降级为 reference_images 的首位（保持身份优先），而不是整张丢弃，
-            # 否则「2 张图」会只发出去 1 张。纯首帧（无其它参考）才走 i2v。
-            if (video_reference_paths or reference_image_paths) and first_frame_path:
-                log("HappyHorse 参考/视频编辑模式不支持首帧，已将首帧降级为参考图")
-                reference_image_paths.insert(0, first_frame_path)
-                first_frame_path = ""
-
-            # 文档：ratio 仅 t2v/r2v 生效。首帧(i2v, image_url)与视频编辑(video_url)
-            # 的画幅由输入媒体决定，不接受 ratio，误带会触发上游 INVALID_PARAMS。
-            if first_frame_path or video_reference_paths:
-                metadata.pop("ratio", None)
-
-            try:
-                if video_reference_paths:
-                    video_url = await self._relay_media_input(
-                        video_reference_paths[0],
-                        default_ext="mp4",
-                        resource_type="video",
-                    )
-                    if not video_reference_paths[0].startswith(("http://", "https://")):
-                        log("视频参考已上传到媒体中转")
-                    metadata["video_url"] = video_url
-                    metadata["audio_setting"] = self._happyhorse_audio_setting(
-                        kwargs.get("audio_setting")
-                    )
-
-                relayed_references: list[str] = []
-                for path in reference_image_paths[: 5 if video_reference_paths else 9]:
-                    url = await self._relay_frame_input(path)
-                    if not path.startswith(("http://", "https://")):
-                        log("图片参考已上传到媒体中转")
-                    relayed_references.append(url)
-
-                if first_frame_path:
-                    first_frame_url = await self._relay_frame_input(first_frame_path)
-                    if not first_frame_path.startswith(("http://", "https://")):
-                        log("首帧已上传到媒体中转")
-                    metadata["image_url"] = first_frame_url
-                    payload["images"] = [first_frame_url]
-
-                if relayed_references:
-                    metadata["reference_images"] = relayed_references
-            except Exception as exc:
-                return await fail_before_submit(f"media relay upload failed: {exc}")
-
-        elif self._is_grok_video_channel_model():
-            metadata.pop("generate_audio", None)
-            metadata.pop("watermark", None)
-            duration_int = int(math.ceil(duration))
-            payload["duration"] = duration_int
-            payload["seconds"] = str(duration_int)
-            first_frame_path = image_path
-            reference_image_paths: list[str] = []
-            for ref in kwargs.get("references") or []:
-                ref_type = str(getattr(ref, "type", "") or "image").strip().lower()
-                path = str(getattr(ref, "path", "") or "").strip()
-                if not path or ref_type != "image":
-                    continue
-                role = str(getattr(ref, "role", "") or "").strip()
-                if not first_frame_path and "首帧" in role:
-                    first_frame_path = path
-                    continue
-                if path != first_frame_path:
-                    reference_image_paths.append(path)
-
-            try:
-                if first_frame_path:
-                    first_frame_url = await self._relay_frame_input(first_frame_path)
-                    if not first_frame_path.startswith(("http://", "https://")):
-                        log("首帧已上传到媒体中转")
-                    metadata["image_url"] = first_frame_url
-                    payload["images"] = [first_frame_url]
-
-                relayed_references: list[str] = []
-                for path in reference_image_paths[:7]:
-                    url = await self._relay_frame_input(path)
-                    if not path.startswith(("http://", "https://")):
-                        log("参考图片已上传到媒体中转")
-                    relayed_references.append(url)
-                if relayed_references:
-                    metadata["reference_images"] = relayed_references
-            except Exception as exc:
-                return await fail_before_submit(f"media relay upload failed: {exc}")
-
-        elif is_seedance2_model:
-            try:
-                first_frame = (
-                    await self._relay_frame_input(image_path) if image_path else ""
-                )
-                if image_path and not image_path.startswith(("http://", "https://")):
-                    log("首帧已上传到媒体中转")
-                last_frame = (
-                    await self._relay_frame_input(str(last_frame_path))
-                    if last_frame_path
-                    else ""
-                )
-                if last_frame_path and not str(last_frame_path).startswith(
-                    ("http://", "https://")
-                ):
-                    log("尾帧已上传到媒体中转")
-                reference_params = await self._relay_seedance2_references(
-                    kwargs.get("references") or [],
-                    log=log,
-                )
-            except Exception as exc:
-                return await fail_before_submit(f"media relay upload failed: {exc}")
-
-            from novelvideo.seedance2_i2v.models import Seedance2I2VMode
-            from novelvideo.seedance2_i2v.request import build_seedance2_huimeng_params
-            from novelvideo.video_duration import seedance2_media_limits_for_backend
-
-            backend_limits = seedance2_media_limits_for_backend(f"newapi_{self.model}")
-            has_references = any(reference_params.values())
-            declared_reference_paths = (
-                list(seedance2_config.get("reference_image_paths") or [])
-                + list(seedance2_config.get("reference_audio_paths") or [])
-            )
-            if declared_reference_paths and not has_references:
-                return await fail_before_submit(
-                    "Seedance 2.0 references were declared but none could be relayed"
-                )
-            if last_frame:
-                mode = Seedance2I2VMode.FIRST_LAST_FRAME
-            elif has_references:
-                mode = Seedance2I2VMode.MULTIMODAL_REFERENCE
-            elif first_frame:
-                mode = Seedance2I2VMode.FIRST_FRAME
-            else:
-                mode = Seedance2I2VMode.TEXT_TO_VIDEO
-
-            config_resolution = str(
-                seedance2_config.get("resolution") or self.resolution or "720p"
-            ).strip()
-            config_ratio = str(seedance2_config.get("ratio") or ratio or "9:16").strip()
-            seedance2_config.update(
-                {
-                    "mode": mode.value,
-                    "final_prompt": prompt,
-                    "duration": duration,
-                    "resolution": config_resolution,
-                    "ratio": config_ratio,
-                }
-            )
-            if "generate_audio" not in seedance2_config:
-                seedance2_config["generate_audio"] = bool(self.generate_audio)
-                seedance2_config["generate_audio_user_set"] = True
-            elif "generate_audio_user_set" not in seedance2_config:
-                seedance2_config["generate_audio_user_set"] = True
-            if "return_last_frame" not in seedance2_config:
-                seedance2_config["return_last_frame"] = False
-            if "human_review" not in seedance2_config:
-                seedance2_config["human_review"] = bool(
-                    kwargs.get("human_review", False)
-                )
-                seedance2_config["human_review_user_set"] = True
-            elif "human_review_user_set" not in seedance2_config:
-                seedance2_config["human_review_user_set"] = True
-
-            try:
-                seedance2_params = build_seedance2_huimeng_params(
-                    seedance2_config,
-                    first_frame=first_frame,
-                    last_frame=last_frame,
-                    reference_images=reference_params.get("reference_images"),
-                    reference_videos=reference_params.get("reference_videos"),
-                    reference_audios=reference_params.get("reference_audios"),
-                    max_images=int(backend_limits["max_images"]),
-                    max_videos=int(backend_limits["max_videos"]),
-                    max_audios=int(backend_limits["max_audios"]),
-                )
-            except ValueError as exc:
-                return await fail_before_submit(str(exc))
-
-            payload["prompt"] = seedance2_params.pop("prompt")
-            payload["seconds"] = str(seedance2_params.pop("duration"))
-            metadata.update(seedance2_params)
-        else:
-            try:
-                await self._apply_huimeng_protocol_media_inputs(
-                    metadata,
-                    mode=(
-                        "first_last_frame"
-                        if last_frame_path
-                        else (
-                            "all_reference"
-                            if kwargs.get("references")
-                            else (
-                                "first_frame"
-                                if image_path
-                                else "text_to_video"
-                            )
-                        )
-                    ),
-                    image_path=image_path,
-                    last_frame_path=last_frame_path,
-                    references=kwargs.get("references"),
-                    log=log,
-                )
-            except Exception as exc:
-                return await fail_before_submit(f"media relay upload failed: {exc}")
         try:
-            model_label = self._model_label(self.model)
-            request_resolution = str(
-                metadata.get("resolution") or self.resolution or ""
-            ).strip()
-            log(
-                f"正在提交 DramaClawAPI 视频任务 ({model_label}, {duration}s, {request_resolution})..."
-            )
-            progress(0.1)
-            from novelvideo.media_model_request_schema import (
-                apply_media_request_schema,
-                enforce_newapi_media_geometry_contract,
-                enforce_newapi_video_duration_contract,
-                enforce_newapi_video_mode_contract,
-            )
-
-            self._canonicalize_video_payload(
-                payload,
-                metadata,
-                promote_reference_media=not (
-                    is_seedance2_model
-                    or self.model.strip().lower().startswith("happyhorse-")
-                    or self._is_grok_video_channel_model()
-                ),
-            )
-            if is_seedance2_model:
-                # A Seedance model alias can route through a generic OpenAI
-                # channel, which reads images rather than the native metadata.
-                # Keep both representations: native adapters still need the
-                # ordered reference_images list for multimodal references.
-                reference_images = metadata.get("reference_images")
-                if isinstance(reference_images, list) and reference_images:
-                    payload["images"] = list(reference_images)
-            payload = apply_media_request_schema(
-                payload, self.request_schema, self.model_params
-            )
-            payload = enforce_newapi_video_mode_contract(
-                payload,
-                mode=requested_mode,
-                fixed_duration=duration,
-            )
-            payload = enforce_newapi_media_geometry_contract(
-                payload, media_type="video"
-            )
-            payload = enforce_newapi_video_duration_contract(payload)
-            lingke_target = is_lingke_target(
-                "" if organization_request else self.direct_provider,
-                request_base_url,
-            )
-            if lingke_target:
-                payload = build_lingke_video_payload(
-                    payload,
+            if not organization_request and project_output_dir:
+                resume_digest = self._compute_resume_digest(
+                    base_url=request_base_url,
+                    request_model=str(getattr(self, "request_model", self.model)),
+                    prompt=prompt,
+                    duration=duration,
+                    resolution=self.resolution,
+                    ratio=ratio,
+                    generate_audio=bool(self.generate_audio),
+                    requested_mode=requested_mode,
+                    image_path=image_path,
+                    last_frame_path=last_frame_path,
+                    seedance2_config=raw_seedance2_config,
+                    model_params=self.model_params,
                     request_schema=self.request_schema,
-                    mode=requested_mode,
+                    processing_metadata=processing_metadata,
+                    kwargs=kwargs,
                 )
-            reservation_id = await _reserve_video_model_call(
-                self.model,
-                source="newapi_video_generation",
-                resolution=request_resolution,
-                duration_seconds=duration,
-            )
-            await update_current_model_call_log(
-                request_payload=payload,
-            )
-            submit_attempted = True
-            submit_url = (
-                f"{request_base_url}{lingke_api_path(request_base_url, 'media/generate')}"
-                if lingke_target
-                else f"{request_base_url}/video/generations"
-            )
-            if organization_request:
-                submitted = await self._post_json(
-                    submit_url,
-                    payload,
-                    headers=request_headers,
-                )
-            else:
-                submitted = await self._post_json(submit_url, payload)
-            await update_current_model_call_log(
-                response_payload=submitted,
-            )
-            lingke_submit_error = (
-                extract_lingke_submit_error(submitted) if lingke_target else ""
-            )
-            task_id = "" if lingke_submit_error else self._task_id_from_submit_response(submitted)
-            provider_request_id = str(submitted.get("_newapi_request_id") or "").strip()
-            if not task_id:
-                if organization_request:
-                    await self._mark_operation_unknown(
-                        operation_port,
-                        operation_claim,
-                        expected_version=operation_version,
-                    )
-                    operation_terminal = True
-                await _refund_video_model_call(
-                    reservation_id,
-                    source="newapi_video_generation",
-                    error="missing_task_id",
-                    provider_request_id=provider_request_id,
-                )
-                return VideoGenResult(
-                    status=VideoGenStatus.FAILED,
-                    error=(
-                        "EGRESS_OPERATION_UNKNOWN"
-                        if organization_request
-                        else (
-                            lingke_submit_error
-                            or f"No task_id in DramaClawAPI response: {submitted}"
+                if not kwargs.get("force_new"):
+                    try:
+                        resumable = find_resumable_video_request(
+                            project_output_dir=project_output_dir,
+                            request_digest=resume_digest,
+                            provider="newapi",
+                            model_name=self.model,
                         )
+                    except Exception as exc:  # noqa: BLE001
+                        log(f"查询可续连视频任务失败，将按新任务提交: {exc}")
+                        resumable = None
+                    if resumable and resumable.get("request_id"):
+                        candidate_task_id = str(resumable["request_id"]).strip()
+                        candidate_poll_url = str(resumable.get("poll_url") or "").strip() or (
+                            f"{request_base_url}"
+                            f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(candidate_task_id, safe=str())}')}"
+                            if lingke_target
+                            else f"{request_base_url}/video/generations/{candidate_task_id}"
+                        )
+                        try:
+                            probed = await self._get_json(candidate_poll_url)
+                        except Exception as probe_exc:
+                            if self._is_retryable_poll_error(probe_exc):
+                                resumed_existing_task = True
+                                task_id = candidate_task_id
+                                poll_url = candidate_poll_url
+                                log(
+                                    f"检测到未完成的 DramaClawAPI 视频任务 {task_id}（当前网络波动），"
+                                    "自动续连并重试查询（避免重复扣费）..."
+                                )
+                            elif self._is_missing_task_poll_error(probe_exc):
+                                update_request_status(
+                                    candidate_task_id,
+                                    "failed",
+                                    f"resumed task missing: {probe_exc}",
+                                    resumable=False,
+                                )
+                                log(
+                                    f"原视频任务 {candidate_task_id} 在中转站已不存在，将重新提交新任务..."
+                                )
+                            else:
+                                raise
+                        else:
+                            _probe_task, probe_outcome, _probe_status, _probe_detail = (
+                                self._task_outcome_from_response(
+                                    probed, lingke_target=lingke_target
+                                )
+                            )
+                            if probe_outcome == "failed":
+                                update_request_status(
+                                    candidate_task_id,
+                                    "failed",
+                                    "resumed task failed on gateway",
+                                    resumable=False,
+                                )
+                                log(
+                                    f"原视频任务 {candidate_task_id} 在中转站已失败，将重新提交新任务..."
+                                )
+                            else:
+                                resumed_existing_task = True
+                                task_id = candidate_task_id
+                                poll_url = candidate_poll_url
+                                initial_polled = probed
+                                log(
+                                    f"检测到中转站视频任务 {task_id} 仍在处理/已完成，"
+                                    "自动续连（跳过重复上传与扣费）..."
+                                )
+
+            if resumed_existing_task:
+                metadata["return_last_frame"] = bool(
+                    raw_seedance2_config.get("return_last_frame", False)
+                )
+                progress(0.2)
+            else:
+                if requested_mode and not is_seedance2_model:
+                    try:
+                        await self._apply_huimeng_protocol_media_inputs(
+                            metadata,
+                            mode=requested_mode,
+                            image_path=image_path,
+                            last_frame_path=last_frame_path,
+                            references=kwargs.get("references"),
+                            log=log,
+                        )
+                    except (ValueError, FileNotFoundError) as exc:
+                        return await fail_before_submit(str(exc))
+                    seedance2_config = _seedance2_config_mapping(
+                        kwargs.get("seedance2_config")
+                    )
+                    scene_optimize = str(
+                        seedance2_config.get("scene_optimize") or ""
+                    ).strip()
+                    if scene_optimize:
+                        metadata["scene_optimize"] = scene_optimize
+                    if kwargs.get("human_review"):
+                        metadata["human_review"] = True
+                    audio_setting = str(kwargs.get("audio_setting") or "").strip()
+                    if audio_setting:
+                        metadata["audio_setting"] = audio_setting
+                    metadata["return_last_frame"] = bool(
+                        seedance2_config.get("return_last_frame", False)
+                    )
+                elif self._is_happyhorse_model():
+                    if len(prompt) > 2500:
+                        prompt = prompt[:2500]
+                        payload["prompt"] = prompt
+                        log("提示词已截断到 HappyHorse 1.0 上限 2500 字符")
+
+                    duration_int = int(math.ceil(duration))
+                    metadata.pop("generate_audio", None)
+                    metadata["ratio"] = self._happyhorse_ratio(ratio)
+                    metadata["resolution"] = self._happyhorse_resolution(
+                        self.resolution
+                    )
+                    payload["duration"] = duration_int
+                    payload["seconds"] = str(duration_int)
+
+                    first_frame_path = ""
+                    reference_image_paths: list[str] = []
+                    video_reference_paths: list[str] = []
+                    for ref in kwargs.get("references") or []:
+                        ref_type = (
+                            str(getattr(ref, "type", "") or "image").strip().lower()
+                        )
+                        path = str(getattr(ref, "path", "") or "").strip()
+                        if not path:
+                            continue
+                        if ref_type == "video":
+                            video_reference_paths.append(path)
+                            continue
+                        if ref_type != "image":
+                            continue
+                        role = str(getattr(ref, "role", "") or "").strip()
+                        if "首帧" in role and not first_frame_path:
+                            first_frame_path = path
+                        else:
+                            reference_image_paths.append(path)
+
+                    # image_path 是 run_freezone_video_gen 无条件传进来的「首张图」。仅当它
+                    # 还没作为参考图存在时，才把它被动提升为首帧——否则参考模式(所有图都在
+                    # reference_image_paths 里)会把首张图重复算一次（首帧位 + 参考位）。
+                    if (
+                        not first_frame_path
+                        and image_path
+                        and image_path not in reference_image_paths
+                    ):
+                        first_frame_path = image_path
+
+                    # HappyHorse 没有尾帧能力，且把尾帧混进 reference_images 会误触发 r2v，
+                    # 与首帧的 image_url 冲突（上游 INVALID_PARAMS）。这里直接忽略尾帧。
+                    if last_frame_path:
+                        log("HappyHorse 不支持尾帧，已忽略尾帧输入")
+
+                    # HappyHorse 的 image_url(i2v) 与 reference_images(r2v/视频编辑) 互斥，
+                    # 不能出现在同一次请求里。策略：参考优先——只要带了参考图或参考视频，就走
+                    # r2v/视频编辑。此时首帧不能再走 image_url，但它的画面仍是有效参考，
+                    # 应降级为 reference_images 的首位（保持身份优先），而不是整张丢弃，
+                    # 否则「2 张图」会只发出去 1 张。纯首帧（无其它参考）才走 i2v。
+                    if (
+                        video_reference_paths or reference_image_paths
+                    ) and first_frame_path:
+                        log(
+                            "HappyHorse 参考/视频编辑模式不支持首帧，已将首帧降级为参考图"
+                        )
+                        reference_image_paths.insert(0, first_frame_path)
+                        first_frame_path = ""
+
+                    # 文档：ratio 仅 t2v/r2v 生效。首帧(i2v, image_url)与视频编辑(video_url)
+                    # 的画幅由输入媒体决定，不接受 ratio，误带会触发上游 INVALID_PARAMS。
+                    if first_frame_path or video_reference_paths:
+                        metadata.pop("ratio", None)
+
+                    try:
+                        if video_reference_paths:
+                            video_url = await self._relay_media_input(
+                                video_reference_paths[0],
+                                default_ext="mp4",
+                                resource_type="video",
+                            )
+                            if not video_reference_paths[0].startswith(
+                                ("http://", "https://")
+                            ):
+                                log("视频参考已上传到媒体中转")
+                            metadata["video_url"] = video_url
+                            metadata["audio_setting"] = self._happyhorse_audio_setting(
+                                kwargs.get("audio_setting")
+                            )
+
+                        relayed_references: list[str] = []
+                        for path in reference_image_paths[
+                            : 5 if video_reference_paths else 9
+                        ]:
+                            url = await self._relay_frame_input(path)
+                            if not path.startswith(("http://", "https://")):
+                                log("图片参考已上传到媒体中转")
+                            relayed_references.append(url)
+
+                        if first_frame_path:
+                            first_frame_url = await self._relay_frame_input(
+                                first_frame_path
+                            )
+                            if not first_frame_path.startswith(("http://", "https://")):
+                                log("首帧已上传到媒体中转")
+                            metadata["image_url"] = first_frame_url
+                            payload["images"] = [first_frame_url]
+
+                        if relayed_references:
+                            metadata["reference_images"] = relayed_references
+                    except Exception as exc:
+                        return await fail_before_submit(
+                            f"media relay upload failed: {exc}"
+                        )
+
+                elif self._is_grok_video_channel_model():
+                    metadata.pop("generate_audio", None)
+                    metadata.pop("watermark", None)
+                    duration_int = int(math.ceil(duration))
+                    payload["duration"] = duration_int
+                    payload["seconds"] = str(duration_int)
+                    first_frame_path = image_path
+                    reference_image_paths: list[str] = []
+                    for ref in kwargs.get("references") or []:
+                        ref_type = (
+                            str(getattr(ref, "type", "") or "image").strip().lower()
+                        )
+                        path = str(getattr(ref, "path", "") or "").strip()
+                        if not path or ref_type != "image":
+                            continue
+                        role = str(getattr(ref, "role", "") or "").strip()
+                        if not first_frame_path and "首帧" in role:
+                            first_frame_path = path
+                            continue
+                        if path != first_frame_path:
+                            reference_image_paths.append(path)
+
+                    try:
+                        if first_frame_path:
+                            first_frame_url = await self._relay_frame_input(
+                                first_frame_path
+                            )
+                            if not first_frame_path.startswith(("http://", "https://")):
+                                log("首帧已上传到媒体中转")
+                            metadata["image_url"] = first_frame_url
+                            payload["images"] = [first_frame_url]
+
+                        relayed_references: list[str] = []
+                        for path in reference_image_paths[:7]:
+                            url = await self._relay_frame_input(path)
+                            if not path.startswith(("http://", "https://")):
+                                log("参考图片已上传到媒体中转")
+                            relayed_references.append(url)
+                        if relayed_references:
+                            metadata["reference_images"] = relayed_references
+                    except Exception as exc:
+                        return await fail_before_submit(
+                            f"media relay upload failed: {exc}"
+                        )
+
+                elif is_seedance2_model:
+                    try:
+                        first_frame = (
+                            await self._relay_frame_input(image_path)
+                            if image_path
+                            else ""
+                        )
+                        if image_path and not image_path.startswith(
+                            ("http://", "https://")
+                        ):
+                            log("首帧已上传到媒体中转")
+                        last_frame = (
+                            await self._relay_frame_input(str(last_frame_path))
+                            if last_frame_path
+                            else ""
+                        )
+                        if last_frame_path and not str(last_frame_path).startswith(
+                            ("http://", "https://")
+                        ):
+                            log("尾帧已上传到媒体中转")
+                        reference_params = await self._relay_seedance2_references(
+                            kwargs.get("references") or [],
+                            log=log,
+                        )
+                    except Exception as exc:
+                        return await fail_before_submit(
+                            f"media relay upload failed: {exc}"
+                        )
+
+                    from novelvideo.seedance2_i2v.models import Seedance2I2VMode
+                    from novelvideo.seedance2_i2v.request import (
+                        build_seedance2_huimeng_params,
+                    )
+                    from novelvideo.video_duration import (
+                        seedance2_media_limits_for_backend,
+                    )
+
+                    backend_limits = seedance2_media_limits_for_backend(
+                        f"newapi_{self.model}"
+                    )
+                    has_references = any(reference_params.values())
+                    declared_reference_paths = list(
+                        seedance2_config.get("reference_image_paths") or []
+                    ) + list(seedance2_config.get("reference_audio_paths") or [])
+                    if declared_reference_paths and not has_references:
+                        return await fail_before_submit(
+                            "Seedance 2.0 references were declared but none could be relayed"
+                        )
+                    if last_frame:
+                        mode = Seedance2I2VMode.FIRST_LAST_FRAME
+                    elif has_references:
+                        mode = Seedance2I2VMode.MULTIMODAL_REFERENCE
+                    elif first_frame:
+                        mode = Seedance2I2VMode.FIRST_FRAME
+                    else:
+                        mode = Seedance2I2VMode.TEXT_TO_VIDEO
+
+                    config_resolution = str(
+                        seedance2_config.get("resolution") or self.resolution or "720p"
+                    ).strip()
+                    config_ratio = str(
+                        seedance2_config.get("ratio") or ratio or "9:16"
+                    ).strip()
+                    seedance2_config.update(
+                        {
+                            "mode": mode.value,
+                            "final_prompt": prompt,
+                            "duration": duration,
+                            "resolution": config_resolution,
+                            "ratio": config_ratio,
+                        }
+                    )
+                    if "generate_audio" not in seedance2_config:
+                        seedance2_config["generate_audio"] = bool(self.generate_audio)
+                        seedance2_config["generate_audio_user_set"] = True
+                    elif "generate_audio_user_set" not in seedance2_config:
+                        seedance2_config["generate_audio_user_set"] = True
+                    if "return_last_frame" not in seedance2_config:
+                        seedance2_config["return_last_frame"] = False
+                    if "human_review" not in seedance2_config:
+                        seedance2_config["human_review"] = bool(
+                            kwargs.get("human_review", False)
+                        )
+                        seedance2_config["human_review_user_set"] = True
+                    elif "human_review_user_set" not in seedance2_config:
+                        seedance2_config["human_review_user_set"] = True
+
+                    try:
+                        seedance2_params = build_seedance2_huimeng_params(
+                            seedance2_config,
+                            first_frame=first_frame,
+                            last_frame=last_frame,
+                            reference_images=reference_params.get("reference_images"),
+                            reference_videos=reference_params.get("reference_videos"),
+                            reference_audios=reference_params.get("reference_audios"),
+                            max_images=int(backend_limits["max_images"]),
+                            max_videos=int(backend_limits["max_videos"]),
+                            max_audios=int(backend_limits["max_audios"]),
+                        )
+                    except ValueError as exc:
+                        return await fail_before_submit(str(exc))
+
+                    payload["prompt"] = seedance2_params.pop("prompt")
+                    payload["seconds"] = str(seedance2_params.pop("duration"))
+                    metadata.update(seedance2_params)
+                else:
+                    try:
+                        await self._apply_huimeng_protocol_media_inputs(
+                            metadata,
+                            mode=(
+                                "first_last_frame"
+                                if last_frame_path
+                                else (
+                                    "all_reference"
+                                    if kwargs.get("references")
+                                    else (
+                                        "first_frame"
+                                        if image_path
+                                        else "text_to_video"
+                                    )
+                                )
+                            ),
+                            image_path=image_path,
+                            last_frame_path=last_frame_path,
+                            references=kwargs.get("references"),
+                            log=log,
+                        )
+                    except Exception as exc:
+                        return await fail_before_submit(
+                            f"media relay upload failed: {exc}"
+                        )
+
+                model_label = self._model_label(self.model)
+                request_resolution = str(
+                    metadata.get("resolution") or self.resolution or ""
+                ).strip()
+                log(
+                    f"正在提交 DramaClawAPI 视频任务 ({model_label}, {duration}s, {request_resolution})..."
+                )
+                progress(0.1)
+                from novelvideo.media_model_request_schema import (
+                    apply_media_request_schema,
+                    enforce_newapi_media_geometry_contract,
+                    enforce_newapi_video_duration_contract,
+                    enforce_newapi_video_mode_contract,
+                )
+
+                self._canonicalize_video_payload(
+                    payload,
+                    metadata,
+                    promote_reference_media=not (
+                        is_seedance2_model
+                        or self.model.strip().lower().startswith("happyhorse-")
+                        or self._is_grok_video_channel_model()
                     ),
                 )
-            if organization_request:
-                accepted = await operation_port.mark_accepted(
-                    operation_id=operation_claim.operation.operation_id,
-                    transition_token=operation_claim.transition_token,
-                    expected_version=operation_version,
-                    provider_job_id=task_id,
-                    requester_user_id=egress_context.requester_user_id,
-                    membership_id=egress_context.membership_id,
-                    authz_version=egress_context.authz_version,
+                if is_seedance2_model:
+                    # A Seedance model alias can route through a generic OpenAI
+                    # channel, which reads images/audios rather than native metadata.
+                    # Keep both representations: native adapters still need the
+                    # ordered reference_images/reference_audios lists.
+                    reference_images = metadata.get("reference_images")
+                    if isinstance(reference_images, list) and reference_images:
+                        payload["images"] = list(reference_images)
+                    reference_audios = metadata.get("reference_audios")
+                    if isinstance(reference_audios, list) and reference_audios:
+                        payload["audios"] = list(reference_audios)
+                payload = apply_media_request_schema(
+                    payload, self.request_schema, self.model_params
                 )
-                operation_version = accepted.version
-            try:
-                await get_usage_meter().mark_current_paid_execution_attempt(
-                    status="accepted",
-                    provider_request_id=provider_request_id,
-                    provider_task_id=task_id,
-                    metadata={"source": "newapi_video_generation"},
+                payload = enforce_newapi_video_mode_contract(
+                    payload,
+                    mode=requested_mode,
+                    fixed_duration=duration,
                 )
-            except Exception as exc:  # noqa: BLE001
-                log(f"计费调用证据暂存失败，将由对账核实: {exc}")
-            record_accepted(task_id)
-            log(f"任务已提交: {task_id}")
-            progress(0.2)
-
-            poll_url = (
-                f"{request_base_url}"
-                f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(task_id, safe=str())}')}"
-                if lingke_target
-                else f"{request_base_url}/video/generations/{task_id}"
-            )
-            for poll_count in range(max_polls):
+                payload = enforce_newapi_media_geometry_contract(
+                    payload, media_type="video"
+                )
+                payload = enforce_newapi_video_duration_contract(payload)
+                if lingke_target:
+                    payload = build_lingke_video_payload(
+                        payload,
+                        request_schema=self.request_schema,
+                        mode=requested_mode,
+                    )
+                reservation_id = await _reserve_video_model_call(
+                    self.model,
+                    source="newapi_video_generation",
+                    resolution=request_resolution,
+                    duration_seconds=duration,
+                )
+                await update_current_model_call_log(
+                    request_payload=payload,
+                )
+                submit_attempted = True
+                submit_url = (
+                    f"{request_base_url}{lingke_api_path(request_base_url, 'media/generate')}"
+                    if lingke_target
+                    else f"{request_base_url}/video/generations"
+                )
                 if organization_request:
-                    running_authority_error = None
-                    try:
-                        await self._revalidate_organization(egress_context)
-                    except AuthzError as exc:
-                        await self._mark_operation_unknown(
-                            operation_port,
-                            operation_claim,
-                            expected_version=operation_version,
-                        )
-                        operation_terminal = True
-                        running_authority_error = self._running_authority_error(exc)
-                    except Exception as exc:
-                        await self._mark_operation_unknown(
-                            operation_port,
-                            operation_claim,
-                            expected_version=operation_version,
-                        )
-                        operation_terminal = True
-                        return VideoGenResult(
-                            status=VideoGenStatus.FAILED,
-                            error=_safe_video_error_code(exc, "ORG_AUTHZ_STALE"),
-                            task_id=task_id,
-                        )
-                    if running_authority_error is not None:
-                        raise running_authority_error from None
-                    polled = await self._get_json(
-                        poll_url,
+                    submitted = await self._post_json(
+                        submit_url,
+                        payload,
                         headers=request_headers,
                     )
                 else:
-                    polled = await self._get_json(poll_url)
-                task = self._task_response_data(polled)
-                lingke_detail = ""
-                if lingke_target:
-                    outcome, lingke_detail = lingke_task_outcome(task)
-                    status = (
-                        lingke_detail
-                        or str(task.get("state") or task.get("status") or "").lower()
+                    submitted = await self._post_json(submit_url, payload)
+                await update_current_model_call_log(
+                    response_payload=submitted,
+                )
+                lingke_submit_error = (
+                    extract_lingke_submit_error(submitted) if lingke_target else ""
+                )
+                task_id = (
+                    ""
+                    if lingke_submit_error
+                    else self._task_id_from_submit_response(submitted)
+                )
+                provider_request_id = str(
+                    submitted.get("_newapi_request_id") or ""
+                ).strip()
+                if not task_id:
+                    if organization_request:
+                        await self._mark_operation_unknown(
+                            operation_port,
+                            operation_claim,
+                            expected_version=operation_version,
+                        )
+                        operation_terminal = True
+                    await _refund_video_model_call(
+                        reservation_id,
+                        source="newapi_video_generation",
+                        error="missing_task_id",
+                        provider_request_id=provider_request_id,
                     )
+                    return VideoGenResult(
+                        status=VideoGenStatus.FAILED,
+                        error=(
+                            "EGRESS_OPERATION_UNKNOWN"
+                            if organization_request
+                            else (
+                                lingke_submit_error
+                                or f"No task_id in DramaClawAPI response: {submitted}"
+                            )
+                        ),
+                    )
+                if organization_request:
+                    accepted = await operation_port.mark_accepted(
+                        operation_id=operation_claim.operation.operation_id,
+                        transition_token=operation_claim.transition_token,
+                        expected_version=operation_version,
+                        provider_job_id=task_id,
+                        requester_user_id=egress_context.requester_user_id,
+                        membership_id=egress_context.membership_id,
+                        authz_version=egress_context.authz_version,
+                    )
+                    operation_version = accepted.version
+                try:
+                    await get_usage_meter().mark_current_paid_execution_attempt(
+                        status="accepted",
+                        provider_request_id=provider_request_id,
+                        provider_task_id=task_id,
+                        metadata={"source": "newapi_video_generation"},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log(f"计费调用证据暂存失败，将由对账核实: {exc}")
+                poll_url = (
+                    f"{request_base_url}"
+                    f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(task_id, safe=str())}')}"
+                    if lingke_target
+                    else f"{request_base_url}/video/generations/{task_id}"
+                )
+                record_accepted(
+                    task_id,
+                    request_digest=resume_digest or None,
+                    poll_url=poll_url,
+                    resumable=not organization_request,
+                )
+                log(f"任务已提交: {task_id}")
+                progress(0.2)
+            poll_count = 0
+            consecutive_poll_errors = 0
+            while poll_count < max_polls:
+                if initial_polled is not None:
+                    polled = initial_polled
+                    initial_polled = None
                 else:
-                    status = str(task.get("status") or "").lower()
-                    if status in {"completed", "succeeded", "success", "done"}:
-                        outcome = "completed"
-                    elif status in {
-                        "failure",
-                        "failed",
-                        "error",
-                        "canceled",
-                        "cancelled",
-                        "expired",
-                    }:
-                        outcome = "failed"
-                    else:
-                        outcome = "pending"
+                    if organization_request:
+                        running_authority_error = None
+                        try:
+                            await self._revalidate_organization(egress_context)
+                        except AuthzError as exc:
+                            await self._mark_operation_unknown(
+                                operation_port,
+                                operation_claim,
+                                expected_version=operation_version,
+                            )
+                            operation_terminal = True
+                            running_authority_error = self._running_authority_error(exc)
+                        except Exception as exc:
+                            await self._mark_operation_unknown(
+                                operation_port,
+                                operation_claim,
+                                expected_version=operation_version,
+                            )
+                            operation_terminal = True
+                            return VideoGenResult(
+                                status=VideoGenStatus.FAILED,
+                                error=_safe_video_error_code(exc, "ORG_AUTHZ_STALE"),
+                                task_id=task_id,
+                            )
+                        if running_authority_error is not None:
+                            raise running_authority_error from None
+                    try:
+                        if organization_request:
+                            polled = await self._get_json(
+                                poll_url,
+                                headers=request_headers,
+                            )
+                        else:
+                            polled = await self._get_json(poll_url)
+                    except Exception as poll_exc:
+                        if not self._is_retryable_poll_error(poll_exc):
+                            raise
+                        consecutive_poll_errors += 1
+                        if consecutive_poll_errors > NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS:
+                            raise
+                        if (
+                            consecutive_poll_errors <= 3
+                            or consecutive_poll_errors % 5 == 0
+                        ):
+                            log(
+                                f"DramaClawAPI task {task_id} 查询连接异常，"
+                                f"正在自动续连重试 ({consecutive_poll_errors}/"
+                                f"{NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS}): {poll_exc}"
+                            )
+                        if poll_interval > 0:
+                            backoff = min(
+                                max(poll_interval, 1.0)
+                                * (2 ** min(consecutive_poll_errors - 1, 3)),
+                                NEWAPI_POLL_ERROR_MAX_BACKOFF_SECONDS,
+                            )
+                            await asyncio.sleep(backoff)
+                        continue
+                    if consecutive_poll_errors > 0:
+                        log(f"DramaClawAPI task {task_id} 网络连接已恢复，继续监听生成进度")
+                        consecutive_poll_errors = 0
+
+                task, outcome, status, lingke_detail = self._task_outcome_from_response(
+                    polled, lingke_target=lingke_target
+                )
                 progress(0.2 + (poll_count / max(max_polls, 1)) * 0.7)
 
                 if outcome == "completed":
@@ -3741,14 +4047,17 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                 expected_version=operation_version,
                             )
                             operation_terminal = True
-                        update_request_status(task_id, "failed", non_video_error)
-                        await _refund_video_model_call(
-                            reservation_id,
-                            source="newapi_video_generation",
-                            error=non_video_error,
-                            provider_request_id=provider_request_id,
-                            provider_task_id=task_id,
+                        update_request_status(
+                            task_id, "failed", non_video_error, resumable=False
                         )
+                        if not resumed_existing_task:
+                            await _refund_video_model_call(
+                                reservation_id,
+                                source="newapi_video_generation",
+                                error=non_video_error,
+                                provider_request_id=provider_request_id,
+                                provider_task_id=task_id,
+                            )
                         return VideoGenResult(
                             status=VideoGenStatus.FAILED,
                             error=non_video_error,
@@ -3775,7 +4084,10 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     if archive_delivery is not None and archive_state is None:
                         last_delivery_error = "VIDEO_ARCHIVE_MISSING"
                         update_request_status(
-                            task_id, "delivery_failed", last_delivery_error
+                            task_id,
+                            "delivery_failed",
+                            last_delivery_error,
+                            resumable=False,
                         )
                         if organization_request:
                             await self._mark_operation_unknown(
@@ -3801,6 +4113,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                     task_id,
                                     "delivery_pending",
                                     last_delivery_error,
+                                    resumable=not organization_request,
                                 )
                                 if poll_count % 6 == 0:
                                     log(
@@ -3809,6 +4122,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                             "视频生成完成，正在等待虾驿归档...",
                                         )
                                     )
+                                poll_count += 1
                                 await asyncio.sleep(poll_interval)
                                 continue
                             last_delivery_error = "VIDEO_ARCHIVE_FAILED"
@@ -3816,6 +4130,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                 task_id,
                                 "delivery_failed",
                                 last_delivery_error,
+                                resumable=False,
                             )
                             if organization_request:
                                 await self._mark_operation_unknown(
@@ -3857,7 +4172,10 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             )
                             operation_terminal = True
                         update_request_status(
-                            task_id, "delivery_failed", safe_missing_result_error
+                            task_id,
+                            "delivery_failed",
+                            safe_missing_result_error,
+                            resumable=False,
                         )
                         return VideoGenResult(
                             status=VideoGenStatus.FAILED,
@@ -3921,21 +4239,35 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                 delivery = await self._download_video(
                                     video_url, output_path
                                 )
-                    except VideoDeliveryError as exc:
-                        last_delivery_error = exc.code
-                        log(f"[video_delivery] {exc.code}")
+                    except (
+                        VideoDeliveryError,
+                        aiohttp.ClientError,
+                        TimeoutError,
+                        OSError,
+                    ) as exc:
+                        if isinstance(exc, VideoDeliveryError):
+                            last_delivery_error = exc.code
+                            delivery_retryable = exc.retryable
+                        else:
+                            last_delivery_error = "VIDEO_DOWNLOAD_FAILED"
+                            delivery_retryable = True
+                        log(f"[video_delivery] {last_delivery_error}")
                         update_request_status(
                             task_id,
-                            "delivery_pending" if exc.retryable else "delivery_failed",
+                            "delivery_pending" if delivery_retryable else "delivery_failed",
                             last_delivery_error,
+                            resumable=(
+                                delivery_retryable and not organization_request
+                            ),
                         )
-                        if exc.retryable and poll_count + 1 < max_polls:
+                        if delivery_retryable and poll_count + 1 < max_polls:
                             log(
                                 lmsg(
                                     "tasks.log.video.retryingDelivery",
                                     "项目存储暂未就绪，正在重试交付...",
                                 )
                             )
+                            poll_count += 1
                             await asyncio.sleep(poll_interval)
                             continue
                         if organization_request:
@@ -3995,14 +4327,34 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                     last_frame_url,
                                 )
                             )
-                            await self._download_video(
-                                last_frame_url,
-                                str(last_frame_output_path),
-                            )
+                            for lf_attempt in range(3):
+                                try:
+                                    await self._download_video(
+                                        last_frame_url,
+                                        str(last_frame_output_path),
+                                    )
+                                    break
+                                except (
+                                    VideoDeliveryError,
+                                    aiohttp.ClientError,
+                                    TimeoutError,
+                                    OSError,
+                                ) as lf_exc:
+                                    retryable_lf = (
+                                        lf_exc.retryable
+                                        if isinstance(lf_exc, VideoDeliveryError)
+                                        else True
+                                    )
+                                    if not retryable_lf or lf_attempt == 2:
+                                        raise
+                                    if poll_interval > 0:
+                                        await asyncio.sleep(
+                                            min(poll_interval, 2.0) * (lf_attempt + 1)
+                                        )
                             last_frame_path = last_frame_output_path.as_posix()
                             log("已保存 DramaClawAPI 返回尾帧")
                     progress(1.0)
-                    update_request_status(task_id, "completed")
+                    update_request_status(task_id, "completed", resumable=False)
                     if organization_request:
                         if isinstance(delivery, VideoDeliveryReceipt):
                             result_sha256 = delivery.sha256
@@ -4059,14 +4411,17 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             expected_version=operation_version,
                         )
                         operation_terminal = True
-                    update_request_status(task_id, "failed", safe_task_error)
-                    await _refund_video_model_call(
-                        reservation_id,
-                        source="newapi_video_generation",
-                        error=safe_task_error,
-                        provider_request_id=provider_request_id,
-                        provider_task_id=task_id,
+                    update_request_status(
+                        task_id, "failed", safe_task_error, resumable=False
                     )
+                    if not resumed_existing_task:
+                        await _refund_video_model_call(
+                            reservation_id,
+                            source="newapi_video_generation",
+                            error=safe_task_error,
+                            provider_request_id=provider_request_id,
+                            provider_task_id=task_id,
+                        )
                     return VideoGenResult(
                         status=VideoGenStatus.FAILED,
                         error=safe_task_error,
@@ -4078,6 +4433,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         f"DramaClawAPI task {task_id} status: "
                         f"{status or 'queued'} ({poll_count}/{max_polls})"
                     )
+                poll_count += 1
                 await asyncio.sleep(poll_interval)
 
             timeout_error = (
@@ -4085,8 +4441,9 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             )
             update_request_status(
                 task_id,
-                "delivery_pending" if provider_completed else "failed",
+                "delivery_pending" if provider_completed else "interrupted",
                 timeout_error,
+                resumable=not organization_request,
             )
             await update_current_model_call_log(
                 response_payload={"status": "timeout", "task_id": task_id},
@@ -4099,7 +4456,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     expected_version=operation_version,
                 )
                 operation_terminal = True
-            if not provider_completed:
+            if not provider_completed and not resumed_existing_task:
                 await _refund_video_model_call(
                     reservation_id,
                     source="newapi_video_generation",
@@ -4181,7 +4538,20 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 log(f"DramaClawAPI request_id: {exc.request_id}")
             if task_id:
                 log(f"DramaClawAPI task_id: {task_id}")
-                update_request_status(task_id, "failed", safe_exception_error)
+                fatal_client_rejection = self._is_fatal_client_rejection(exc)
+                resumable_after_error = (
+                    not organization_request and not fatal_client_rejection
+                )
+                update_request_status(
+                    task_id,
+                    "failed"
+                    if fatal_client_rejection
+                    else ("delivery_pending" if provider_completed else "interrupted"),
+                    safe_exception_error,
+                    resumable=resumable_after_error,
+                )
+                if resumable_after_error and project_output_dir:
+                    log(f"连接异常中断，已保存任务 {task_id}，下次重试将自动续连")
             elif is_definite_no_cost_http_rejection(exc.status_code):
                 try:
                     await get_usage_meter().mark_current_paid_execution_attempt(
@@ -4195,7 +4565,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     )
                 except Exception as evidence_exc:  # noqa: BLE001
                     log(f"计费无成本拒绝证据暂存失败，将由对账核实: {evidence_exc}")
-            if not provider_completed:
+            if not provider_completed and not resumed_existing_task:
                 await _refund_video_model_call(
                     reservation_id,
                     source="newapi_video_generation",
@@ -4236,8 +4606,16 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     await self._mark_operation_rejected(operation_port, operation_claim)
                 operation_terminal = True
             if task_id:
-                update_request_status(task_id, "failed", safe_exception_error)
-            if not provider_completed:
+                resumable_after_error = not organization_request
+                update_request_status(
+                    task_id,
+                    "delivery_pending" if provider_completed else "interrupted",
+                    safe_exception_error,
+                    resumable=resumable_after_error,
+                )
+                if resumable_after_error and project_output_dir:
+                    log(f"连接异常中断，已保存任务 {task_id}，下次重试将自动续连")
+            if not provider_completed and not resumed_existing_task:
                 await _refund_video_model_call(
                     reservation_id,
                     source="newapi_video_generation",

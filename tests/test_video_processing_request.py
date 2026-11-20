@@ -154,8 +154,12 @@ def test_canonicalize_video_payload_promotes_reference_media_to_top_level() -> N
 
     assert payload["images"] == ["https://relay.example/reference.png"]
     assert payload["audios"] == ["https://relay.example/reference.wav"]
-    assert "reference_images" not in payload["metadata"]
-    assert "reference_audios" not in payload["metadata"]
+    assert payload["metadata"]["reference_images"] == [
+        "https://relay.example/reference.png"
+    ]
+    assert payload["metadata"]["reference_audios"] == [
+        "https://relay.example/reference.wav"
+    ]
 
 
 def test_canonicalize_video_payload_keeps_first_frame_and_separate_references() -> None:
@@ -259,3 +263,520 @@ async def test_newapi_video_processing_request_uses_canonical_metadata(
     assert metadata["resolution_tier"] == "4k"
     assert metadata["reference_videos"] == ["https://relay.example/source.mp4"]
     assert "omni_reference_task_type" not in metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["seedance2.5-mrt-720p", "seedance-2.0"])
+async def test_newapi_video_keeps_reference_audios_in_both_top_level_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+) -> None:
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import (
+        NewApiVideoGenerator,
+        ShotReference,
+        VideoGenStatus,
+    )
+
+    captured: dict[str, object] = {}
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example/v1",
+        model=model,
+        resolution="720p",
+        generate_audio=True,
+    )
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_settle(*_args, **_kwargs):
+        return None
+
+    async def fake_post(_url: str, payload: dict):
+        captured["payload"] = payload
+        return {"id": "task-audio-1"}
+
+    async def fake_poll(_url: str):
+        return {"status": "completed", "url": "https://example.com/output.mp4"}
+
+    async def fake_download(_url: str, output_path: str):
+        Path(output_path).write_bytes(b"video")
+        return b"video"
+
+    def fake_upload(data: bytes, *, ext: str = "png", **_kwargs):
+        return f"https://relay.example/{len(data)}.{ext}"
+
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "get_video_result_delivery", lambda: None)
+    monkeypatch.setattr(video_module, "upload_media_bytes", fake_upload)
+    monkeypatch.setattr(generator, "_post_json", fake_post)
+    monkeypatch.setattr(generator, "_get_json", fake_poll)
+    monkeypatch.setattr(generator, "_download_video", fake_download)
+
+    img = tmp_path / "ref.png"
+    audio = tmp_path / "voice.wav"
+    img.write_bytes(b"png")
+    audio.write_bytes(b"wav-audio")
+
+    result = await generator.generate(
+        image_path=str(img),
+        prompt="图片1人物使用音频1的声音说话。",
+        output_path=str(tmp_path / "out.mp4"),
+        duration=5,
+        aspect_ratio="9:16",
+        poll_interval=0,
+        max_polls=1,
+        gen_mode="all_reference",
+        references=[
+            ShotReference("image", str(img), "图片1"),
+            ShotReference("audio", str(audio), "音频1"),
+        ],
+    )
+
+    assert result.status == VideoGenStatus.DONE
+    payload = captured["payload"]
+    assert payload["images"] == ["https://relay.example/3.png"]
+    assert payload["audios"] == ["https://relay.example/9.wav"]
+    assert payload["metadata"]["reference_images"] == ["https://relay.example/3.png"]
+    assert payload["metadata"]["reference_audios"] == ["https://relay.example/9.wav"]
+
+
+@pytest.mark.asyncio
+async def test_newapi_video_polling_auto_reconnects_on_transient_network_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aiohttp
+
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import (
+        NewApiVideoError,
+        NewApiVideoGenerator,
+        VideoGenStatus,
+    )
+
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example/v1",
+        model="seedance2.5-mrt-720p",
+    )
+    submit_calls = 0
+    poll_calls = 0
+    logs: list[str] = []
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_settle(*_args, **_kwargs):
+        return None
+
+    async def fake_post(_url: str, _payload: dict):
+        nonlocal submit_calls
+        submit_calls += 1
+        return {"id": "task-reconnect-1"}
+
+    async def fake_poll(_url: str):
+        nonlocal poll_calls
+        poll_calls += 1
+        if poll_calls == 1:
+            return {"status": "in_progress"}
+        if poll_calls == 2:
+            from aiohttp.client_reqrep import ConnectionKey
+
+            conn_key = ConnectionKey(
+                "zeroshell.top", 443, True, True, None, None, None
+            )
+            raise aiohttp.ClientConnectorError(
+                connection_key=conn_key, os_error=OSError("None")
+            )
+        if poll_calls == 3:
+            raise TimeoutError("poll timed out")
+        if poll_calls == 4:
+            raise NewApiVideoError("bad gateway", status_code=502)
+        if poll_calls == 5:
+            raise RuntimeError("DramaClawAPI task query returned invalid JSON: <html>502</html>")
+        return {"status": "completed", "url": "https://example.com/out.mp4"}
+
+    async def fake_download(_url: str, output_path: str):
+        Path(output_path).write_bytes(b"video")
+        return b"video"
+
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "get_video_result_delivery", lambda: None)
+    monkeypatch.setattr(generator, "_post_json", fake_post)
+    monkeypatch.setattr(generator, "_get_json", fake_poll)
+    monkeypatch.setattr(generator, "_download_video", fake_download)
+
+    result = await generator.generate(
+        image_path=None,
+        prompt="测试断网重连",
+        output_path=str(tmp_path / "out.mp4"),
+        poll_interval=0,
+        max_polls=2,
+        on_log=logs.append,
+    )
+
+    assert result.status == VideoGenStatus.DONE
+    assert submit_calls == 1
+    assert poll_calls == 6
+    assert any("自动续连重试" in msg for msg in logs)
+    assert any("网络连接已恢复" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
+async def test_newapi_video_polling_fails_fast_on_non_retryable_401(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import (
+        NewApiVideoError,
+        NewApiVideoGenerator,
+        VideoGenStatus,
+    )
+
+    generator = NewApiVideoGenerator(
+        api_key="bad-key",
+        endpoint="https://newapi.example/v1",
+        model="seedance2.5-mrt-720p",
+    )
+    poll_calls = 0
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_settle(*_args, **_kwargs):
+        return None
+
+    async def fake_post(_url: str, _payload: dict):
+        return {"id": "task-auth-fail"}
+
+    async def fake_poll(_url: str):
+        nonlocal poll_calls
+        poll_calls += 1
+        raise NewApiVideoError("unauthorized", status_code=401)
+
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "get_video_result_delivery", lambda: None)
+    monkeypatch.setattr(generator, "_post_json", fake_post)
+    monkeypatch.setattr(generator, "_get_json", fake_poll)
+
+    result = await generator.generate(
+        image_path=None,
+        prompt="测试鉴权失败不重试",
+        output_path=str(tmp_path / "out.mp4"),
+        poll_interval=0,
+        max_polls=5,
+    )
+
+    assert result.status == VideoGenStatus.FAILED
+    assert poll_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_newapi_video_cross_run_resumes_interrupted_task_without_resubmit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlite3
+
+    import novelvideo.video_request_usage as video_usage
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import (
+        NewApiVideoGenerator,
+        ShotReference,
+        VideoGenStatus,
+    )
+
+    output_root = tmp_path / "output"
+    state_root = tmp_path / "state"
+    project_output = output_root / "alice" / "demo"
+    project_output.mkdir(parents=True)
+    monkeypatch.setattr(video_usage, "OUTPUT_DIR", output_root)
+    monkeypatch.setattr(video_usage, "STATE_DIR", state_root)
+
+    img = tmp_path / "ref.png"
+    audio = tmp_path / "voice.wav"
+    img.write_bytes(b"img")
+    audio.write_bytes(b"wav")
+
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example/v1",
+        model="seedance2.5-mrt-720p",
+    )
+    submit_calls: list[dict] = []
+    relay_calls: list[str] = []
+    phase = {"step": 1}
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_settle(*_args, **_kwargs):
+        return None
+
+    def fake_upload(data: bytes, *, ext: str = "png", **_kwargs):
+        relay_calls.append(f"{len(data)}.{ext}")
+        return f"https://relay.example/{len(data)}.{ext}"
+
+    async def fake_post(_url: str, payload: dict):
+        submit_calls.append(payload)
+        return {"id": f"task-{len(submit_calls)}"}
+
+    async def fake_poll(url: str):
+        if phase["step"] == 1:
+            raise TimeoutError("persistent disconnect")
+        if phase["step"] == 2:
+            assert url.endswith("/video/generations/task-1")
+            return {"status": "completed", "url": "https://example.com/resumed.mp4"}
+        if phase["step"] == 3:
+            assert url.endswith("/video/generations/task-2")
+            return {"status": "completed", "url": "https://example.com/new.mp4"}
+        if phase["step"] == 4:
+            raise TimeoutError("interrupted again")
+        assert url.endswith("/video/generations/task-4")
+        return {"status": "completed", "url": "https://example.com/changed.mp4"}
+
+    async def fake_download(url: str, output_path: str):
+        dest = Path(output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(url.encode())
+        return url.encode()
+
+    monkeypatch.setattr(video_module, "NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS", 1)
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "get_video_result_delivery", lambda: None)
+    monkeypatch.setattr(video_module, "upload_media_bytes", fake_upload)
+    monkeypatch.setattr(generator, "_post_json", fake_post)
+    monkeypatch.setattr(generator, "_get_json", fake_poll)
+    monkeypatch.setattr(generator, "_download_video", fake_download)
+
+    common_kwargs = dict(
+        image_path=str(img),
+        prompt="镜头缓慢推近。",
+        output_path=str(project_output / "videos" / "beat_01.mp4"),
+        duration=5,
+        aspect_ratio="9:16",
+        poll_interval=0,
+        max_polls=2,
+        gen_mode="all_reference",
+        references=[
+            ShotReference("image", str(img), "图片1"),
+            ShotReference("audio", str(audio), "音频1"),
+        ],
+        project_output_dir=str(project_output),
+        episode=1,
+        beat_num=1,
+        task_type="single_video",
+    )
+
+    first = await generator.generate(**common_kwargs)
+    assert first.status == VideoGenStatus.FAILED
+    assert first.task_id == "task-1"
+    assert len(submit_calls) == 1
+    assert len(relay_calls) == 3
+
+    # Retry with the exact same inputs: must resume task-1 without re-uploading or re-submitting.
+    phase["step"] = 2
+    resumed_logs: list[str] = []
+    second = await generator.generate(**common_kwargs, on_log=resumed_logs.append)
+    assert second.status == VideoGenStatus.DONE
+    assert second.task_id == "task-1"
+    assert Path(common_kwargs["output_path"]).read_bytes() == b"https://example.com/resumed.mp4"
+    assert len(submit_calls) == 1
+    assert len(relay_calls) == 3
+    assert any("自动续连" in msg for msg in resumed_logs)
+
+    # Once completed, another run (even with same prompt) submits a fresh task.
+    phase["step"] = 3
+    third = await generator.generate(**common_kwargs)
+    assert third.status == VideoGenStatus.DONE
+    assert third.task_id == "task-2"
+    assert len(submit_calls) == 2
+
+    # Interrupt a fresh task, then change prompt/inputs: must NOT reuse interrupted task-3.
+    phase["step"] = 4
+    interrupted_again = await generator.generate(**common_kwargs)
+    assert interrupted_again.status == VideoGenStatus.FAILED
+    assert interrupted_again.task_id == "task-3"
+
+    phase["step"] = 5
+    changed = await generator.generate(
+        **{**common_kwargs, "prompt": "镜头改为远景俯拍。"}
+    )
+    assert changed.status == VideoGenStatus.DONE
+    assert changed.task_id == "task-4"
+    assert len(submit_calls) == 4
+
+    db_path = video_usage.get_video_request_usage_db_path(project_output)
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT request_id, status, resumable FROM video_request_usage ORDER BY accepted_at"
+        ).fetchall()
+        assert rows == [
+            ("task-1", "completed", 0),
+            ("task-2", "completed", 0),
+            ("task-3", "interrupted", 1),
+            ("task-4", "completed", 0),
+        ]
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_newapi_video_resumed_task_falls_back_when_remote_task_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import novelvideo.video_request_usage as video_usage
+    from novelvideo.generators import video_generator as video_module
+    from novelvideo.generators.video_generator import NewApiVideoGenerator, VideoGenStatus
+
+    output_root = tmp_path / "output"
+    state_root = tmp_path / "state"
+    project_output = output_root / "alice" / "demo"
+    project_output.mkdir(parents=True)
+    monkeypatch.setattr(video_usage, "OUTPUT_DIR", output_root)
+    monkeypatch.setattr(video_usage, "STATE_DIR", state_root)
+
+    generator = NewApiVideoGenerator(
+        api_key="test-key",
+        endpoint="https://newapi.example/v1",
+        model="seedance2.5-mrt-720p",
+    )
+    submit_count = 0
+    phase = {"step": 1}
+
+    async def fake_reserve(*_args, **_kwargs):
+        return "reservation-1"
+
+    async def fake_settle(*_args, **_kwargs):
+        return None
+
+    async def fake_post(_url: str, _payload: dict):
+        nonlocal submit_count
+        submit_count += 1
+        return {"id": f"task-{submit_count}"}
+
+    async def fake_poll(url: str):
+        if phase["step"] == 1:
+            raise TimeoutError("network down")
+        if url.endswith("/task-1"):
+            return {"status": "failed", "error": "upstream expired"}
+        return {"status": "completed", "url": "https://example.com/new.mp4"}
+
+    async def fake_download(_url: str, output_path: str):
+        Path(output_path).write_bytes(b"new-video")
+        return b"new-video"
+
+    monkeypatch.setattr(video_module, "NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS", 0)
+    monkeypatch.setattr(video_module, "_reserve_video_model_call", fake_reserve)
+    monkeypatch.setattr(video_module, "_confirm_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "_refund_video_model_call", fake_settle)
+    monkeypatch.setattr(video_module, "get_video_result_delivery", lambda: None)
+    monkeypatch.setattr(generator, "_post_json", fake_post)
+    monkeypatch.setattr(generator, "_get_json", fake_poll)
+    monkeypatch.setattr(generator, "_download_video", fake_download)
+
+    kwargs = dict(
+        image_path=None,
+        prompt="雨夜街角",
+        output_path=str(project_output / "out.mp4"),
+        poll_interval=0,
+        max_polls=2,
+        project_output_dir=str(project_output),
+    )
+
+    first = await generator.generate(**kwargs)
+    assert first.status == VideoGenStatus.FAILED
+
+    phase["step"] = 2
+    second = await generator.generate(**kwargs)
+    assert second.status == VideoGenStatus.DONE
+    assert second.task_id == "task-2"
+    assert submit_count == 2
+
+
+def test_video_request_usage_migrates_v1_schema_to_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlite3
+
+    import novelvideo.video_request_usage as video_usage
+
+    output_root = tmp_path / "output"
+    state_root = tmp_path / "state"
+    project_output = output_root / "alice" / "demo"
+    project_output.mkdir(parents=True)
+    monkeypatch.setattr(video_usage, "OUTPUT_DIR", output_root)
+    monkeypatch.setattr(video_usage, "STATE_DIR", state_root)
+
+    db_path = video_usage.get_video_request_usage_db_path(project_output)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE novelvideo_schema_components (
+                component TEXT PRIMARY KEY,
+                version INTEGER NOT NULL
+            );
+            INSERT INTO novelvideo_schema_components(component, version)
+            VALUES ('video_request_usage', 1);
+            CREATE TABLE video_request_usage (
+                request_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                model_name TEXT,
+                episode INTEGER,
+                beat_num INTEGER,
+                task_type TEXT,
+                duration_seconds REAL,
+                status TEXT NOT NULL DEFAULT 'accepted',
+                cost_estimate REAL,
+                accepted_at TEXT NOT NULL,
+                completed_at TEXT,
+                downloaded_at TEXT,
+                updated_at TEXT NOT NULL,
+                error_message TEXT
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    video_usage.record_video_request(
+        project_output_dir=project_output,
+        request_id="task-legacy-1",
+        provider="newapi",
+        model_name="seedance2.5-mrt-720p",
+        episode=1,
+        beat_num=1,
+        task_type="single_video",
+        duration_seconds=17.0,
+        request_digest="digest-1",
+        poll_url="https://example.com/v1/video/generations/task-legacy-1",
+        resumable=True,
+    )
+    found = video_usage.find_resumable_video_request(
+        project_output_dir=project_output,
+        request_digest="digest-1",
+        provider="newapi",
+        model_name="seedance2.5-mrt-720p",
+    )
+    assert found is not None
+    assert found["request_id"] == "task-legacy-1"
+    assert found["poll_url"] == "https://example.com/v1/video/generations/task-legacy-1"
+
