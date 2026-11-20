@@ -5,55 +5,15 @@ import { useTranslation } from "react-i18next";
 import { Brand } from "@/components/login/login-stage";
 import Aurora from "@/components/react-bits/aurora";
 import SplitText from "@/components/react-bits/split-text";
-import { AppleMark, GithubMark, WindowsMark } from "@/components/platform-marks";
+import { AppleMark, WindowsMark } from "@/components/platform-marks";
 import { useDesktopRelease } from "@/hooks/use-desktop-release";
-import { PRODUCT_MANUAL_URL } from "@/lib/product-manual";
 import { detectDesktopPlatform, type DesktopPlatform } from "@/lib/desktop-download";
 import styles from "@/components/login/login.module.css";
 import layout from "./hero-layout.module.css";
 import { MoreInfoMenu } from "./MoreInfoMenu";
 
-const GITHUB_URL = "https://github.com/yangda611/reelforge";
-const GITHUB_REPO = "yangda611/reelforge";
-const FALLBACK_GITHUB_STARS = 574;
-
 // 桌面端下载入口暂时隐藏；组件与样式全部保留，改回 true 即可恢复。
 const SHOW_DESKTOP_DOWNLOAD = false;
-
-let cachedStars: number | null = null;
-
-function formatStars(count: number): string {
-  if (count < 1000) return String(count);
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
-
-function useGithubStars(repo: string): number {
-  const [stars, setStars] = useState(cachedStars ?? FALLBACK_GITHUB_STARS);
-
-  useEffect(() => {
-    if (cachedStars !== null) return;
-    let active = true;
-    fetch(`https://api.github.com/repos/${repo}`, {
-      headers: { Accept: "application/vnd.github+json" },
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        const count = data?.stargazers_count;
-        if (active && typeof count === "number") {
-          cachedStars = count;
-          setStars(count);
-        }
-      })
-      .catch(() => {
-        /* Star 数仅作展示，失败时保留兜底值。 */
-      });
-    return () => {
-      active = false;
-    };
-  }, [repo]);
-
-  return stars;
-}
 
 /**
  * Installer downloads, in the header next to 商务联系 / Star. The detected
@@ -118,9 +78,6 @@ export function LoginCinematicHeader({
   className?: string;
   style?: CSSProperties;
 }) {
-  const { t } = useTranslation();
-  const stars = useGithubStars(GITHUB_REPO);
-
   return (
     <div
       className={`${styles.stageTopBar} ${className ?? ""}`}
@@ -131,20 +88,6 @@ export function LoginCinematicHeader({
         {/* 桌面端下载入口暂时隐藏，改回 true 即可恢复（组件代码保留）。 */}
         {SHOW_DESKTOP_DOWNLOAD && <DesktopDownload />}
         <MoreInfoMenu />
-        <a
-          className={styles.githubLink}
-          href={GITHUB_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="GitHub"
-          aria-label="GitHub"
-        >
-          <GithubMark />
-          <span className={styles.githubStarLabel}>
-            {t("auth.github.star")}
-          </span>
-          <span className={styles.githubStars}>{formatStars(stars)}</span>
-        </a>
       </div>
     </div>
   );
@@ -221,16 +164,6 @@ export function LoginCinematicHero({
             >
               {t("loginCinematic.hero.headline")}
             </button>
-            <a
-              className={`${styles.heroSecondary} ${layout.heroSecondary}`}
-              href={PRODUCT_MANUAL_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={t("auth.openManual")}
-              aria-label={t("auth.openManual")}
-            >
-              {t("auth.learnMore")}
-            </a>
           </div>
         </div>
 

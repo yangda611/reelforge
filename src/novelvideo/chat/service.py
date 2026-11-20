@@ -244,10 +244,28 @@ _CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS = (
     "result tools; never redirect them into workflow draft preparation. "
     "Preparing a draft is not canvas delivery. Preserve the workflow's user approval boundary "
     "and only claim a canvas write after its successful apply receipt. "
-    "If the user asks you to write or return text, copy, a screenplay, or Beats but does not "
-    "explicitly ask to create/add/land nodes or a workflow on the canvas, answer in chat. Do not "
-    "search Workflow Skills and do not call a canvas write tool merely because the requested "
-    "content mentions images, audio, or video. "
+    "Proactively land concrete creative deliverables on the canvas based on user intent rather "
+    "than waiting for the user to say 'create node': when the user asks to produce actionable "
+    "creative artifacts (such as splitting a script into per-clip text, writing shot/clip prompts, "
+    "copy, character/scene notes, or media), create the matching canvas nodes directly in the same "
+    "turn without asking 'should I create nodes?'. When the user refers to existing canvas nodes, "
+    "clips, or scripts, read them yourself via SUPERTALE_CANVAS_ONTOLOGY_SUMMARY and "
+    "freezone_get_node_detail instead of asking the user to paste content already on the canvas. "
+    "Give every created textAnnotationNode a clear displayName, complete usable content (never "
+    "placeholders), and non-overlapping spaced positions; when deriving new text nodes from an "
+    "existing source node, connect them with valid semantic edges in the same batch (context_for "
+    "from text/script nodes, media_input_for from image/video/audio nodes) or group_nodes + "
+    "layout_nodes for a clean canvas layout. "
+    "Use freezone_create_node for a single standalone textAnnotationNode (data={displayName, content}), "
+    "use one freezone_emit_canvas_command batch of create_node (textAnnotationNode) commands "
+    "when producing multiple standalone or per-clip text deliverables without media generation, "
+    "and use dramaclaw-workflows only when image/video/audio generation or a connected media "
+    "workflow is requested. After landing the nodes, briefly summarize what was created and "
+    "propose one concrete creative next step. "
+    "Only when the user asks a pure question, open-ended brainstorming without concrete "
+    "deliverables, status/read-only check, or explicitly asks not to touch the canvas should you "
+    "answer in chat; do not search Workflow Skills and do not call a canvas write tool merely "
+    "because a pure text or Q&A request mentions images, audio, or video. "
     "Inspect the available scope-filtered concrete operations on the required dramaclaw MCP "
     "server, then call the selected tool directly. "
     "For any workflow, several connected nodes, grouped stages, storyboard, or media pipeline, "
@@ -743,7 +761,16 @@ This chat turn is running inside the Xi画/Freezone canvas.
 
 Scope:
 - Inspect project assets, tasks, skill runs, and canvas data; answer explanations naturally.
-- Turn creative ideas into working canvas material only when the user asks to create or land it.
+- Proactively turn actionable creative ideas into working canvas material (such as textAnnotationNode
+  cards or media workflows) based on user intent instead of waiting for an explicit "create node"
+  instruction or asking redundant permission before creating nodes. When the user references
+  existing clips, scripts, or nodes on the canvas, inspect them yourself with
+  freezone_get_node_detail first rather than asking the user to paste them. Deliver complete,
+  non-overlapping nodes with clear displayName, full usable content, and valid semantic links
+  (context_for from text/script sources, media_input_for from media sources) or group/layout
+  commands, then briefly explain what was created and suggest a natural next step. Keep pure
+  questions, open-ended brainstorming with no concrete deliverable, read-only inspections, and
+  explicit chat-only requests as plain text replies without mutating the canvas.
 - Keep image, audio, video, and composition work inside Freezone. Do not start, mutate, or use
   DramaClaw mainline production tools unless the user explicitly asks for the main project pipeline.
 - Freezone accepts creative instructions directly in chat. Do not require the user to save or upload
@@ -880,10 +907,14 @@ Canvas write contract:
   pass it to workflow_skill_get/freezone_get_workflow_skill or use it as intent.skill_id. Select the
   matching production Workflow Skill returned by the catalog, such as text-to-image for a pure
   image pipeline or text-to-image-video for an image/video pipeline.
-- Use freezone_create_node only for exactly one standalone textAnnotationNode when the user asks for
-  one text node, or for the one empty previzNode of a 预演台 request. Use one freezone_emit_canvas_command batch only for several ordinary non-workflow
-  canvas edits. Use FREEZONE_CANVAS_CONTEXT's canvas_id. Do not precheck pipeline failure unless the
-  user asks about status.
+- Use freezone_create_node for one standalone textAnnotationNode (including proactive creation of a
+  single text deliverable) or for the one empty previzNode of a 预演台 request. When producing
+  multiple standalone or per-clip text deliverables (e.g. one text node per clip/shot) without
+  media generation, use one freezone_emit_canvas_command batch of create_node (textAnnotationNode)
+  commands (optionally with connect_nodes/layout_nodes) instead of repeating freezone_create_node
+  or wrapping text-only cards in a media WorkflowPlan. Use one freezone_emit_canvas_command batch
+  for several ordinary non-workflow canvas edits. Use FREEZONE_CANVAS_CONTEXT's canvas_id. Do not
+  precheck pipeline failure unless the user asks about status.
 - Never claim any canvas change succeeded without a successful same-turn frontend write result or
   a persisted interactive-story receipt containing story_id, canvas_id, revision and refresh_canvas.
   If it fails or is absent, say the change could not be confirmed.
@@ -921,6 +952,7 @@ Skill Studio continuation:
 
 _FREEZONE_CANVAS_WRITE_ACTION_RE = re.compile(
     r"(?:创建|新建|添加|插入|删除|移除|清空|修改|更新|连接|连线|移动|向[上下左右]移|再移|布局|选择|打开|运行|执行|生成|制作|做|"
+    r"拆成|拆分为|拆解|分成|补(?:上|充)?|整理成|衍生|延展|扩展|(?<![输提给冒抛导])出(?=[一这那每几各两三四五六七八九十0-9\s个张段条份批块])|"
     r"create|add|insert|delete|remove|clear|update|connect|move|layout|select|open|run|execute|generate)",
     re.IGNORECASE,
 )
@@ -931,7 +963,7 @@ _FREEZONE_CANVAS_WRITE_OBJECT_RE = re.compile(
 )
 _FREEZONE_DIRECT_MEDIA_WRITE_RE = re.compile(
     r"(?:"
-    r"(?:生成|创建|新建|添加|制作|做|运行|执行|用|根据|按照|基于)"
+    r"(?:生成|创建|新建|添加|制作|做|运行|执行|用|根据|按照|基于|(?<![输提给冒抛导])出(?=[一这那每几各两三四五六七八九十0-9\s个张段条份批块]))"
     r"[^。！？!?\n]{0,32}"
     r"(?:图片|图像|图|视频|音频|音乐|配音|旁白|成片)"
     r"|(?:generate|create|add|make|run|execute)\s+(?:an?\s+|some\s+)?"
@@ -957,9 +989,9 @@ _FREEZONE_TEXT_ONLY_REQUEST_RE = re.compile(
 )
 _FREEZONE_CANVAS_WRITE_NEGATION_RE = re.compile(
     r"(?:"
-    r"(?:暂不|暂时不|先不|不要|无需|不用|不再|不会|不)\s*"
+    r"(?:暂不|暂时不|先不|先别|不要|无需|不用|不再|不会|别|勿|不)\s*"
     r"(?:直接|立即|马上|继续|再)?\s*"
-    r"(?:运行|执行|应用|使用|用|生成|制作|创建|写入|添加|删除|移除|清空|修改|更新|"
+    r"(?:运行|执行|应用|使用|用|生成|制作|创建|新建|建|写入|添加|删除|移除|清空|修改|更新|"
     r"连接|连线|移动|布局|选择|打开)"
     r"|(?:do\s+not|don't|not|without)\s+"
     r"(?:(?:directly|immediately|then)\s+)?"
@@ -1149,6 +1181,7 @@ def _freezone_canvas_write_requested(prompt: str | None) -> bool:
 
 _FREEZONE_MIXED_CANVAS_STRUCTURE_RE = re.compile(
     r"(?:创建|新建|添加|追加|插入|删除|移除|清空|连接|连线|分组|成组|建组|打组|取消分组|布局|整理|移动|"
+    r"拆成|拆分为|拆解|分成|补(?:上|充)?|整理成|衍生|延展|扩展|(?<![输提给冒抛导])出(?=[一这那每几各两三四五六七八九十0-9\s个张段条份批块])|"
     r"\b(?:create|add|insert|delete|remove|clear|connect|group|ungroup|layout|move)\b)",
     re.IGNORECASE,
 )

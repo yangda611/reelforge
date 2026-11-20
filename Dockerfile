@@ -57,7 +57,13 @@ COPY --from=codex-runtime /codex-runtime.json /opt/codex-runtime.json
 # vendored codex-linux-sandbox binary's default pipeline execs system bwrap
 # (Landlock is only its --use-legacy-landlock fallback, which we do not use).
 # The binary itself is installed further down, per TARGETARCH.
-RUN apt-get update \
+ARG DEBIAN_APT_MIRROR=""
+RUN set -eu; \
+    if [ -n "$DEBIAN_APT_MIRROR" ]; then \
+        sed -i -E "s@^URIs: https?://deb\.debian\.org/@URIs: ${DEBIAN_APT_MIRROR%/}/@" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 

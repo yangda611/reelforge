@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,36 @@ def _is_s9_preserved_duration(source: Any) -> bool:
     return duration >= 4 and (prompt_source == "s9_script" or prompt_style == "s9_segment")
 
 
+def _separate_reference_paths(config: Seedance2VideoConfig) -> Seedance2VideoConfig:
+    images = config.reference_image_paths
+    audios = config.reference_audio_paths
+    misplaced_audio = {
+        path
+        for path in images
+        if (mimetypes.guess_type(Path(path))[0] or "").startswith("audio/")
+    }
+    misplaced_images = {
+        path
+        for path in audios
+        if (mimetypes.guess_type(Path(path))[0] or "").startswith("image/")
+    }
+    if misplaced_audio or misplaced_images:
+        # Append recovered references after the destination's existing entries.
+        config.reference_image_paths = list(
+            dict.fromkeys(
+                [path for path in images if path not in misplaced_audio]
+                + [path for path in audios if path in misplaced_images]
+            )
+        )
+        config.reference_audio_paths = list(
+            dict.fromkeys(
+                [path for path in audios if path not in misplaced_images]
+                + [path for path in images if path in misplaced_audio]
+            )
+        )
+    return config
+
+
 def parse_seedance2_config(
     value: Any,
     *,
@@ -164,7 +195,7 @@ def parse_seedance2_config(
             result.ratio = safe_default_ratio
         if safe_default_duration and not result.duration_user_set and not _is_s9_preserved_duration(result):
             result.duration = safe_default_duration
-        return result
+        return _separate_reference_paths(result)
 
     if isinstance(value, str):
         text = value.strip()
@@ -194,7 +225,7 @@ def parse_seedance2_config(
             value["ratio"] = safe_default_ratio
         if safe_default_duration and not value.get("duration_user_set") and not _is_s9_preserved_duration(value):
             value["duration"] = safe_default_duration
-        return Seedance2VideoConfig.model_validate(value)
+        return _separate_reference_paths(Seedance2VideoConfig.model_validate(value))
     kwargs = {}
     if safe_default_ratio:
         kwargs["ratio"] = safe_default_ratio

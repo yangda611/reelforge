@@ -88,23 +88,29 @@ def _make_beat(tmp_path, *, image_paths, audio_paths):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mixed_paths", [False, True], ids=["typed", "mixed"])
 async def test_single_video_generic_backend_forwards_references(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, mixed_paths
 ):
     from novelvideo.api.routes import generation
     from novelvideo.api.schemas import SingleVideoRequest
 
     image_a = tmp_path / "ref-a.png"
     image_b = tmp_path / "ref-b.png"
-    audio = tmp_path / "voice.wav"
-    for path in (image_a, image_b, audio):
+    audio = tmp_path / "voice.mp3"
+    second_audio = tmp_path / "second.MP3"
+    for path in (image_a, image_b, audio, second_audio):
         path.write_bytes(b"media")
     frame = tmp_path / "frames" / "ep003" / "beat_02.png"
     frame.parent.mkdir(parents=True)
     frame.write_bytes(b"frame")
 
     calls = []
-    store = _FakeStore([_make_beat(tmp_path, image_paths=[image_a, image_b], audio_paths=[audio])])
+    image_paths = [audio, image_a, second_audio] if mixed_paths else [image_a, image_b]
+    audio_paths = [audio, image_b] if mixed_paths else [audio, second_audio]
+    store = _FakeStore(
+        [_make_beat(tmp_path, image_paths=image_paths, audio_paths=audio_paths)]
+    )
 
     async def fake_audio_duration(*_args, **_kwargs):
         return 0.0
@@ -131,6 +137,7 @@ async def test_single_video_generic_backend_forwards_references(
         ("image", str(image_a)),
         ("image", str(image_b)),
         ("audio", str(audio)),
+        ("audio", str(second_audio)),
     ]
 
 

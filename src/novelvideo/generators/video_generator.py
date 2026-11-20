@@ -9,6 +9,7 @@ import ipaddress
 import json
 import logging
 import math
+import mimetypes
 import os
 import random
 import re
@@ -95,6 +96,57 @@ _VIDEO_EGRESS_ERROR_MESSAGES = {
     "EGRESS_OPERATION_REPLAYED": "video egress operation cannot be replayed",
     "EGRESS_OPERATION_TRANSITION_FAILED": "video egress operation transition failed",
 }
+
+_VIDEO_SUBMIT_MEDIA_FIELDS = (
+    "image",
+    "images",
+    "videos",
+    "audios",
+    "image_url",
+    "video_url",
+    "audio_url",
+    "first_frame_image",
+    "last_frame_image",
+    "reference_images",
+    "reference_videos",
+    "reference_audios",
+)
+
+
+def _video_submit_media_summary(payload: dict) -> dict[str, object]:
+    """Keep field placement and order without logging links or inline media."""
+
+    def fingerprint(value: object) -> str:
+        if not isinstance(value, str):
+            return f"<{type(value).__name__}>"
+        if value[:5].lower() == "data:":
+            return "<inline>"
+        try:
+            path = urllib.parse.urlsplit(value).path
+        except ValueError:
+            path = ""
+        match = re.search(r"\.[a-zA-Z0-9]{1,8}\Z", path)
+        suffix = match.group().lower() if match else "<no-extension>"
+        digest = hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+        return f"{suffix}#{digest[:12]}"
+
+    def fields(source: dict) -> dict[str, object]:
+        return {
+            key: (
+                [fingerprint(item) for item in value]
+                if isinstance(value, list)
+                else fingerprint(value)
+            )
+            for key, value in source.items()
+            if key in _VIDEO_SUBMIT_MEDIA_FIELDS
+        }
+
+    summary = fields(payload)
+    for key in ("metadata", "params"):
+        nested = payload.get(key)
+        if isinstance(nested, dict) and (media := fields(nested)):
+            summary[key] = media
+    return summary
 
 
 class VideoEgressError(RuntimeError):
@@ -2354,6 +2406,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         last_frame_path: str | None,
         references: object,
         log: Callable[[str], None],
+        correct_reference_image_types: bool = False,
     ) -> None:
         """Populate the stable DramaClaw-to-RelayClaw video media protocol."""
 
@@ -2411,6 +2464,11 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             media_type = str(getattr(ref, "type", "") or "image").strip().lower()
             path = str(getattr(ref, "path", "") or "").strip()
             role = str(getattr(ref, "role", "") or "").strip()
+            if correct_reference_image_types and media_type == "image" and path:
+                media_path = urllib.parse.urlsplit(path).path
+                kind = (mimetypes.guess_type(media_path)[0] or "").partition("/")[0]
+                if kind in {"audio", "video"}:
+                    media_type = kind
             if path and media_type in {"image", "video", "audio", "file", "link"}:
                 raw_items.append((media_type, path, role))
 
@@ -3389,6 +3447,17 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             "" if organization_request else self.direct_provider,
             request_base_url,
         )
+        zeroshell_yk_target = (
+            not organization_request
+            and not lingke_target
+            and urllib.parse.urlsplit(request_base_url).hostname == "zeroshell.top"
+            and str(payload["model"]).lower() == "yk-sd2.5-2"
+        )
+        video_route = "/video/generations"
+        if zeroshell_yk_target:
+            video_route = (
+                "/videos" if request_base_url.lower().endswith("/v1") else "/v1/videos"
+            )
         resumed_existing_task = False
         initial_polled: dict | None = None
         poll_url = ""
@@ -3431,7 +3500,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             f"{request_base_url}"
                             f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(candidate_task_id, safe=str())}')}"
                             if lingke_target
-                            else f"{request_base_url}/video/generations/{candidate_task_id}"
+                            else f"{request_base_url}{video_route}/{candidate_task_id}"
                         )
                         try:
                             probed = await self._get_json(candidate_poll_url)
@@ -3497,6 +3566,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             last_frame_path=last_frame_path,
                             references=kwargs.get("references"),
                             log=log,
+                            correct_reference_image_types=zeroshell_yk_target,
                         )
                     except (ValueError, FileNotFoundError) as exc:
                         return await fail_before_submit(str(exc))
@@ -3798,6 +3868,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             last_frame_path=last_frame_path,
                             references=kwargs.get("references"),
                             log=log,
+                            correct_reference_image_types=zeroshell_yk_target,
                         )
                     except Exception as exc:
                         return await fail_before_submit(
@@ -3857,6 +3928,22 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         request_schema=self.request_schema,
                         mode=requested_mode,
                     )
+                elif zeroshell_yk_target:
+                    # Avoid the generic gateway aliases on the native video route.
+                    native_metadata = payload.get("metadata") or {}
+                    media = {
+                        "images": payload.get("images")
+                        or ([payload["image"]] if payload.get("image") else []),
+                        "videos": payload.get("videos")
+                        or native_metadata.get("reference_videos"),
+                        "audios": payload.get("audios"),
+                    }
+                    payload = {
+                        "model": payload["model"],
+                        "prompt": payload["prompt"],
+                        "seconds": str(payload.get("duration", duration)),
+                        **{key: value for key, value in media.items() if value},
+                    }
                 reservation_id = await _reserve_video_model_call(
                     self.model,
                     source="newapi_video_generation",
@@ -3866,12 +3953,30 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 await update_current_model_call_log(
                     request_payload=payload,
                 )
-                submit_attempted = True
-                submit_url = (
-                    f"{request_base_url}{lingke_api_path(request_base_url, 'media/generate')}"
+                submit_route = (
+                    lingke_api_path(request_base_url, "media/generate")
                     if lingke_target
-                    else f"{request_base_url}/video/generations"
+                    else video_route
                 )
+                submit_url = f"{request_base_url}{submit_route}"
+                trace_id = uuid.uuid4().hex
+                try:
+                    gateway_host = urllib.parse.urlsplit(submit_url).hostname
+                except ValueError:
+                    gateway_host = None
+                request_log = "video_submit_request " + json.dumps(
+                    {
+                        "trace_id": trace_id,
+                        "method": "POST",
+                        "gateway": gateway_host,
+                        "route": "/v1/videos" if zeroshell_yk_target else submit_route,
+                        "model": payload.get("model"),
+                        "media": _video_submit_media_summary(payload),
+                    }
+                )
+                logger.info("%s", request_log)
+                log(request_log)
+                submit_attempted = True
                 if organization_request:
                     submitted = await self._post_json(
                         submit_url,
@@ -3919,6 +4024,15 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             )
                         ),
                     )
+                accepted_log = "video_submit_accepted " + json.dumps(
+                    {
+                        "trace_id": trace_id,
+                        "task_id": task_id,
+                        "request_id": provider_request_id or None,
+                    }
+                )
+                logger.info("%s", accepted_log)
+                log(accepted_log)
                 if organization_request:
                     accepted = await operation_port.mark_accepted(
                         operation_id=operation_claim.operation.operation_id,
@@ -3943,7 +4057,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     f"{request_base_url}"
                     f"{lingke_api_path(request_base_url, f'skills/task-status?task_id={urllib.parse.quote(task_id, safe=str())}')}"
                     if lingke_target
-                    else f"{request_base_url}/video/generations/{task_id}"
+                    else f"{request_base_url}{video_route}/{task_id}"
                 )
                 record_accepted(
                     task_id,

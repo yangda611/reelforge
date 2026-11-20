@@ -12,9 +12,11 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -65,6 +67,155 @@ _JSON_METADATA_RE = re.compile(
 _ESCAPED_JSON_METADATA_RE = re.compile(
     rf'(\\"(?:{"|".join(_TURN_METADATA_NAMES)})\\"\s*:\s*\\")[^"\\]*(\\")'
 )
+_DAEMON_SOCKET_IN_USE_RE = re.compile(
+    r"app-server control socket is already in use at\s+(\S+)"
+)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _read_owner_pid(owner_path: Path) -> int:
+    try:
+        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        pid = int(owner.get("pid", 0))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
+    return pid if pid > 0 else 0
+
+
+def _read_launch_log_detail(
+    log_path: Path,
+    start_offset: int,
+    *,
+    max_chars: int = 2000,
+) -> tuple[str, str]:
+    """Return (full_launch_text, tail_display_text) written since ``start_offset``."""
+    try:
+        with log_path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            offset = start_offset if 0 <= start_offset <= size else 0
+            handle.seek(offset)
+            raw = handle.read()
+    except OSError:
+        return "", ""
+    full_text = _ANSI_ESCAPE_RE.sub("", raw.decode("utf-8", errors="replace")).strip()
+    if not full_text:
+        return "", ""
+    if len(full_text) <= max_chars:
+        return full_text, full_text
+    tail = full_text[-max_chars:]
+    newline = tail.find("\n")
+    if 0 <= newline < len(tail) - 1:
+        tail = tail[newline + 1 :]
+    return full_text, tail.strip()
+
+
+def _is_codex_process(pid: int) -> bool:
+    if os.name == "nt" or pid <= 0:
+        return False
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    try:
+        raw = cmdline_path.read_bytes()
+    except OSError:
+        return False
+    return "codex" in raw.decode("utf-8", errors="replace").lower()
+
+
+def _terminate_orphan_codex_process(pid: int) -> bool:
+    if os.name == "nt" or pid <= 0 or not _pid_alive(pid) or not _is_codex_process(pid):
+        return False
+    try:
+        os.kill(pid, 15)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_alive(pid)
+
+
+def _codex_daemon_socket_roots() -> tuple[Path, ...]:
+    if os.name == "nt":
+        return ()
+    uid = os.getuid()
+    roots = [Path("/tmp") / f"codex-daemon-{uid}"]
+    temp_root = Path(tempfile.gettempdir()) / f"codex-daemon-{uid}"
+    if temp_root not in roots:
+        roots.append(temp_root)
+    return tuple(roots)
+
+
+def _parse_daemon_socket_in_use(log_text: str) -> Path | None:
+    if os.name == "nt" or not log_text:
+        return None
+    match = _DAEMON_SOCKET_IN_USE_RE.search(log_text)
+    if match is None:
+        return None
+    raw_path = match.group(1).strip().rstrip(",;:")
+    candidate = Path(raw_path)
+    if candidate.parent not in _codex_daemon_socket_roots():
+        return None
+    try:
+        dir_stat = candidate.parent.lstat()
+        if (
+            stat.S_ISLNK(dir_stat.st_mode)
+            or not stat.S_ISDIR(dir_stat.st_mode)
+            or dir_stat.st_uid != os.getuid()
+        ):
+            return None
+        sock_stat = candidate.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(sock_stat.st_mode):
+        return None
+    return candidate
+
+
+def _unix_socket_accepting(socket_path: Path) -> bool:
+    if os.name == "nt":
+        return False
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.2)
+        probe.connect(str(socket_path))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _recover_stale_codex_daemon_socket(
+    log_text: str, *, prior_owner_pid: int
+) -> bool:
+    """Clear a stale ``/tmp/codex-daemon-<uid>`` socket after a crash."""
+    daemon_sock = _parse_daemon_socket_in_use(log_text)
+    if daemon_sock is None:
+        return False
+    if _unix_socket_accepting(daemon_sock):
+        if not _terminate_orphan_codex_process(prior_owner_pid):
+            return False
+        if _unix_socket_accepting(daemon_sock):
+            return False
+    try:
+        daemon_sock.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 class CodexRuntimeError(RuntimeError):
@@ -401,6 +552,9 @@ class _SharedCodexRuntime:
                 # A crashed App Server can leave its socket inode behind. The
                 # process-wide lock above prevents deleting a peer that is still
                 # in the middle of binding the same endpoint.
+                prior_owner_pid = _read_owner_pid(owner_path)
+                if prior_owner_pid > 0:
+                    _terminate_orphan_codex_process(prior_owner_pid)
                 try:
                     socket_path.unlink(missing_ok=True)
                     signature_path.unlink(missing_ok=True)
@@ -424,56 +578,73 @@ class _SharedCodexRuntime:
                 log_path = _app_server_log_path(codex_home)
                 log_path.touch(mode=0o600, exist_ok=True)
                 log_path.chmod(0o600)
-                with log_path.open("ab") as log_file:
-                    self._process = subprocess.Popen(
-                        command,
-                        cwd=codex_home,
-                        env=process_env,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=log_file,
-                    )
-                self._signature = signature
-                self._socket_path = socket_path
-                self._signature_path = signature_path
-                owner_path.write_text(
-                    json.dumps(
-                        {
-                            "pid": self._process.pid,
-                            "signature": signature_digest,
-                        },
-                        separators=(",", ":"),
-                    ),
-                    encoding="utf-8",
-                )
-                owner_path.chmod(0o600)
 
-                deadline = time.monotonic() + _START_TIMEOUT_SECONDS
-                while time.monotonic() < deadline:
-                    if self._socket_accepting(socket_path):
-                        signature_path.write_text(signature_digest, encoding="ascii")
-                        return socket_path
-                    if self._process.poll() is not None:
-                        self._process = None
-                        self._signature = None
-                        self._socket_path = None
-                        self._signature_path = None
-                        owner_path.unlink(missing_ok=True)
-                        detail = ""
-                        try:
-                            detail = log_path.read_text(
-                                encoding="utf-8", errors="replace"
-                            )[-2000:].strip()
-                        except OSError:
-                            pass
-                        raise RuntimeError(
-                            detail
-                            or "Codex App Server exited before its socket was ready"
+                for attempt in range(2):
+                    try:
+                        log_offset = log_path.stat().st_size
+                    except OSError:
+                        log_offset = 0
+                    with log_path.open("ab") as log_file:
+                        self._process = subprocess.Popen(
+                            command,
+                            cwd=codex_home,
+                            env=process_env,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=log_file,
                         )
-                    time.sleep(0.05)
+                    self._signature = signature
+                    self._socket_path = socket_path
+                    self._signature_path = signature_path
+                    owner_path.write_text(
+                        json.dumps(
+                            {
+                                "pid": self._process.pid,
+                                "signature": signature_digest,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        encoding="utf-8",
+                    )
+                    owner_path.chmod(0o600)
 
-                self.stop()
-                raise RuntimeError("Timed out waiting for the shared Codex App Server")
+                    deadline = time.monotonic() + _START_TIMEOUT_SECONDS
+                    exited_early = False
+                    while time.monotonic() < deadline:
+                        if self._socket_accepting(socket_path):
+                            signature_path.write_text(
+                                signature_digest, encoding="ascii"
+                            )
+                            return socket_path
+                        if self._process.poll() is not None:
+                            self._process = None
+                            self._signature = None
+                            self._socket_path = None
+                            self._signature_path = None
+                            owner_path.unlink(missing_ok=True)
+                            full_detail, detail = _read_launch_log_detail(
+                                log_path, log_offset
+                            )
+                            if (
+                                attempt == 0
+                                and _recover_stale_codex_daemon_socket(
+                                    full_detail, prior_owner_pid=prior_owner_pid
+                                )
+                            ):
+                                exited_early = True
+                                break
+                            raise RuntimeError(
+                                detail
+                                or "Codex App Server exited before its socket was ready"
+                            )
+                        time.sleep(0.05)
+
+                    if exited_early:
+                        continue
+                    self.stop()
+                    raise RuntimeError(
+                        "Timed out waiting for the shared Codex App Server"
+                    )
 
     def acquire(
         self,

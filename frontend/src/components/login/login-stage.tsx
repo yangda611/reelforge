@@ -3,22 +3,8 @@
 import { useTranslation } from "react-i18next";
 import { CommunityShowcase } from "./community-showcase";
 import LightRays from "./light-rays";
-import { GithubMark } from "@/components/platform-marks";
 import SplitText from "@/components/react-bits/split-text";
-import { useGithubStars } from "@/hooks/use-github-stars";
-import { PRODUCT_MANUAL_URL } from "@/lib/product-manual";
 import styles from "./login.module.css";
-
-// 登录页右上角 GitHub 链接目标。如需指向具体仓库/主页，改这里即可。
-const GITHUB_URL = "https://github.com/yangda611/reelforge";
-// 从 GITHUB_URL 推导出 owner/repo，用于拉取 star 数。
-const GITHUB_REPO = "yangda611/reelforge";
-
-function formatStars(count: number): string {
-  if (count < 1000) return String(count);
-  // 146.5k 形式：保留一位小数，整千去掉 .0。
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
 
 export function Brand({ className }: { className?: string }) {
   return (
@@ -39,7 +25,6 @@ export function LoginStageContent({
   onStart: () => void;
 }) {
   const { t } = useTranslation();
-  const stars = useGithubStars(GITHUB_REPO);
 
   return (
     <>
@@ -63,24 +48,6 @@ export function LoginStageContent({
       <div className={styles.stageInner}>
         <div className={styles.stageTopBar}>
           <Brand />
-          <div className={styles.stageActions}>
-            <a
-              className={styles.githubLink}
-              href={GITHUB_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="GitHub"
-              aria-label="GitHub"
-            >
-              <GithubMark />
-              <span className={styles.githubStarLabel}>
-                {t("auth.github.star")}
-              </span>
-              <span className={styles.githubStars} aria-live="polite">
-                {stars === null ? "—" : formatStars(stars)}
-              </span>
-            </a>
-          </div>
         </div>
 
         <div className={styles.hero}>
@@ -117,16 +84,6 @@ export function LoginStageContent({
             >
               {t("auth.stage.start")}
             </button>
-            <a
-              className={styles.heroSecondary}
-              href={PRODUCT_MANUAL_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={t("auth.openManual")}
-              aria-label={t("auth.openManual")}
-            >
-              {t("auth.learnMore")}
-            </a>
           </div>
         </div>
 

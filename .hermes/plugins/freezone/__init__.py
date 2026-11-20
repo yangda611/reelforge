@@ -13329,12 +13329,12 @@ TOOLS = (
         ),
         _handle_cancel_canvas_action,
     ),
-    # 单步写入工具：只用于用户明确要求 exactly one 的节点、连线、编辑或动作。
+    # 单步写入工具：只用于创建单个独立节点、连线、编辑或动作。
     (
         "freezone_create_node",
         _schema(
             "freezone_create_node",
-            "Single-operation tool only: create exactly one standalone Freezone canvas node when the user explicitly asks for one node. If the user asks to create these nodes, several nodes, a workflow, storyboard, prototype, framework, page, short-video plan, or any request with more than one canvas change, do not use this repeatedly; use one freezone_emit_canvas_command batch instead. For dynamic fields, inspect freezone_get_node_create_schema first.",
+            "Single-operation tool only: create exactly one standalone Freezone canvas node (including proactively landing one standalone creative text node). If the request produces multiple nodes, per-clip text cards, a workflow, storyboard, prototype, framework, page, short-video plan, or any request with more than one canvas change, do not use this repeatedly; use one freezone_emit_canvas_command batch instead. For dynamic fields, inspect freezone_get_node_create_schema first.",
             {
                 **_SCOPE_PROPS,
                 "node_type": _NODE_TYPE_SCHEMA,

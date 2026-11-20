@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 const modal = readFileSync("src/components/login/login-modal.tsx", "utf8");
 const media = readFileSync("src/components/login/cinematic/media.ts", "utf8");
-const stage = readFileSync("src/components/login/login-stage.tsx", "utf8");
 const css = readFileSync("src/components/login/login.module.css", "utf8");
 
 describe("login modal layout contract", () => {
@@ -62,12 +61,5 @@ describe("login modal layout contract", () => {
 
   it("removes the media panel on narrow mobile screens", () => {
     expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.loginMedia\s*\{\s*display: none;/);
-  });
-
-  it("reserves a stable GitHub star value slot before the API responds", () => {
-    expect(stage).toContain('stars === null ? "—" : formatStars(stars)');
-    expect(css).toMatch(/\.githubStars\s*\{[\s\S]*?flex:\s*0 0 4ch/);
-    expect(css).toMatch(/\.githubStars\s*\{[\s\S]*?font-variant-numeric:\s*tabular-nums/);
-    expect(css).toMatch(/\.githubStars\s*\{[\s\S]*?text-align:\s*right/);
   });
 });

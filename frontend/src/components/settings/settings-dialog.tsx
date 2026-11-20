@@ -12,7 +12,6 @@ import {
   Cpu,
   Eye,
   EyeOff,
-  ExternalLink,
   HardDrive,
   Loader2,
   Languages,
@@ -163,8 +162,6 @@ const MEDIA_STORAGE_PROVIDERS: MediaStorageProvider[] = [
 
 // Codex 本地桥接暂时隐藏（保留组件代码，后端就绪后改回 true 即可恢复）。
 const SHOW_CODEX_BRIDGE = false;
-const MODEL_CONFIGURATION_GUIDE_URL =
-  "https://github.com/yangda611/reelforge/blob/main/docs/en/getting-started/configuring-models.md";
 const COMFY_WORKFLOW_MANAGED_CONFIG_KEY = "_dcManagedByWorkflow";
 
 export function SettingsDialog({ open, onOpenChange, initialPage, account }: SettingsDialogProps) {
@@ -584,15 +581,6 @@ function ModelConfigSection({ open }: { open: boolean }) {
             })}
           </span>
         ) : null}
-        <a
-          href={MODEL_CONFIGURATION_GUIDE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {t("settings.modelConfig.guide")}
-          <ExternalLink className="size-3" aria-hidden />
-        </a>
       </div>
 
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">

@@ -1467,6 +1467,21 @@ def test_codex_freezone_write_request_detection_ignores_injected_context_and_que
         )
         is False
     )
+    assert chat_service._freezone_canvas_write_requested("每一个clip出一个文本节点") is True
+    assert chat_service._freezone_canvas_write_requested("每一个clip出一张图") is True
+    assert chat_service._freezone_canvas_write_requested("把剧本拆成几个文本节点") is True
+    assert chat_service._freezone_canvas_write_requested("基于这个节点衍生两个文本节点") is True
+    assert chat_service._freezone_canvas_write_requested("先别建节点，只聊聊思路") is False
+    assert chat_service._freezone_canvas_write_requested("出现节点报错怎么办") is False
+    assert chat_service._freezone_canvas_write_requested("输出节点列表看看") is False
+    assert (
+        chat_service._freezone_existing_execution_requested("基于当前节点继续出几个文本节点")
+        is False
+    )
+    assert (
+        chat_service._freezone_existing_execution_requested("把这个视频节点拆成几个clip")
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -6059,7 +6074,11 @@ def test_freezone_prompt_allows_creative_ideation_canvas_framework_without_mainl
     assert "matching single-operation write tool" in prompt
     assert "successful same-turn frontend write result" in prompt
     assert "Validate" in prompt
-    assert "batch only for several ordinary non-workflow" in prompt
+    assert "batch\n  for several ordinary non-workflow" in prompt
+    assert "Proactively land concrete creative deliverables on the canvas based on user intent" in (
+        chat_service._CODEX_FREEZONE_DEVELOPER_INSTRUCTIONS
+    )
+    assert "Proactively turn actionable creative ideas into working canvas material" in prompt
     assert "freezone_prepare_workflow_plan_draft once" in prompt
     assert "not a Workflow catalog `skill_id`" in prompt
     assert "Do not ask for a second “创建并运行” confirmation" in prompt

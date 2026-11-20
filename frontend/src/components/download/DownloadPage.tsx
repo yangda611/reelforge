@@ -5,19 +5,12 @@ import { Download, FolderDown, MonitorPlay, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import clsx from "clsx";
 import "@fontsource-variable/geist/wght.css";
-import { AppleMark, GithubMark, WindowsMark } from "@/components/platform-marks";
+import { AppleMark, WindowsMark } from "@/components/platform-marks";
 import { useDesktopRelease } from "@/hooks/use-desktop-release";
-import { useGithubStars } from "@/hooks/use-github-stars";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { detectDesktopPlatform, type DesktopPlatform } from "@/lib/desktop-download";
 import { DownloadCanvasPreview } from "./DownloadCanvasPreview";
 import styles from "./download.module.css";
-
-const GITHUB_URL = "https://github.com/yangda611/reelforge";
-const GITHUB_REPO = "yangda611/reelforge";
-const RELEASES_URL = "https://github.com/yangda611/reelforge/releases";
-const RELEASES_LATEST_URL = `${RELEASES_URL}/latest`;
-const FALLBACK_GITHUB_STARS = 574;
 
 /** 校准条在进入视口时推到的落点。纯观感取值,不代表任何进度。 */
 const STRIP_FILL = "38%";
@@ -47,20 +40,15 @@ const CHANGELOG = [
   { id: "v120", version: "1.2.0", date: "2026-07-31" },
 ] as const;
 
-/** FAQ 顺序即展示顺序;带 link 的条目会在答案末尾追加一个外链。 */
-const FAQ = [
+/** FAQ 顺序即展示顺序。 */
+const FAQ: ReadonlyArray<{ id: string; link?: string }> = [
   { id: "macGatekeeper" },
   { id: "winSmartScreen" },
   { id: "offline" },
-  { id: "update", link: RELEASES_URL },
+  { id: "update" },
   { id: "storage" },
-  { id: "openSource", link: GITHUB_URL },
-] as const;
-
-function formatStars(count: number): string {
-  if (count < 1000) return String(count);
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
+  { id: "openSource" },
+];
 
 /** 把 2026-08-07 显示成 08-07 —— 同年内日期,年份是噪音。 */
 function formatLogDate(iso: string): string {
@@ -129,7 +117,6 @@ function ChecksumRow({
 export function DownloadPage() {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
-  const stars = useGithubStars(GITHUB_REPO);
   const releases = useDesktopRelease();
 
   const pageRef = useRef<HTMLDivElement | null>(null);
@@ -212,10 +199,6 @@ export function DownloadPage() {
             <a href="#release">{t("downloadPage.nav.release")}</a>
             <a href="#faq">{t("downloadPage.nav.faq")}</a>
           </nav>
-          <a className={styles.star} href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
-            <GithubMark />
-            <span className={styles.mono}>{formatStars(stars ?? FALLBACK_GITHUB_STARS)}</span>
-          </a>
         </div>
       </header>
 
@@ -293,11 +276,7 @@ export function DownloadPage() {
               </div>
 
               <p className={clsx(styles.heroNote, styles.rise)} data-reveal="">
-                {t("downloadPage.hero.note")}{" "}
-                {t("downloadPage.hero.history")}{" "}
-                <a href={RELEASES_LATEST_URL} target="_blank" rel="noopener noreferrer">
-                  GitHub Releases
-                </a>
+                {t("downloadPage.hero.note")}
               </p>
             </div>
           </div>
@@ -451,9 +430,6 @@ export function DownloadPage() {
               ReelForge
             </span>
             <nav className={styles.footerLinks}>
-              <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
-                GitHub
-              </a>
               <a href="#capability">{t("downloadPage.nav.capability")}</a>
               <a href="#release">{t("downloadPage.nav.release")}</a>
               <a href="#faq">{t("downloadPage.nav.faq")}</a>

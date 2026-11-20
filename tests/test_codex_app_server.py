@@ -1960,3 +1960,152 @@ async def test_codex_stream_enforces_total_deadline_despite_continuous_progress(
     assert events[-2].disposition == "timeout"
     assert events[-1].type == "complete"
     assert events[-1].disposition == "timeout"
+
+
+def test_read_launch_log_detail_ignores_stale_history_and_cuts_at_line_boundary(tmp_path):
+    log_path = tmp_path / "app-server.log"
+    old_entry = "2026-11-12T04:04:13Z ERROR codex_app_server: bubblewrap old failure\n"
+    log_path.write_text(old_entry, encoding="utf-8")
+    start_offset = log_path.stat().st_size
+
+    new_lines = [
+        "\x1b[2m2026-11-20T11:55:00Z\x1b[0m \x1b[31mERROR\x1b[0m codex_app_server: first line of new launch",
+        "Error: app-server control socket is already in use at /tmp/codex-daemon-0/e855abc",
+    ]
+    with log_path.open("ab") as handle:
+        handle.write(("\n".join(new_lines) + "\n").encode("utf-8"))
+
+    full_text, tail = codex_app_server._read_launch_log_detail(
+        log_path, start_offset, max_chars=95
+    )
+
+    assert "2026-11-12" not in full_text
+    assert "bubblewrap old failure" not in full_text
+    assert "\x1b[" not in full_text
+    assert "Error: app-server control socket is already in use" in full_text
+    assert tail == new_lines[-1]
+
+
+def test_ensure_reports_only_current_launch_log_and_retries_after_stale_daemon_recovery(
+    monkeypatch, tmp_path
+):
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    codex_home = tmp_path / "state" / ".codex-app-server"
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("", encoding="utf-8")
+    runtime_root = tmp_path / "runtime"
+    monkeypatch.setenv("NOVELVIDEO_RUNTIME_DIR", str(runtime_root))
+    monkeypatch.setattr(codex_app_server, "_control_dir", lambda: control_dir)
+    monkeypatch.setattr(codex_app_server, "_sanitize_legacy_turn_metadata", lambda _p: 0)
+
+    log_path = codex_app_server._app_server_log_path(codex_home)
+    log_path.write_text(
+        "2026-11-12T04:04:13Z ERROR codex_app_server: Codex's Linux sandbox uses bubblewrap\n",
+        encoding="utf-8",
+    )
+
+    runtime = codex_app_server._SharedCodexRuntime()
+    attempts = 0
+    recovered_logs: list[str] = []
+
+    class FakeProc:
+        def __init__(self, pid: int, exit_code: int | None) -> None:
+            self.pid = pid
+            self._exit_code = exit_code
+
+        def poll(self):
+            return self._exit_code
+
+    def fake_popen(_command, *, stderr, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            stderr.write(
+                b"Error: app-server control socket is already in use at /tmp/codex-daemon-0/e855dead\n"
+            )
+            stderr.flush()
+            return FakeProc(101, 1)
+        return FakeProc(102, None)
+
+    monkeypatch.setattr(codex_app_server.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        codex_app_server,
+        "_recover_stale_codex_daemon_socket",
+        lambda log_text, *, prior_owner_pid: (
+            recovered_logs.append(log_text) or True
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_socket_accepting",
+        lambda _path: attempts >= 2,
+    )
+
+    socket_path = runtime.ensure(
+        codex_bin=codex_bin,
+        codex_home=codex_home,
+        env={},
+        config_overrides=(),
+    )
+
+    assert attempts == 2
+    assert socket_path == codex_app_server._control_paths(codex_home)[0]
+    assert len(recovered_logs) == 1
+    assert "2026-11-12" not in recovered_logs[0]
+    assert "/tmp/codex-daemon-0/e855dead" in recovered_logs[0]
+
+    # When recovery cannot clear the conflict, only current-attempt logs are surfaced.
+    attempts = 0
+    monkeypatch.setattr(
+        codex_app_server,
+        "_recover_stale_codex_daemon_socket",
+        lambda *_args, **_kwargs: False,
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        runtime.ensure(
+            codex_bin=codex_bin,
+            codex_home=codex_home,
+            env={},
+            config_overrides=(),
+        )
+    message = str(exc_info.value)
+    assert "2026-11-12" not in message
+    assert "bubblewrap" not in message
+    assert "app-server control socket is already in use" in message
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX daemon socket path checks")
+def test_recover_stale_codex_daemon_socket_rejects_outside_paths_and_unlinks_dead_socket(
+    monkeypatch, tmp_path
+):
+    daemon_root = tmp_path / f"codex-daemon-{os.getuid()}"
+    daemon_root.mkdir(mode=0o700)
+    stale_sock = daemon_root / "e855stale"
+    stale_sock.touch()
+
+    outside_file = tmp_path / "other" / "keep-me"
+    outside_file.parent.mkdir()
+    outside_file.touch()
+
+    monkeypatch.setattr(
+        codex_app_server, "_codex_daemon_socket_roots", lambda: (daemon_root,)
+    )
+
+    assert (
+        codex_app_server._recover_stale_codex_daemon_socket(
+            f"Error: app-server control socket is already in use at {outside_file}",
+            prior_owner_pid=0,
+        )
+        is False
+    )
+    assert outside_file.exists()
+
+    assert (
+        codex_app_server._recover_stale_codex_daemon_socket(
+            f"Error: app-server control socket is already in use at {stale_sock}",
+            prior_owner_pid=0,
+        )
+        is True
+    )
+    assert not stale_sock.exists()

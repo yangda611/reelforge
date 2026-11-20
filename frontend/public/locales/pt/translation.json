@@ -440,7 +440,7 @@
         },
         "update": {
           "question": "Como faço para atualizar?",
-          "answer": "Não precisa. A aplicação verifica na inicialização, descarrega novas versões em segundo plano e aplica-as na próxima vez que for iniciada. Para instalar uma versão específica manualmente, consulte",
+          "answer": "Não precisa. A aplicação verifica na inicialização, descarrega novas versões em segundo plano e aplica-as na próxima vez que for iniciada.",
           "linkLabel": "GitHub Releases"
         },
         "storage": {
@@ -449,8 +449,8 @@
         },
         "openSource": {
           "question": "É código aberto?",
-          "answer": "Está licenciado ao abrigo da Elastic-2.0: pode utilizá-lo, modificá-lo e alojá-lo por conta própria livremente, mas não pode revendê-lo como um serviço alojado. O código-fonte encontra-se em",
-          "linkLabel": "github.com/yangda611/reelforge"
+          "answer": "Está licenciado ao abrigo da Elastic-2.0: pode utilizá-lo, modificá-lo e alojá-lo por conta própria livremente, mas não pode revendê-lo como um serviço alojado.",
+          "linkLabel": "GitHub"
         }
       }
     },

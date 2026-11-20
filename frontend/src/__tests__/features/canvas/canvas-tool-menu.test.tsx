@@ -11,8 +11,6 @@ const translations: Record<string, string> = {
   "canvas.quickbar.addNode": "添加节点",
   "canvas.quickbar.history": "历史资产",
   "canvas.quickbar.shortcuts": "快捷键",
-  "canvas.quickbar.help": "帮助",
-  "canvas.quickbar.viewManual": "查看手册",
   "canvas.toolbar.toolMove": "移动",
   "canvas.toolbar.toolHand": "抓手工具",
   "canvas.toolbar.toolGroupLabel": "画布指针工具",
@@ -99,5 +97,12 @@ describe("画布底部工具栏 — 移动 / 抓手工具", () => {
 
     expect(screen.getByText("抓手工具 H")).toBeInTheDocument();
     expect(screen.queryByText("移动 V")).not.toBeInTheDocument();
+  });
+
+  it("不渲染指向外部使用手册的帮助按钮", () => {
+    renderBar();
+
+    expect(screen.queryByRole("button", { name: "帮助" })).not.toBeInTheDocument();
+    expect(screen.queryByText("查看使用手册")).not.toBeInTheDocument();
   });
 });

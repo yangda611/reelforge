@@ -440,7 +440,7 @@
         },
         "update": {
           "question": "How do I upgrade?",
-          "answer": "You don't have to. The app checks on launch, downloads new versions in the background and applies them next time it starts. To install a specific version by hand, see",
+          "answer": "You don't have to. The app checks on launch, downloads new versions in the background and applies them next time it starts.",
           "linkLabel": "GitHub Releases"
         },
         "storage": {
@@ -449,8 +449,8 @@
         },
         "openSource": {
           "question": "Is it open source?",
-          "answer": "It is licensed under Elastic-2.0: use, modify and self-host freely, but don't resell it as a hosted service. The source lives at",
-          "linkLabel": "github.com/yangda611/reelforge"
+          "answer": "It is licensed under Elastic-2.0: use, modify and self-host freely, but don't resell it as a hosted service.",
+          "linkLabel": "GitHub"
         }
       }
     },

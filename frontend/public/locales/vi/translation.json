@@ -419,7 +419,7 @@
         },
         "update": {
           "question": "Nâng cấp thế nào?",
-          "answer": "Bạn không cần làm gì. App kiểm tra khi mở, tải bản mới ngầm và áp dụng ở lần khởi động kế tiếp. Nếu muốn tự cài một phiên bản cụ thể, xem",
+          "answer": "Bạn không cần làm gì. App kiểm tra khi mở, tải bản mới ngầm và áp dụng ở lần khởi động kế tiếp.",
           "linkLabel": "GitHub Releases"
         },
         "storage": {
@@ -428,8 +428,8 @@
         },
         "openSource": {
           "question": "Đây có phải mã nguồn mở không?",
-          "answer": "App dùng giấy phép Elastic-2.0: bạn được tự do sử dụng, sửa đổi và tự dựng máy chủ riêng, nhưng không được bán lại dưới dạng dịch vụ lưu trữ. Mã nguồn ở",
-          "linkLabel": "github.com/yangda611/reelforge"
+          "answer": "App dùng giấy phép Elastic-2.0: bạn được tự do sử dụng, sửa đổi và tự dựng máy chủ riêng, nhưng không được bán lại dưới dạng dịch vụ lưu trữ.",
+          "linkLabel": "GitHub"
         }
       }
     },

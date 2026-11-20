@@ -447,7 +447,7 @@
         },
         "update": {
           "question": "怎么升级到新版本？",
-          "answer": "不用管。客户端启动时会检查更新，新版本在后台下载完成后，下次启动自动生效。想手动装某个特定版本，见",
+          "answer": "不用管。客户端启动时会检查更新，新版本在后台下载完成后，下次启动自动生效。",
           "linkLabel": "GitHub Releases"
         },
         "storage": {
@@ -456,8 +456,8 @@
         },
         "openSource": {
           "question": "是开源的吗？",
-          "answer": "采用 Elastic-2.0 授权：可以自由使用、修改和自行部署，不可作为托管服务对外转售。源码在",
-          "linkLabel": "github.com/yangda611/reelforge"
+          "answer": "采用 Elastic-2.0 授权：可以自由使用、修改和自行部署，不可作为托管服务对外转售。",
+          "linkLabel": "GitHub"
         }
       }
     },
