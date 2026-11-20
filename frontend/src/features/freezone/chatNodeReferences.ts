@@ -2221,11 +2221,43 @@ export async function buildCanvasContextRequestResponse(params: {
 
 const NODE_REFERENCE_TEXT_PREVIEW_LIMIT = 240;
 
-function compactTextPreview(value: string | null | undefined): string | null {
+/**
+ * 显式读取 node_detail 时的正文上限。
+ *
+ * 240 字的预览对「这是哪个节点」够用，对「按这份剧本拆 clip」完全不够——agent
+ * 只能看到开头，只能回「剧本被截断了，无法核对完整情节」，然后什么都不做。
+ * node_detail 是 agent 为了干活而主动发起的读取，这一档必须给出可工作的正文。
+ *
+ * 仍然设上限：画布上可能挂着几万字的设定稿，一次性塞进上下文既贵也会挤掉别的证据。
+ * 64k 字符约等于 2 万汉字，覆盖单集剧本绰绰有余；超过时明确标记 truncated，
+ * 让模型知道该分段要而不是假装读全了。
+ */
+const NODE_DETAIL_TEXT_LIMIT = 64_000;
+
+function compactTextPreview(
+  value: string | null | undefined,
+  limit: number = NODE_REFERENCE_TEXT_PREVIEW_LIMIT,
+): string | null {
   if (!value) return null;
   const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= NODE_REFERENCE_TEXT_PREVIEW_LIMIT) return normalized;
-  return `${normalized.slice(0, NODE_REFERENCE_TEXT_PREVIEW_LIMIT)}...`;
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit)}...`;
+}
+
+/** 正文原样返回（只压空白），用于 node_detail 这类显式读取。 */
+function fullTextForDetail(value: string | null | undefined): {
+  text: string | null;
+  truncated: boolean;
+} {
+  if (!value) return { text: null, truncated: false };
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= NODE_DETAIL_TEXT_LIMIT) {
+    return { text: normalized, truncated: false };
+  }
+  return {
+    text: normalized.slice(0, NODE_DETAIL_TEXT_LIMIT),
+    truncated: true,
+  };
 }
 
 function compactActionSummary(
@@ -2268,12 +2300,16 @@ function fallbackParameterValue(
   return undefined;
 }
 
-function compactParameterCurrentValue(value: unknown): unknown {
-  return typeof value === "string" ? compactTextPreview(value) : value;
+function compactParameterCurrentValue(
+  value: unknown,
+  limit?: number,
+): unknown {
+  return typeof value === "string" ? compactTextPreview(value, limit) : value;
 }
 
 function compactEditableParameters(
   node: CanvasNodeReferenceItem,
+  textLimit?: number,
 ): Record<string, unknown> | null {
   const schema = recordOrNull(node.action_catalog.editable_schema);
   if (!schema) return null;
@@ -2288,12 +2324,16 @@ function compactEditableParameters(
     if ("current_value" in parameter) {
       parameter.current_value = compactParameterCurrentValue(
         parameter.current_value,
+        textLimit,
       );
     }
     if (!("current_value" in parameter)) {
       const fallbackValue = fallbackParameterValue(node, field);
       if (fallbackValue !== undefined)
-        parameter.current_value = compactParameterCurrentValue(fallbackValue);
+        parameter.current_value = compactParameterCurrentValue(
+          fallbackValue,
+          textLimit,
+        );
     }
     parameters[field] = parameter;
   }
@@ -2355,8 +2395,14 @@ function compactNodeDetailItem(
   if (node.workflow_identity)
     item.workflow_identity = node.workflow_identity;
   if (node.text_field) item.text_field = node.text_field;
-  const textPreview = compactTextPreview(node.text_content);
-  if (textPreview) item.text_preview = textPreview;
+  // node_detail 是 agent 为了干活主动发起的读取（拆剧本、改写提示词、核对台词），
+  // 240 字预览在这里是硬伤：它只能看到开头，只能回答「剧本被截断了」然后不做事。
+  // 所以这一档给完整正文，只在超过上限时截断并显式标记。
+  const detailText = fullTextForDetail(node.text_content);
+  if (detailText.text) {
+    item.text_content = detailText.text;
+    if (detailText.truncated) item.text_truncated = true;
+  }
   if (node.media_type) item.media_type = node.media_type;
   if (node.source_url) item.source_url = node.source_url;
   if (node.preview_url) item.preview_url = node.preview_url;
@@ -2366,7 +2412,8 @@ function compactNodeDetailItem(
   if (node.candidate_origin) item.candidate_origin = node.candidate_origin;
   if (referenceMedia && referenceMedia.length > 0)
     item.reference_media = referenceMedia;
-  const parameters = compactEditableParameters(node);
+  // 可编辑参数的 current_value 同样放宽：剧本节点的 prompt/content 就是正文本身。
+  const parameters = compactEditableParameters(node, NODE_DETAIL_TEXT_LIMIT);
   if (parameters) item.parameters = parameters;
   const actionSummary = compactActionSummary(node.action_catalog);
   if (actionSummary) item.action_summary = actionSummary;
@@ -2405,7 +2452,7 @@ function buildCompactCanvasNodeDetailPayload(
     }),
     edges: Array.isArray(payload.edges) ? payload.edges : [],
     instruction:
-      "This is compact node detail. workflow_identity means the node belongs to a persisted workflow; a one-node workflow is still a workflow and run/continue/resume must use freezone_run_workflow, never freezone_run_node_action. Use node.parameters only for editable node data fields, current values, and enum options. Node parameters are not toolbar/action/tool parameters. If the user asks about an action or panel such as HD/upscale, crop, matting, split, lighting, rotate, or download, call freezone_get_node_action_catalog with node_id and action before answering. If a node includes reference_media, use mention values such as @图片1 in prompt edits; numbering matches the node's top reference thumbnails from left to right. For a group child that needs inspection, call freezone_get_node_detail with that child node_id.",
+      "This is node detail. `text_content` is the COMPLETE node body (script, prompt, annotation, or transcript); read it in full before planning, and never claim the text is truncated unless `text_truncated` is true. workflow_identity means the node belongs to a persisted workflow; a one-node workflow is still a workflow and run/continue/resume must use freezone_run_workflow, never freezone_run_node_action. Use node.parameters only for editable node data fields, current values, and enum options. Node parameters are not toolbar/action/tool parameters. If the user asks about an action or panel such as HD/upscale, crop, matting, split, lighting, rotate, or download, call freezone_get_node_action_catalog with node_id and action before answering. If a node includes reference_media, use mention values such as @图片1 in prompt edits; numbering matches the node's top reference thumbnails from left to right. For a group child that needs inspection, call freezone_get_node_detail with that child node_id.",
   };
 }
 

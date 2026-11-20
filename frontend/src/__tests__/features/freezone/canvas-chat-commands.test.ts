@@ -4593,8 +4593,9 @@ describe("canvas chat commands", () => {
       current_value: "A city at dusk",
     });
     expect(nodeDetail?.data?.nodes?.[0]?.action_catalog).toBeUndefined();
-    expect(nodeDetail?.data?.nodes?.[0]?.text_content).toBeUndefined();
-    expect(nodeDetail?.data?.nodes?.[0]?.text_preview).toBe("A city at dusk");
+    // node_detail 返回完整正文（不再截成 240 字预览），短文本时两者内容一致。
+    expect(nodeDetail?.data?.nodes?.[0]?.text_content).toBe("A city at dusk");
+    expect(nodeDetail?.data?.nodes?.[0]?.text_preview).toBeUndefined();
     expect(nodeDetail?.data?.instruction).toContain(
       "Node parameters are not toolbar/action/tool parameters",
     );
@@ -5335,17 +5336,16 @@ describe("canvas chat commands", () => {
     expect(detailNodes.some((node) => Boolean(node.action_catalog))).toBe(
       false,
     );
-    expect(detailNodes.some((node) => Boolean(node.text_content))).toBe(false);
-    expect(imageDetail?.text_preview).toContain("系统生成提示词");
-    expect(imageDetail?.parameters?.prompt?.current_value).toBe(
-      imageDetail?.text_preview,
-    );
+    // node_detail 必须给出完整正文：agent 要按这份文本拆镜头，240 字预览会让它
+    // 只能回答「剧本被截断了」。紧凑引用列表（text_preview）仍保持短，但这里不行。
+    expect(imageDetail?.text_content).toBe(longPrompt);
+    expect(imageDetail?.parameters?.prompt?.current_value).toBe(longPrompt);
     expect(imageDetail?.workflow_identity).toEqual({
       instance_id: "workflow-detail",
       plan_node_id: "image-detail",
       config_confirmed: true,
     });
-    expect(response).not.toContain(longPrompt);
+    expect(response).toContain(longPrompt);
     expect(nodeDetail?.data).not.toHaveProperty("display_nodes");
   });
 

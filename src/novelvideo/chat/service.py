@@ -2032,6 +2032,42 @@ def _freezone_skill_studio_context(username: str, prompt: str | None) -> str:
     )
 
 
+def _freezone_workflow_skill_selection_block(item: dict) -> str:
+    """用户从输入框显式选中一个 Workflow Skill 时的注入块。
+
+    只做一件事：把「技能已被选中」这个事实告诉模型，并给出唯一正确的下一步
+    （调一次 ``freezone_get_workflow_skill``）。技能正文由那个工具返回，不在这里
+    复制——这里复制一份就会和技能自身的版本漂移。
+
+    刻意不提 ``skill_view``：Freezone profile 的 enabled_toolsets 里没有 ``skills``
+    工具集，那个工具本来就不存在；写进提示只会诱导模型去调一个不存在的工具，
+    然后卡在原地（线上就是这么表现的）。
+    """
+    skill_id = str(item.get("id") or "").strip()
+    display_name = str(
+        item.get("name")
+        or item.get("display_name")
+        or item.get("displayName")
+        or item.get("title")
+        or skill_id
+    ).strip()
+    description = str(item.get("description") or "").strip()
+    lines = [
+        "\n\n[FREEZONE_WORKFLOW_SKILL_SELECTED]",
+        f"The user explicitly selected Workflow Skill `{skill_id}` (`{display_name}`).",
+        "Do NOT re-route by semantics and do NOT ask which skill to use — the selection is already made.",
+        f'Load it now with `freezone_get_workflow_skill(skill_id="{skill_id}")`, exactly once, and follow '
+        "the returned workflow skill package verbatim.",
+        "Do not call `skill_view` or `skills_list`: those tools are not enabled in this workspace.",
+        "If the skill needs node text (script, storyboard, prompt), read it with "
+        "`freezone_get_node_detail` — that response contains the complete `text_content`.",
+    ]
+    if description:
+        lines.append(f"Skill description: {description}")
+    lines.append("[/FREEZONE_WORKFLOW_SKILL_SELECTED]")
+    return "\n".join(lines)
+
+
 def _freezone_native_skill_context(username: str, prompt: str | None) -> str:
     prompt_text = str(prompt or "")
     if "/" not in prompt_text or not str(username or "").strip():
@@ -2048,18 +2084,39 @@ def _freezone_native_skill_context(username: str, prompt: str | None) -> str:
             if item.get("enabled") is not False and str(item.get("id") or "").strip()
         }
     except Exception:
-        return ""
-    if not native_skills:
+        native_skills = {}
+    # Workflow Skill 走另一套存储（agent_config_store 的 skills），不是 native
+    # markdown。以前这里只查 native，于是用户从输入框选了 Workflow Skill 之后
+    # 后端什么都不注入：模型只知道用户发了字面量 `/yd-cinematic-storyboard`，
+    # 既不知道那是被选中的技能，也没有理由去调 freezone_get_workflow_skill，
+    # 最后只能回一句「我这里没有 skill_view 工具」然后不干活。
+    workflow_skills: dict[str, dict] = {}
+    try:
+        from novelvideo.chat.hermes_workspace import _freezone_workflow_skill_items
+
+        workflow_skills = {
+            str(item["id"]): item
+            for item in _freezone_workflow_skill_items(username)
+            if str(item.get("id") or "").strip()
+        }
+    except Exception:
+        workflow_skills = {}
+    if not native_skills and not workflow_skills:
         return ""
     matched_ids: list[str] = []
     for match in re.finditer(r"(?:^|\s)/([a-z0-9][a-z0-9_-]{0,127})(?=$|\s)", prompt_text):
         skill_id = match.group(1)
-        if skill_id in native_skills and skill_id not in matched_ids:
+        if skill_id not in native_skills and skill_id not in workflow_skills:
+            continue
+        if skill_id not in matched_ids:
             matched_ids.append(skill_id)
     if not matched_ids:
         return ""
     blocks = []
     for skill_id in matched_ids:
+        if skill_id in workflow_skills:
+            blocks.append(_freezone_workflow_skill_selection_block(workflow_skills[skill_id]))
+            continue
         item = native_skills[skill_id]
         name = str(item.get("name") or skill_id)
         try:

@@ -42,3 +42,6 @@ docs/.obsidian/
 
 # Playwright 冒烟测试的产物
 /e2e/test-results/
+
+# 画布压测用的临时大图（本机生成，勿提交）
+public/static/__perf/

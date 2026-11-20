@@ -132,6 +132,77 @@ def test_chat_service_injects_native_skill_instruction_only_when_mentioned(tmp_p
     assert 'freezone_read_native_skill_file(skill_id="yd-storyboard"' in hint
 
 
+def test_chat_service_injects_workflow_skill_selection_for_slash_mention(tmp_path, monkeypatch):
+    """用户从输入框选中 Workflow Skill（不是 native markdown）时也必须注入指令。
+
+    线上症状：chip 只序列化成字面量 ``/yd-cinematic-storyboard``，后端只查 native
+    markdown 技能表，匹配不上就注入空字符串；模型既不知道技能已被选中，也没有
+    理由调 ``freezone_get_workflow_skill``，最后回「我这里没有 skill_view 工具」
+    然后什么都不做。这里把 Workflow Skill 的命中与注入钉住。
+    """
+    from novelvideo.chat import service as chat_service
+
+    monkeypatch.setattr(agent_config_store, "OUTPUT_DIR", tmp_path)
+    agent_config_store.save_user_agent_config_item(
+        username="alice",
+        kind="recipes",
+        payload={
+            "schema_version": "dramaclaw.recipe.v1",
+            "id": "yd-recipe",
+            "name": "YD Recipe",
+            "version": "1.0.0",
+            "output_kind": "text",
+            "action_keys": ["yd-recipe"],
+            "system_prompt": "prompt",
+            "planning_prompt": "planning",
+            "result_summary": "result",
+        },
+    )
+    agent_config_store.save_user_agent_config_item(
+        username="alice",
+        kind="skills",
+        payload={
+            "schema_version": "dramaclaw.workflow-skill.v1",
+            "id": "yd-cinematic-storyboard",
+            "name": "YD分镜skills",
+            "version": "1.0.0",
+            "enabled": True,
+            "description": "把剧本拆成多个 clip",
+            "category": "storyboard",
+            "triggers": {"keywords": ["分镜"], "node_scopes": ["textGeneration"]},
+            "allowed_recipe_ids": ["yd-recipe"],
+            "planning": {
+                "planning_notes": "根据用户目标动态规划。",
+                "prompt_guide": "",
+                "conduct_rules": ["仅创建本次计划需要的节点。"],
+            },
+            "evaluation": {
+                "rating_bands": [{"score": 10, "description": "结果完整可用"}],
+                "quality_threshold": 7,
+                "domain_constraints": ["遵循用户目标"],
+            },
+        },
+    )
+
+    # 没提到技能：不注入，避免日常对话被技能规则污染。
+    assert chat_service._freezone_native_skill_context("alice", "普通分镜需求") == ""
+
+    hint = chat_service._freezone_native_skill_context(
+        "alice", "/yd-cinematic-storyboard 使用这个skills将这个剧本拆成多个clip"
+    )
+    assert "[FREEZONE_WORKFLOW_SKILL_SELECTED]" in hint
+    assert "yd-cinematic-storyboard" in hint
+    assert 'freezone_get_workflow_skill(skill_id="yd-cinematic-storyboard")' in hint
+    # 明确告诉模型别再去找 skill_view（那个工具在本 profile 里不存在）。
+    assert "Do not call `skill_view` or `skills_list`" in hint
+    assert "Do NOT re-route" in hint
+    # 技能正文由工具返回，不在注入块里复制（避免与技能自身版本漂移）。
+    assert "# YD分镜skills" not in hint
+
+    # 未知 id 不应误命中。
+    assert chat_service._freezone_native_skill_context("alice", "/not-a-skill 做点事") == ""
+
+
 @pytest.mark.asyncio
 async def test_api_native_submit(tmp_path, monkeypatch):
     from novelvideo.api.routes import freezone as freezone_routes
