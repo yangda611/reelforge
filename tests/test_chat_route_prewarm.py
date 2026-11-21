@@ -158,47 +158,30 @@ async def test_codex_cancel_without_turn_identity_fails_closed_and_keeps_lock(
 
 
 @pytest.mark.anyio
-async def test_hermes_cancel_recovers_stranded_home_lock(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_hermes_cancel_keeps_owned_chat_lease(
+    monkeypatch, tmp_path, close_fails
+) -> None:
     from novelvideo.chat import hermes_pool
     from novelvideo.chat import service as chat_service
 
     class IdleHermesPool:
         async def close_user(self, _username):
+            if close_fails:
+                raise RuntimeError("worker registry unavailable")
             return False
 
     monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
     monkeypatch.setattr(hermes_pool, "pool", IdleHermesPool())
-    chat_service._acquire_chat_run_lock("alice", "")
+    lease = chat_service._acquire_chat_run_lock("alice", "")
+    try:
+        result = await chat_route.cancel_chat_turn({"username": "alice"})
 
-    result = await chat_route.cancel_chat_turn({"username": "alice"})
-
-    assert result == {"ok": True, "data": {"cancelled": False}}
-    next_lock = chat_service._acquire_chat_run_lock("alice", "")
-    chat_service._release_chat_run_lock("alice", "", next_lock)
-
-
-@pytest.mark.anyio
-async def test_hermes_cancel_error_recovers_stranded_home_lock(
-    monkeypatch, tmp_path
-) -> None:
-    from novelvideo.chat import hermes_pool
-    from novelvideo.chat import service as chat_service
-
-    class FailingHermesPool:
-        async def close_user(self, _username):
-            raise RuntimeError("worker registry unavailable")
-
-    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
-    monkeypatch.setattr(hermes_pool, "pool", FailingHermesPool())
-    chat_service._acquire_chat_run_lock("alice", "")
-
-    result = await chat_route.cancel_chat_turn({"username": "alice"})
-
-    assert result == {"ok": True, "data": {"cancelled": False}}
-    next_lock = chat_service._acquire_chat_run_lock("alice", "")
-    chat_service._release_chat_run_lock("alice", "", next_lock)
+        assert result == {"ok": True, "data": {"cancelled": False}}
+        assert chat_service._heartbeat_chat_run_lock("alice", "", lease)
+    finally:
+        chat_service._release_chat_run_lock("alice", "", lease)
 
 
 @pytest.mark.anyio

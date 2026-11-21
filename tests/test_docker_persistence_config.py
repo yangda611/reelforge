@@ -145,10 +145,7 @@ def test_source_file_extends_release_and_builds_all_three() -> None:
     services = source["services"]
     assert set(services) == {"api", "newapi", "web"}
     for name, service in services.items():
-        expected_keys = {"extends", "image", "build"} | (
-            {"environment"} if name == "api" else set()
-        )
-        assert set(service) == expected_keys, f"{name} keys: {set(service)}"
+        assert set(service) == {"extends", "image", "build"}, f"{name} keys: {set(service)}"
         assert service["extends"] == {"file": RELEASE_FILE, "service": name}
 
     assert services["api"]["image"] == "dramaclaw-local/api"
@@ -186,9 +183,11 @@ def test_source_file_never_mentions_release_versions() -> None:
 def test_compose_runtime_matches_the_selected_image() -> None:
     source = _api(SOURCE_FILE)["environment"]
     release = _api(RELEASE_FILE)["environment"]
-    assert source["DRAMACLAW_CHAT_BACKEND"] == "${DRAMACLAW_CHAT_BACKEND:-codex}"
+    assert source["DRAMACLAW_CHAT_BACKEND"] == release["DRAMACLAW_CHAT_BACKEND"]
     assert source["HERMES_CLI_PATH"] == "/usr/local/bin/hermes"
-    assert release["DRAMACLAW_CHAT_BACKEND"] == "${DRAMACLAW_CHAT_BACKEND:-codex}"
+    assert release["DRAMACLAW_CHAT_BACKEND"] == (
+        "${DRAMACLAW_CHAT_BACKEND:-${SUPERTALE_CHAT_BACKEND:-hermes}}"
+    )
     assert release["HERMES_CLI_PATH"] == "/usr/local/bin/hermes"
 
 

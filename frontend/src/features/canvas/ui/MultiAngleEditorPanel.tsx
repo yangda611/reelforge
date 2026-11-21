@@ -119,6 +119,8 @@ export interface MultiAngleSubmitPayload {
   zoom: MultiAngleZoomLevel;
   promptOverride: string | null;
   apiModel: string;
+  catalogId?: string;
+  quality?: string;
   providerId: MultiAngleProviderId;
   imageSize: MultiAngleImageSize;
 }
@@ -424,10 +426,8 @@ export function MultiAngleEditorPanel({ imageSource, onClose, onSubmit }: MultiA
     () => resolveModelSizeOptions(selectedModel),
     [selectedModel],
   );
-  const qualityOptions = useMemo(
-    () => resolveModelQualityOptions(selectedModel),
-    [selectedModel],
-  );
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
   const effectiveImageSize = pickAllowedOption(imageSize, sizeOptions);
   const creditCost = useGenerationCreditCost(
     'feature',
@@ -436,9 +436,7 @@ export function MultiAngleEditorPanel({ imageSource, onClose, onSubmit }: MultiA
       surface: 'canvas',
       params: buildImageFeatureBillingParams(selectedModel, {
         size: effectiveImageSize,
-        ...(qualityOptions.length > 0
-          ? { quality: pickAllowedOption('medium', qualityOptions) }
-          : {}),
+        ...(quality ? { quality } : {}),
         operation: 'multi_view',
       }),
     },
@@ -567,6 +565,8 @@ export function MultiAngleEditorPanel({ imageSource, onClose, onSubmit }: MultiA
       zoom,
       promptOverride: promptOverrideEnabled && promptOverride.trim() ? promptOverride.trim() : null,
       apiModel: selectedModel.apiModel,
+      ...(selectedModel.catalogId ? { catalogId: selectedModel.catalogId } : {}),
+      ...(quality ? { quality } : {}),
       providerId: selectedModel.providerId,
       imageSize: effectiveImageSize,
     });
@@ -585,6 +585,7 @@ export function MultiAngleEditorPanel({ imageSource, onClose, onSubmit }: MultiA
     zoom,
     zoomLabel,
     selectedModel,
+    quality,
   ]);
 
   return (

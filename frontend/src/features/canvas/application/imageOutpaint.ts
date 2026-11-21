@@ -59,6 +59,8 @@ export function outpaintImage(
     imageSize: string;
     numImages: number;
     model: string;
+    catalogId?: string;
+    quality?: string;
   },
 ): OutpaintImageResult | null {
   const project = readUrl().project;
@@ -120,6 +122,8 @@ export function outpaintImage(
         targetAspectRatio: opts.targetAspectRatio,
         imageSize: opts.imageSize,
         model: opts.model,
+        ...(opts.catalogId ? { catalogId: opts.catalogId } : {}),
+        ...(opts.quality ? { quality: opts.quality } : {}),
       }),
     ),
   ).then(() => undefined);
@@ -136,6 +140,8 @@ async function runOutpaintGeneration(
     targetAspectRatio: FreezoneOutpaintAspectRatio;
     imageSize: string;
     model: string;
+    catalogId?: string;
+    quality?: string;
   },
 ): Promise<void> {
   try {
@@ -145,6 +151,8 @@ async function runOutpaintGeneration(
       numImages: 1,
       imageSize: opts.imageSize,
       model: opts.model,
+      ...(opts.catalogId ? { catalogId: opts.catalogId } : {}),
+      ...(opts.quality ? { quality: opts.quality } : {}),
     });
     useCanvasStore.getState().updateNodeData(nodeId, generationTaskDescriptor(ref));
     const completed = await awaitTaskCompletion(ref.task_key, project);

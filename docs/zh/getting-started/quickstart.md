@@ -27,9 +27,8 @@ DRAMACLAW_VERSION=2.1.1
 DRAMACLAW_GATEWAY_VERSION=v1.0.0-rc.24-dramaclaw.3
 ```
 
-发布版 Compose 默认使用镜像内置的凭据保护版 Codex 0.164.0 虾导。
-如果终端环境或 `.env` 已指定其他后端，请改为 `DRAMACLAW_CHAT_BACKEND=codex`。
-虾导后端的选择与「官方／自定义／混合」模型网关模式是两回事。
+发布版 Compose 默认使用镜像内置的 ReelForge Hermes fork。
+旧配置若显式设置了 `DRAMACLAW_CHAT_BACKEND=codex`，请改成 `hermes`。
 
 ```bash
 docker compose -f docker-compose.release.yml config --images
@@ -61,7 +60,7 @@ docker compose up -d --build   # 从源码构建 api、web（本仓）与网关�
 docker compose ps   # api、newapi、web 均应 running
 ```
 
-源码版 Compose 默认使用 Codex。构建使用本地 checkout 的代码，
+源码版 Compose 默认使用 Hermes。构建使用本地 checkout 的代码，
 不是 `DRAMACLAW_VERSION` 指定的发布镜像。修改代码后要重新构建，不是热更新：
 
 ```bash

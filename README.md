@@ -115,7 +115,7 @@ Three things we have been building with our own production team, now in `main`.
 - **Workflow catalog, Skills and Recipes** — built-in workflows for short drama, e-commerce and IP character ads, social content, Japanese anime, LEGO-style animation and outdoor stage duels. Install, export and share Skill bundles, or **import an external `SKILL.md` / ZIP** and convert it into a native Skill.
 - **Builds web pages too** — ask for a landing page or story microsite; it becomes an editable HTML node with revision history and a self-contained ZIP export.
 - **Knows your project** — checks progress, advances script and shot tasks, finds missing deliverables and suggests what to do next.
-- **Your choice of brain** — ships with a bundled Codex runtime by default; point the Agent at any third-party model that supports the OpenAI Responses API and tool calls, independent of your media channels.
+- **Your choice of brain** — uses the bundled ReelForge Hermes fork by default; point the Agent at any third-party model that supports the OpenAI Responses API and tool calls, independent of your media channels.
 - **Works from other agents** — [Agent Kit](agent-kit/README.md) exposes the same workflows over MCP to Codex, Claude Code, OpenClaw, WorkBuddy and any stdio MCP client.
 
 ### 🎥 3D Previz Stage — block the scene before you generate it
@@ -215,7 +215,7 @@ The release Compose file runs the published **v2.1.1** multi-arch images (`DRAMA
 | **Source Docker** | Run your own modified code | place a gateway checkout next to this repo, then `docker compose up -d --build` | [Self-hosting](docs/en/guides/self-hosting.md) |
 | **Local dev** | Hack on ReelForge with hot reload | `scripts/start-ce.sh` (API `:8780` + UI `:5173`; needs Python 3.11–3.12, `uv`, Node/pnpm, `ffmpeg`) | [Installation](docs/en/getting-started/installation.md) |
 
-`scripts/start-ce.sh` downloads the patched Codex **0.164.0** Agent runtime for macOS or Linux, verifies its pinned SHA256, and caches it under `runtime/codex/bin/`. Set `CODEX_BIN` in `.env` to use your own patched build instead; Windows users should use WSL2 or Docker.
+`scripts/start-ce.sh` prepares a separate Hermes environment by default. Windows users should use Docker. Set `DRAMACLAW_CHAT_BACKEND=codex` only to run the patched Codex backend instead.
 
 Upgrading from an older checkout, pinning versions, exposing the bundled gateway, or using your own Codex binary: see the [Self-hosting guide](docs/en/guides/self-hosting.md) and [Troubleshooting](docs/en/guides/troubleshooting.md).
 

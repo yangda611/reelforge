@@ -35,7 +35,10 @@ vi.mock('@/lib/queries/generation-credit-cost', () => ({
 vi.mock('@/features/canvas/hooks/useFreezoneImageModels', () => ({
   isAuthoritativeEmptyCatalog: () => false,
   useFreezoneImageModels: () => ({
-    models: [{ id: 'huimeng/gpt-image-2', apiModel: 'gpt-image-2', label: 'GPT Image 2' }],
+    models: [{
+      id: 'huimeng/gpt-image-2', apiModel: 'gpt-image-2', label: 'GPT Image 2',
+      providerId: 'huimeng', catalogId: 'cat-board', qualityOptions: ['high'],
+    }],
   }),
 }));
 
@@ -392,6 +395,8 @@ describe('AssetBoard 详情图片操作（第二批：「...」编辑三项 + �
       scaleFactor: 4,
       imageSize: '4K',
       model: 'gpt-image-2',
+      catalogId: 'cat-board',
+      quality: 'high',
     });
   });
 
@@ -488,6 +493,10 @@ describe('AssetBoard 详情图片操作（第二批：「...」编辑三项 + �
     expect(scene360Image).toHaveBeenCalledWith('img-up', '/static/up.png', {
       displayName: '360°全景图',
       aspectRatio: '2:1',
+      model: 'gpt-image-2',
+      catalogId: 'cat-board',
+      imageSize: '2K',
+      quality: 'high',
     });
     expect(useCanvasStore.getState().pendingFocusNodeId).toBe('pano-1');
     confirmSpy.mockRestore();
@@ -518,6 +527,8 @@ describe('AssetBoard 详情图片操作（第二批：「...」编辑三项 + �
         verticalDeg: 0,
         zoom: 'medium',
         apiModel: 'gpt-image-2',
+        catalogId: 'cat-board',
+        quality: 'high',
       }),
     );
     // 提交成功后弹窗自己关闭（onSubmitted → onClose 契约），且视口已预定位到新节点。
@@ -564,6 +575,9 @@ describe('AssetBoard 详情图片操作（第二批：「...」编辑三项 + �
       'img-up',
       '/static/up.png',
       expect.objectContaining({
+        apiModel: 'gpt-image-2',
+        catalogId: 'cat-board',
+        quality: 'high',
         rimLight: false,
         mainLight: expect.objectContaining({ nearestPreset: 'front' }),
         smartMode: expect.objectContaining({ enabled: false }),

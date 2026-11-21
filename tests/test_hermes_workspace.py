@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import sqlite3
 import sys
 import threading
 import types
@@ -1565,6 +1566,80 @@ def test_existing_plugin_block_gets_missing_freezone_plugin(
     assert parsed["agent"]["max_turns"] == 4
 
 
+def test_corrupt_freezone_config_is_quarantined_and_regenerated(
+    isolated_workspace, repo_skills, repo_plugins
+):
+    """A half-merged config.yaml must not leave the workspace without a route.
+
+    Two concurrent reconcilers used to interleave read-modify-write and produce a
+    file whose tail repeated an earlier block. Hermes cannot parse that, falls
+    back to built-in defaults (no gateway, no disabled toolsets), and every turn
+    then dies with APIConnectionError while the API only logged a parse warning.
+    """
+    home = isolated_workspace / "state" / "admin" / ".hermes-freezone"
+    home.mkdir(parents=True)
+    corrupt = (
+        "enabled_toolsets:\n"
+        "  - hermes-acp\n"
+        "  - freezone-acp\n"
+        "  - memory\n"
+        "plugins:\n"
+        "  enabled:\n"
+        "    - freezone\n"
+        "   enabled: auto\n"
+        "  skill_manage:\n"
+        "    enabled: 'off'\n"
+    )
+    (home / "config.yaml").write_text(corrupt, encoding="utf-8")
+
+    hw.ensure_user_hermes_workspace("admin", profile="freezone")
+
+    text = (home / "config.yaml").read_text(encoding="utf-8")
+    parsed = yaml.safe_load(text)
+    # The workspace is usable again: route and tool policy are both restored.
+    assert parsed["model"]["provider"] == "custom:dramaclaw"
+    assert _dramaclaw_provider(parsed)["key_env"] == "NEWAPI_API_KEY"
+    assert "hermes-acp" in parsed["enabled_toolsets"]
+    assert "bash" in parsed["disabled_toolsets"]
+    # The operator's broken text is preserved, never silently discarded.
+    backups = list((home).glob("config.yaml.corrupt.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == corrupt
+
+
+def test_config_yaml_writes_are_atomic_and_locked(
+    isolated_workspace, repo_skills, repo_plugins
+):
+    """Concurrent workspace refreshes must never truncate config.yaml."""
+    home = isolated_workspace / "state" / "admin" / ".hermes-freezone"
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text(
+        hw._default_freezone_config_yaml(), encoding="utf-8"
+    )
+
+    errors: list[BaseException] = []
+
+    def refresh() -> None:
+        try:
+            for _ in range(15):
+                hw.ensure_user_hermes_workspace("admin", profile="freezone")
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=refresh) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    parsed = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert parsed["model"]["default"]
+    assert parsed["custom_providers"]
+    # No temp files left behind by the atomic replace.
+    assert not list(home.glob("config.yaml.*.tmp"))
+
+
 def test_legacy_identity_context_is_migrated(
     isolated_workspace, repo_skills, repo_plugins
 ):
@@ -1638,3 +1713,82 @@ def test_chmod_700(isolated_workspace, repo_skills, repo_plugins):
     else:
         # On filesystems that support chmod, should be 0o700
         assert mode in (0o700, 0o755, 0o775), f"unexpected mode {oct(mode)}"
+
+
+def test_stale_session_route_is_realigned_to_the_configured_gateway(
+    isolated_workspace, repo_skills, repo_plugins
+):
+    """A session snapshotted onto the wrong endpoint must be repointed.
+
+    Hermes freezes provider/base_url/api_mode into ``sessions.model_config`` at
+    session creation and its ACP restore path prefers that snapshot over
+    config.yaml. One workspace ended up with ``provider: "custom"``, which
+    resolves to ``openrouter.ai`` with no key, so every later turn failed as
+    APIConnectionError even though config.yaml was correct.
+    """
+    save_custom_newapi_gateway(
+        base_url="http://gateway.local/v1", api_key="k-1", activate=True
+    )
+    home = hw.ensure_user_hermes_workspace("admin", profile="freezone")
+    db_path = home / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("create table sessions (id text primary key, model_config text)")
+    stale = json.dumps(
+        {
+            "cwd": str(home),
+            "provider": "custom",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_mode": "chat_completions",
+        }
+    )
+    conn.execute("insert into sessions values ('s-1', ?)", (stale,))
+    conn.commit()
+    conn.close()
+
+    hw.ensure_user_hermes_workspace("admin", profile="freezone")
+
+    conn = sqlite3.connect(str(db_path))
+    meta = json.loads(conn.execute("select model_config from sessions").fetchone()[0])
+    conn.close()
+    assert meta["provider"] == "custom:dramaclaw"
+    assert meta["base_url"] == "http://gateway.local/v1"
+    assert meta["api_mode"] == hw._hermes_model_api_mode()
+    # The rest of the snapshot is preserved: it carries the session cwd.
+    assert meta["cwd"] == str(home)
+
+
+def test_session_route_realign_keeps_matching_rows_untouched(
+    isolated_workspace, repo_skills, repo_plugins
+):
+    """A session already on the configured route must not be rewritten.
+
+    Hermes re-persists a named custom endpoint as the bare ``"custom"`` after
+    every turn it runs, so provider drift alone is not a reason to rewrite: the
+    endpoint is decided by ``base_url`` + ``api_mode``, and churning the row on
+    each spawn would log a realignment warning forever.
+    """
+    save_custom_newapi_gateway(
+        base_url="http://gateway.local/v1", api_key="k-1", activate=True
+    )
+    home = hw.ensure_user_hermes_workspace("admin", profile="freezone")
+    db_path = home / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("create table sessions (id text primary key, model_config text)")
+    current = json.dumps(
+        {
+            "cwd": str(home),
+            "provider": "custom",
+            "base_url": "http://gateway.local/v1",
+            "api_mode": hw._hermes_model_api_mode(),
+        }
+    )
+    conn.execute("insert into sessions values ('s-1', ?)", (current,))
+    conn.commit()
+    conn.close()
+
+    hw.ensure_user_hermes_workspace("admin", profile="freezone")
+
+    conn = sqlite3.connect(str(db_path))
+    raw = conn.execute("select model_config from sessions").fetchone()[0]
+    conn.close()
+    assert raw == current

@@ -777,3 +777,248 @@ async def test_hermes_pool_rotates_and_resumes_when_gateway_changes(
     assert calls == [("start", None), ("resume", "session-1")]
     assert fake_auth.created == 2
     assert fake_auth.revoked == ["token-1", "token-2"]
+
+
+@pytest.mark.asyncio
+async def test_hermes_pool_clear_scope_retires_idle_slot_and_next_turn_starts_fresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool, calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    workspace = _use_single_hermes_workspace(tmp_path, monkeypatch)
+
+    try:
+        first = await pool.get_for_user(
+            "alice", scope_kind="project", project_id="project_a"
+        )
+        pool._remember_session(pool._slots["alice"])
+        await pool.clear_scope(
+            "alice",
+            scope_kind="project",
+            project_id="project_a",
+            agent_profile="main",
+            canvas_id=None,
+            project_state_dir=workspace,
+        )
+        assert "alice" not in pool._slots
+        # The detached pointer is dropped from disk, not just from memory.
+        assert json.loads(
+            (workspace / "dramaclaw_sessions.json").read_text(encoding="utf-8")
+        ) == {}
+        second = await pool.get_for_user(
+            "alice", scope_kind="project", project_id="project_a"
+        )
+    finally:
+        await pool.close_all()
+
+    # The retired worker is closed, its agent session revoked, and the next
+    # turn starts a brand-new Hermes session instead of resuming the old one.
+    assert first.closed is True
+    assert second.id == "session-2"
+    assert calls == [("start", None), ("start", None)]
+    assert fake_auth.created == 2
+    assert fake_auth.revoked == ["token-1", "token-2"]
+
+
+@pytest.mark.asyncio
+async def test_hermes_pool_clear_scope_leaves_other_canvas_and_profile_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the selected canvas loses its session pointer.
+
+    Freezone canvases of one agent share a single worker slot, so switching
+    canvases rotates that worker regardless of clear. What clear owns is the
+    session pointer: the selected canvas must start over while its sibling
+    canvas and the sibling agent resume their existing sessions.
+    """
+    pool, calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    workspace = _use_single_hermes_workspace(tmp_path, monkeypatch)
+
+    async def open_turn(agent: str, canvas: str):
+        return await pool.get_for_user(
+            "alice",
+            agent_profile=f"freezone:{agent}",
+            tool_mode="freezone_canvas",
+            surface="freezone",
+            scope_kind="project",
+            project_id="project_a",
+            canvas_id=canvas,
+        )
+
+    try:
+        canvas_one = await open_turn("main", "canvas-1")
+        await open_turn("main", "canvas-2")
+        other_agent = await open_turn("other", "canvas-1")
+        for slot in pool._slots.values():
+            pool._remember_session(slot)
+        await pool.clear_scope(
+            "alice",
+            scope_kind="project",
+            project_id="project_a",
+            agent_profile="freezone:main",
+            canvas_id="canvas-1",
+            project_state_dir=workspace,
+        )
+        after_clear = dict(pool._session_ids["alice"])
+        selected = await open_turn("main", "canvas-1")
+        sibling = await open_turn("main", "canvas-2")
+        sibling_agent = await open_turn("other", "canvas-1")
+        resumed = (selected.id, sibling.id, sibling_agent.id)
+    finally:
+        await pool.close_all()
+
+    # canvas-1's pointer is gone; canvas-2 and the other agent keep theirs.
+    assert after_clear == {
+        ("freezone:main", "project", "project_a", "canvas-2"): "session-2",
+        ("freezone:other", "project", "project_a", "canvas-1"): "session-3",
+    }
+    assert ("freezone:main", "project", "project_a", "canvas-1") not in after_clear
+    # The cleared canvas starts fresh; the untouched ones resume.
+    assert resumed == ("session-4", "session-2", "session-3")
+    # The retired session is never resumed again.
+    assert ("resume", "session-1") not in calls
+    assert ("resume", "session-2") in calls
+    assert canvas_one.closed is True
+    assert other_agent.id == "session-3"
+    # Every retired worker's agent session was revoked; none leaked.
+    assert sorted(fake_auth.revoked) == sorted(
+        f"token-{n}" for n in range(1, fake_auth.created + 1)
+    )
+
+
+@pytest.mark.asyncio
+async def test_hermes_pool_clear_scope_refuses_while_a_turn_is_in_flight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from novelvideo.chat.session_registry import CHAT_RUN_BUSY_MESSAGE
+
+    pool, calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    workspace = _use_single_hermes_workspace(tmp_path, monkeypatch)
+
+    try:
+        thread = await pool.get_for_user(
+            "alice", scope_kind="project", project_id="project_a"
+        )
+        slot = pool._slots["alice"]
+        pool._remember_session(slot)
+        slot.active_turns = 1
+        with pytest.raises(RuntimeError, match=CHAT_RUN_BUSY_MESSAGE):
+            await pool.clear_scope(
+                "alice",
+                scope_kind="project",
+                project_id="project_a",
+                agent_profile="main",
+                canvas_id=None,
+                project_state_dir=workspace,
+            )
+        # Nothing was retired or forgotten by the refused clear.
+        assert pool._slots["alice"] is slot
+        assert thread.closed is False
+        assert slot.active_turns == 1
+        assert fake_auth.revoked == []
+        assert pool._persisted_session_id_for(
+            workspace, "project", "project_a", "main", None
+        ) == "session-1"
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_pool_clear_scope_keeps_transcript_when_index_is_corrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool, _calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    workspace = _use_single_hermes_workspace(tmp_path, monkeypatch)
+    index = workspace / "dramaclaw_sessions.json"
+    index.write_text("{not json", encoding="utf-8")
+
+    try:
+        thread = await pool.get_for_user(
+            "alice", scope_kind="project", project_id="project_a"
+        )
+        slot = pool._slots["alice"]
+        with pytest.raises(ValueError):
+            await pool.clear_scope(
+                "alice",
+                scope_kind="project",
+                project_id="project_a",
+                agent_profile="main",
+                canvas_id=None,
+                project_state_dir=workspace,
+            )
+        # The worker is untouched and the unreadable index was not overwritten,
+        # so the caller can still fall back to the on-disk transcript.
+        assert pool._slots["alice"] is slot
+        assert thread.closed is False
+        assert fake_auth.revoked == []
+        assert index.read_text(encoding="utf-8") == "{not json"
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_pool_clear_scope_does_not_touch_other_profiles_memory_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool, _calls, _fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    workspace = _use_single_hermes_workspace(tmp_path, monkeypatch)
+
+    try:
+        director = await pool.get_for_user(
+            "alice", scope_kind="project", project_id="project_a"
+        )
+        freezone = await pool.get_for_user(
+            "alice",
+            agent_profile="freezone:main",
+            tool_mode="freezone_canvas",
+            surface="freezone",
+            scope_kind="project",
+            project_id="project_a",
+            canvas_id="canvas-1",
+        )
+        pool._remember_session(pool._slots["alice:freezone:main"])
+        await pool.clear_scope(
+            "alice",
+            scope_kind="project",
+            project_id="project_a",
+            agent_profile="main",
+            canvas_id=None,
+            project_state_dir=workspace,
+        )
+        retired = (director.closed, freezone.closed)
+        pointers = dict(pool._session_ids.get("alice") or {})
+        freezone_id = freezone.id
+    finally:
+        await pool.close_all()
+
+    assert retired == (True, False)
+    assert pointers == {
+        ("freezone:main", "project", "project_a", "canvas-1"): freezone_id
+    }
+
+
+def _use_single_hermes_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Point spawn, remember and clear at one Hermes home.
+
+    ``_patch_fake_hermes_pool`` hands every worker ``tmp_path`` as its home while
+    ``clear_scope`` resolves the durable session index through
+    ``hermes_workspace_path``.  Pinning both at one directory lets the tests
+    assert against the index file the pool actually wrote.
+    """
+    from novelvideo.chat import hermes_pool
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        hermes_pool, "ensure_user_hermes_workspace", lambda *_args, **_kwargs: workspace
+    )
+    monkeypatch.setattr(
+        hermes_pool, "hermes_workspace_path", lambda *_args, **_kwargs: workspace
+    )
+    return workspace

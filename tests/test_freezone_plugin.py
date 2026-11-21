@@ -1291,6 +1291,89 @@ def test_handwritten_workflow_batch_cannot_bypass_dynamic_plan():
     assert "do not ask the user" in result["agent_instruction"].lower()
 
 
+def test_standalone_batch_of_one_node_kind_is_not_a_handwritten_workflow():
+    """Creating N nodes of one kind is canvas authoring, not a workflow.
+
+    Regression: "extract every scene and prop, create image nodes with prompts,
+    do not generate" produced 19 imageGenNode creates with no edges and was
+    rejected as a hand-written workflow, so none of the requested nodes could be
+    written. Nested prompts also mentioned 产品 (product), which the old text
+    heuristic treated as a workflow hint.
+    """
+    plugin = _load_plugin_module()
+    commands = [
+        {
+            "type": "create_node",
+            "client_id": f"prop_{index}",
+            "node_type": "imageGenNode",
+            "position": {"x": 0, "y": index * 100},
+            "data": {
+                "displayName": f"道具图 | 物品 {index}",
+                "prompt": "电影写实产品静物摄影",
+            },
+        }
+        for index in range(19)
+    ]
+
+    assert plugin._looks_like_handwritten_workflow_batch(commands) is False
+    # Presentation commands alone never make a batch a workflow.
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [*commands, {"type": "select_nodes", "node_ids": ["prop_0"]}]
+    )
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [*commands, {"type": "layout_nodes", "mode": "grid"}]
+    )
+    # Wiring only the nodes this batch creates is still one authoring batch.
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [
+            *commands,
+            {
+                "type": "create_edge",
+                "source": "prop_0",
+                "target": "prop_1",
+                "link_type": "media_input_for",
+            },
+        ]
+    )
+
+
+def test_batch_mixing_kinds_or_wiring_existing_nodes_is_still_a_workflow():
+    plugin = _load_plugin_module()
+    image_creates = [
+        {
+            "type": "create_node",
+            "client_id": f"c{index}",
+            "node_type": "imageGenNode",
+            "data": {"prompt": "p"},
+        }
+        for index in range(3)
+    ]
+    video_creates = [
+        {
+            "type": "create_node",
+            "client_id": f"v{index}",
+            "node_type": "videoNode",
+            "data": {"prompt": "p"},
+        }
+        for index in range(2)
+    ]
+
+    # Mixed production stages hand-authored as commands.
+    assert plugin._looks_like_handwritten_workflow_batch(image_creates + video_creates)
+    # A new node consumed by a node this batch does not create.
+    assert plugin._looks_like_handwritten_workflow_batch(
+        [
+            *image_creates,
+            {
+                "type": "create_edge",
+                "source": "c0",
+                "target": "existing-video-node",
+                "link_type": "media_input_for",
+            },
+        ]
+    )
+
+
 def test_clarification_cannot_offer_workflow_plan_bypass(monkeypatch):
     plugin = _load_plugin_module()
     monkeypatch.setattr(

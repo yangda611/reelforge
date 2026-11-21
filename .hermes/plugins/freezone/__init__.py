@@ -3919,25 +3919,6 @@ _WORKFLOW_LIKE_NODE_TYPES = {
     "storyboardGenNode",
 }
 
-_WORKFLOW_HINTS = (
-    "工作流",
-    "workflow",
-    "广告",
-    "投放",
-    "产品",
-    "商品",
-    "短剧",
-    "小说",
-    "故事",
-    "mv",
-    "音乐视频",
-    "文生",
-    "图生",
-    "视频",
-    "音频",
-)
-
-
 def _emit_command_error(
     project: str | None, canvas: str | None, status: str, error: str
 ) -> str:
@@ -3951,37 +3932,16 @@ def _emit_command_error(
     )
 
 
-def _command_text(command: dict[str, Any]) -> str:
-    values: list[str] = []
-    for key in (
-        "client_id",
-        "node_type",
-        "label",
-        "title",
-        "displayName",
-        "display_name",
-    ):
-        value = command.get(key)
-        if value is not None:
-            values.append(str(value))
-    data = command.get("data")
-    if isinstance(data, dict):
-        for key in (
-            "displayName",
-            "display_name",
-            "title",
-            "label",
-            "prompt",
-            "text",
-            "content",
-        ):
-            value = data.get(key)
-            if value is not None:
-                values.append(str(value))
-    return "\n".join(values).lower()
-
-
 def _looks_like_handwritten_workflow_batch(commands: list[Any]) -> bool:
+    """Detect a workflow being hand-authored as canvas commands.
+
+    A workflow is a multi-stage graph: it either mixes production node kinds or
+    wires new nodes into nodes this batch does not create. A batch that creates
+    one kind of node and connects nothing is ordinary canvas authoring (the user
+    asked for a set of image nodes), so it must not be rerouted through
+    WorkflowPlan validation. Presentation commands (select_nodes, layout_nodes)
+    never make a batch a workflow.
+    """
     object_commands = [command for command in commands if isinstance(command, dict)]
     create_commands = [
         command
@@ -3990,21 +3950,38 @@ def _looks_like_handwritten_workflow_batch(commands: list[Any]) -> bool:
     ]
     if len(create_commands) < 3:
         return False
-    workflow_like_count = sum(
-        1
+    workflow_like_kinds = {
+        command.get("node_type")
         for command in create_commands
         if command.get("node_type") in _WORKFLOW_LIKE_NODE_TYPES
-    )
-    if workflow_like_count < 2:
+    }
+    if not workflow_like_kinds:
         return False
-    has_dependency_shape = any(
-        command.get("type")
-        in {"create_edge", "group_nodes", "layout_nodes", "select_nodes"}
-        for command in object_commands
-    )
-    haystack = "\n".join(_command_text(command) for command in object_commands)
-    has_workflow_hint = any(hint in haystack for hint in _WORKFLOW_HINTS)
-    return (not has_dependency_shape) or has_workflow_hint
+    if len(workflow_like_kinds) >= 2:
+        return True
+    created_ids = {
+        str(command.get("client_id") or "").strip()
+        for command in create_commands
+        if str(command.get("client_id") or "").strip()
+    }
+    for command in object_commands:
+        command_type = command.get("type")
+        if command_type == "create_edge":
+            endpoints = {
+                str(command.get(field) or "").strip() for field in ("source", "target")
+            }
+        elif command_type == "add_next_node":
+            endpoints = {str(command.get("source_node_id") or "").strip()}
+        elif command_type == "group_nodes":
+            endpoints = {
+                str(node_id).strip() for node_id in command.get("node_ids") or []
+            }
+        else:
+            continue
+        endpoints.discard("")
+        if endpoints - created_ids:
+            return True
+    return False
 
 
 def _story_image_reference_batch_candidate(commands: list[Any]) -> bool:

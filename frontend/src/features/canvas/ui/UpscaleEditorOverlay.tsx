@@ -91,10 +91,8 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
     () => resolveModelSizeOptions(selectedModel),
     [selectedModel],
   );
-  const qualityOptions = useMemo(
-    () => resolveModelQualityOptions(selectedModel),
-    [selectedModel],
-  );
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
   const persistedImageSize = pickAllowedOption(persisted.upscaleImageSize, sizeOptions);
   const creditCost = useGenerationCreditCost(
     'feature',
@@ -103,9 +101,7 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
       surface: 'canvas',
       params: buildImageFeatureBillingParams(selectedModel, {
         size: persistedImageSize,
-        ...(qualityOptions.length > 0
-          ? { quality: pickAllowedOption('medium', qualityOptions) }
-          : {}),
+        ...(quality ? { quality } : {}),
         operation: 'upscale',
       }),
     },
@@ -145,7 +141,7 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
 
   const handleSubmit = useCallback(async () => {
     // 按钮已经禁用，这里再挡一道：没有可用模型就绝不该发出请求。
-    if (isSubmitting || catalogIsEmpty) return;
+    if (isSubmitting || !selectedModel) return;
     if (!sourceUrl) {
       console.error('[upscale] missing upscaleSourceUrl on node.data — cannot submit');
       return;
@@ -155,10 +151,6 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
       console.error('[upscale] no project in URL — cannot submit');
       return;
     }
-
-    const apiModel =
-      selectedModel?.apiModel
-      ?? persistedModelId;
 
     setIsSubmitting(true);
     const generationStartedAt = Date.now();
@@ -175,7 +167,9 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
         sourceUrl: sourceUrl.split('?')[0],
         scaleFactor: persistedScaleFactor,
         imageSize: persistedImageSize,
-        model: apiModel,
+        model: selectedModel.apiModel,
+        catalogId: selectedModel.catalogId,
+        quality,
       });
       updateNodeData(node.id, generationTaskDescriptor(ref));
       const completed = await awaitTaskCompletion(ref.task_key, project, { taskType: ref.task_type });
@@ -210,11 +204,10 @@ export const UpscaleEditorOverlay = memo(({ node }: UpscaleEditorOverlayProps) =
       setIsSubmitting(false);
     }
   }, [
-    catalogIsEmpty,
     isSubmitting,
     node.id,
     persistedImageSize,
-    persistedModelId,
+    quality,
     persistedScaleFactor,
     selectedModel,
     sourceUrl,

@@ -9,6 +9,11 @@ import {
   listFreezoneStyleTemplates,
   submitFreezoneAudioSpeech,
   submitFreezoneGen,
+  submitFreezoneMultiView,
+  submitFreezoneOutpaint,
+  submitFreezoneRedraw,
+  submitFreezoneRelight,
+  submitFreezoneUpscale,
   submitFreezoneVideoGen,
 } from "@/api/ops";
 import {
@@ -29,6 +34,33 @@ it("forces text-to-video human review off even for stale enabled node data", asy
   expect(apiCall).toHaveBeenLastCalledWith(
     "projects/project-1/freezone/video/gen",
     expect.objectContaining({ json: expect.objectContaining({ human_review: false }) }),
+  );
+});
+
+it.each([
+  ["redraw", submitFreezoneRedraw],
+  ["upscale", submitFreezoneUpscale],
+  ["outpaint", submitFreezoneOutpaint],
+  ["multi-view", submitFreezoneMultiView],
+  ["relight", submitFreezoneRelight],
+] as const)("serializes the catalog selection for %s", async (route, submit) => {
+  vi.mocked(apiCall).mockResolvedValueOnce({ task_key: "job-1", job_id: "job-1" });
+  const payload = {
+    sourceUrl: "/static/source.png",
+    model: "google/gemini-2.5-flash-image-preview",
+    catalogId: "cat-77",
+    imageSize: "1K",
+    quality: "low",
+  };
+  await submit("project-1", payload);
+  expect(apiCall).toHaveBeenLastCalledWith(
+    `projects/project-1/freezone/${route}`,
+    expect.objectContaining({ json: expect.objectContaining({
+      model: "google/gemini-2.5-flash-image-preview",
+      catalog_id: "cat-77",
+      image_size: "1K",
+      quality: "low",
+    }) }),
   );
 });
 

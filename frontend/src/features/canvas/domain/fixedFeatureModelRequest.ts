@@ -5,7 +5,7 @@
  * 「没有模型选择器」的图片能力面板（360 全景、宫格动作）如何解析模型。
  *
  * 这类面板不让用户挑模型 / 尺寸 / 画质，由调用方按功能规则选定目录模型
- * （例如 360 固定 LingShan-G2，宫格使用目录默认模型）。之前报价和提交各写各的：
+ * （例如 360 优先 LingShan-G2，宫格使用目录默认模型）。之前报价和提交各写各的：
  * 报价按选定模型 + 收敛后的 size/quality 算，提交却
  * 一个都不带，后端于是用自己的 `FREEZONE_DEFAULT_IMAGE_MODEL` 和固定 2K 去跑。
  * 结果是「目录首模型 ≠ 后端默认模型」或「该模型不配 2K」时，界面上标的价格、
@@ -58,8 +58,9 @@ const PREFERRED_QUALITY = 'medium';
 export function resolveFixedFeatureModelRequest(
   model: FixedFeatureModel | null | undefined,
   extraBillingParams: Record<string, unknown> = {},
+  sizeOptions = resolveModelSizeOptions(model),
 ): FixedFeatureModelRequest {
-  const imageSize = pickAllowedOption(PREFERRED_SIZE, resolveModelSizeOptions(model));
+  const imageSize = pickAllowedOption(PREFERRED_SIZE, sizeOptions);
   const qualityOptions = resolveModelQualityOptions(model);
   const quality =
     qualityOptions.length > 0
@@ -81,4 +82,18 @@ export function resolveFixedFeatureModelRequest(
       ...extraBillingParams,
     }),
   };
+}
+
+/** Scene 360 caps the output at 2K; a 4K-only model cannot run at that cap. */
+export function resolvePanoramaModelRequest(
+  models: readonly (FixedFeatureModel & { label: string })[],
+): FixedFeatureModelRequest | null {
+  const compatible = models.flatMap((model) => {
+    const sizes = resolveModelSizeOptions(model).filter((size) => /^(512|1k|2k)$/i.test(size));
+    return model.apiModel && sizes.length > 0 ? [{ model, sizes }] : [];
+  });
+  const selected = compatible.find(({ model }) =>
+    model.label === 'LingShan-G2' || model.apiModel === 'LingShan-G2',
+  ) ?? compatible[0];
+  return selected ? resolveFixedFeatureModelRequest(selected.model, {}, selected.sizes) : null;
 }

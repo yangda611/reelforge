@@ -161,20 +161,28 @@ describe("360 全景面板", () => {
     expect(payload.catalogId).toBe(quoted.catalog_id);
   });
 
-  it("目录没有 LingShan-G2 时禁用提交，不回落到第一款模型", () => {
+  it("falls back to a catalog model whose resolution fits the panorama cap", async () => {
     imageCatalogState = {
-      models: [CATALOG_MODEL],
-      isLoading: false,
-      isFallback: false,
-      error: null,
+      ...LOADED_CATALOG,
+      models: [{ ...SCENE_360_MODEL, resolutionOptions: ["4K"] }, CATALOG_MODEL],
     };
     render(
       <Scene360Overlay node={NODE} imageSource="https://x/src.png?t=1" onClose={() => {}} />,
     );
-    const button = screen.getByTitle("modelParams.noModelsAvailable");
-    expect(button).toBeDisabled();
-    fireEvent.click(button);
-    expect(submitFreezoneScene360).not.toHaveBeenCalled();
+    expect(quotedParams()).toMatchObject({
+      image_selection: "google/gemini-2.5-flash-image-preview",
+      catalog_id: "cat-77",
+      size: "1K",
+      quality: "low",
+    });
+    fireEvent.click(screen.getByTitle("scene360.submit"));
+    await waitFor(() => expect(submitFreezoneScene360).toHaveBeenCalledWith("demo", {
+      referenceUrl: "https://x/src.png",
+      model: "google/gemini-2.5-flash-image-preview",
+      catalogId: "cat-77",
+      imageSize: "1K",
+      quality: "low",
+    }));
   });
 
   it("后台一个图片模型都没配时禁用提交，点了也不发请求", () => {

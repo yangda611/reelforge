@@ -56,6 +56,7 @@ describe('imageScene360 application（全景生成编排）', () => {
     const result = scene360Image('src-1', '/static/src.png?sig=x', {
       displayName: '360°全景图',
       aspectRatio: '2:1',
+      imageSize: '2K',
     });
 
     expect(result).not.toBeNull();
@@ -78,6 +79,10 @@ describe('imageScene360 application（全景生成编排）', () => {
     expect(submitFreezoneScene360).toHaveBeenCalledWith('proj-1', {
       referenceUrl: '/static/src.png',
       aspectRatio: '2:1',
+      model: undefined,
+      catalogId: undefined,
+      imageSize: '2K',
+      quality: undefined,
     });
     const done = useCanvasStore.getState();
     const candidate = done.nodes.find((node) => node.id === nodeId);
@@ -103,6 +108,7 @@ describe('imageScene360 application（全景生成编排）', () => {
       scene360Image('src-1', '/static/src.png', {
         displayName: '360°全景图',
         aspectRatio: '2:1',
+        imageSize: '2K',
       }),
     ).toBeNull();
     expect(useCanvasStore.getState().nodes.length).toBe(before);
@@ -114,6 +120,7 @@ describe('imageScene360 application（全景生成编排）', () => {
     const result = scene360Image('src-1', '/static/src.png', {
       displayName: '360°全景图',
       aspectRatio: '21:9',
+      imageSize: '2K',
     });
     await result?.completion;
 

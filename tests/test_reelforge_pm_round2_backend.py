@@ -233,12 +233,13 @@ def test_classify_gateway_media_model():
     assert classify_gateway_media_model("text-embedding-3-small") is None
 
 
-def test_assistant_runtime_reports_missing_codex(monkeypatch):
-    # No CODEX_BIN in this environment and no patched runtime: the probe
-    # must report the runtime as missing, never as available.
-    monkeypatch.delenv("CODEX_BIN", raising=False)
+def test_assistant_runtime_reports_missing_default_hermes(monkeypatch):
+    from novelvideo.chat import service as chat_service
+
     monkeypatch.delenv("DRAMACLAW_CHAT_BACKEND", raising=False)
     monkeypatch.delenv("SUPERTALE_CHAT_BACKEND", raising=False)
+    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: False)
+    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
     app = FastAPI()
     app.include_router(assistant_routes.router)
     app.dependency_overrides[get_api_user] = lambda: {
@@ -252,7 +253,7 @@ def test_assistant_runtime_reports_missing_codex(monkeypatch):
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["available"] is False
-    assert data["runtime"] == "codex"
+    assert data["runtime"] == "hermes"
     assert data["missing"] is True
     assert data["code"] == "runtime_missing"
     assert "未检测到本地助手运行环境" in data["message"]

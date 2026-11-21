@@ -11,16 +11,13 @@ import {
   EXPORT_RESULT_NODE_LAYOUT_HEIGHT,
   type CanvasNode,
 } from '@/features/canvas/domain/canvasNodes';
-import { resolveFixedFeatureModelRequest } from '@/features/canvas/domain/fixedFeatureModelRequest';
+import { resolvePanoramaModelRequest } from '@/features/canvas/domain/fixedFeatureModelRequest';
 import { CreditCostInline } from '@/components/credit-cost-inline';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { selectNodeExclusively } from '@/features/canvas/application/nodeSelection';
 import { useGenerationCreditCost } from '@/lib/queries/generation-credit-cost';
 import { BillingRuleNotConfiguredError } from '@/lib/api-errors';
-import {
-  isAuthoritativeEmptyCatalog,
-  useFreezoneImageModels,
-} from '@/features/canvas/hooks/useFreezoneImageModels';
+import { useFreezoneImageModels } from '@/features/canvas/hooks/useFreezoneImageModels';
 import { FREEZONE_IMAGE_FEATURES } from '@/features/canvas/application/freezoneImageFeatureBilling';
 import {
   fetchFreezoneJobResult,
@@ -42,18 +39,6 @@ import {
 const PANO_VIEWER_LAYOUT_WIDTH = 720;
 const PANO_VIEWER_LAYOUT_HEIGHT = 420;
 const SCENE_360_OUTPUT_ASPECT_RATIO = '2:1' as const;
-const SCENE_360_MODEL_NAME = 'LingShan-G2';
-
-function isScene360Model(model: { apiModel: string; label: string }): boolean {
-  return (
-    model.label === SCENE_360_MODEL_NAME
-    || model.apiModel === SCENE_360_MODEL_NAME
-    // CE 拉取目录失败时的兼容兜底条目仍使用旧模型别名。
-    || model.apiModel === 'newapi_gpt_image2'
-    || model.apiModel === 'huimeng_gpt_image2'
-  );
-}
-
 interface Scene360OverlayProps {
   node: CanvasNode;
   imageSource: string;
@@ -67,26 +52,15 @@ export const Scene360Overlay = memo(
     const addEdge = useCanvasStore((state) => state.addEdge);
     const findNodePosition = useCanvasStore((state) => state.findNodePosition);
     const updateNodeData = useCanvasStore((state) => state.updateNodeData);
-    const imageCatalog = useFreezoneImageModels();
-    const imageModels = imageCatalog.models;
-    // 360 是固定的 LingShan-G2 能力，不跟随后台目录排序。否则管理员调整排序后，
-    // 报价和实际执行会在无提示的情况下切换到另一款模型。
-    const selectedModel = imageModels.find(isScene360Model);
-    const modelUnavailable =
-      isAuthoritativeEmptyCatalog(imageCatalog) || selectedModel === undefined;
-    // 全景没有尺寸/画质选择器，按后台对该模型配置的档位取默认值；模型没配
-    // 画质就不下发 quality。报价与提交必须来自同一次解析，见
-    // `resolveFixedFeatureModelRequest` 的注释。
-    const modelRequest = useMemo(
-      () => resolveFixedFeatureModelRequest(selectedModel),
-      [selectedModel],
-    );
+    const { models } = useFreezoneImageModels();
+    const modelRequest = useMemo(() => resolvePanoramaModelRequest(models), [models]);
+    const modelUnavailable = modelRequest === null;
     const panoCost = useGenerationCreditCost(
       'feature',
-      selectedModel ? FREEZONE_IMAGE_FEATURES.panorama : null,
+      modelRequest ? FREEZONE_IMAGE_FEATURES.panorama : null,
       {
         surface: 'canvas',
-        params: modelRequest.billingParams,
+        params: modelRequest?.billingParams,
       },
     );
     const billingRuleMissing =
@@ -97,8 +71,7 @@ export const Scene360Overlay = memo(
       (billingRuleMissing ? t('common.billingRuleNotConfiguredShort') : null);
 
     const handleSubmit = useCallback(async () => {
-      // 按钮已经禁用，这里再挡一道：没有固定模型就绝不该发出请求。
-      if (modelUnavailable) return;
+      if (!modelRequest) return;
       const project = readUrl().project;
       if (!project) {
         console.error('[scene-360] no project in URL — cannot submit');
@@ -182,7 +155,6 @@ export const Scene360Overlay = memo(
       findNodePosition,
       imageSource,
       modelRequest,
-      modelUnavailable,
       node,
       onClose,
       t,

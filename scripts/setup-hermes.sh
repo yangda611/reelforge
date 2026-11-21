@@ -17,10 +17,8 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-install}"
 
-# Prefer SSH for the developer installer so GitHub HTTPS rate limits do not
-# block local setup. Docker builds keep their HTTPS default because an image
-# build does not have access to the host SSH agent/keys.
-HERMES_REPO="${HERMES_REPO:-git@github.com:dramaclaw/hermes-agent.git}"
+# Use the same public repo as Docker so a fresh install needs no SSH key.
+HERMES_REPO="${HERMES_REPO:-https://github.com/dramaclaw/hermes-agent.git}"
 HERMES_REF="${HERMES_REF:-brainclaw/evidence-plane}"
 HERMES_SOURCE_DIR="${HERMES_SOURCE_DIR:-$root_dir/.cache/hermes-agent}"
 HERMES_ENV_DIR="${HERMES_ENV_DIR:-$root_dir/.cache/hermes-venv}"

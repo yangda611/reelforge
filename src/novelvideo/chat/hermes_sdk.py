@@ -1222,6 +1222,8 @@ class HermesSdkThread:
         # JSON-RPC stdio. Whichever runs first pays the cold start; the other
         # awaits it and then proceeds against the ready session.
         self._setup_lock = asyncio.Lock()
+        # Retirement waits for process publication, not for the ACP handshake.
+        self._spawn_lock = asyncio.Lock()
         # ACP multiplexes one session over one subprocess stdout stream. A
         # second prompt must not read that stream until the active turn has
         # consumed its final response, otherwise asyncio raises because two
@@ -1283,26 +1285,29 @@ class HermesSdkThread:
 
     async def _spawn(self) -> None:
         """Launch the hermes acp subprocess inside our sandbox."""
-        if self._proc is not None:
-            return
-        base_cmd = [str(self._cli_path), "acp"]
-        # Wrap with OS sandbox (codex-linux-sandbox on Linux; sandbox-exec on macOS).
-        sandboxed = wrap_command(base_cmd, SandboxSpec(user=self._username, hermes_home=self._cwd))
-        _log.info("spawning hermes acp for user=%s (sandboxed=%s)", self._username,
-                  sandboxed[0] != base_cmd[0])
-        self._proc = await asyncio.create_subprocess_exec(
-            *sandboxed,
-            cwd=str(self._cwd),
-            env=self._env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            limit=HERMES_STDIO_LINE_LIMIT_BYTES,
-        )
-        # Consume stderr for as long as the worker lives. It was piped and never
-        # read: the pipe fills, the worker blocks on its next write, and the
-        # turn stalls for a reason nothing reports.
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
+        async with self._spawn_lock:
+            if self._closed:
+                raise RuntimeError("hermes session is closed")
+            if self._proc is not None:
+                return
+            base_cmd = [str(self._cli_path), "acp"]
+            # Wrap with OS sandbox (codex-linux-sandbox on Linux; sandbox-exec on macOS).
+            sandboxed = wrap_command(base_cmd, SandboxSpec(user=self._username, hermes_home=self._cwd))
+            _log.info("spawning hermes acp for user=%s (sandboxed=%s)", self._username,
+                      sandboxed[0] != base_cmd[0])
+            self._proc = await asyncio.create_subprocess_exec(
+                *sandboxed,
+                cwd=str(self._cwd),
+                env=self._env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=HERMES_STDIO_LINE_LIMIT_BYTES,
+            )
+            # Consume stderr for as long as the worker lives. It was piped and never
+            # read: the pipe fills, the worker blocks on its next write, and the
+            # turn stalls for a reason nothing reports.
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def _drain_stderr(self) -> None:
         """Keep the pipe drained, and report only what the worker says about itself.
@@ -1954,32 +1959,31 @@ class HermesSdkThread:
         self._tool_names_by_call_id.clear()
         self._tool_inputs_by_call_id.clear()
         self._tool_started_at_by_call_id.clear()
-        if self._closed:
-            return
-        self._closed = True
-        # The drain's lifetime is the worker's. Cancelled here rather than left
-        # to end on EOF, so a worker killed rather than closed leaves no task
-        # waiting on a dead pipe — and awaited, because cancellation only
-        # requests it and returning would leave the task pending into shutdown.
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            await asyncio.gather(self._stderr_task, return_exceptions=True)
-            self._stderr_task = None
-        if self._proc is None:
-            return
-        try:
-            if self._proc.stdin is not None and not self._proc.stdin.is_closing():
-                self._proc.stdin.close()
-        except Exception:
-            pass
-        try:
-            self._proc.terminate()
-            await asyncio.wait_for(self._proc.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            self._proc.kill()
-            await self._proc.wait()
-        except ProcessLookupError:
-            pass
+        async with self._spawn_lock:
+            self._closed = True
+            # The drain's lifetime is the worker's. Cancelled here rather than left
+            # to end on EOF, so a worker killed rather than closed leaves no task
+            # waiting on a dead pipe — and awaited, because cancellation only
+            # requests it and returning would leave the task pending into shutdown.
+            if self._stderr_task is not None:
+                self._stderr_task.cancel()
+                await asyncio.gather(self._stderr_task, return_exceptions=True)
+                self._stderr_task = None
+            if self._proc is None or self._proc.returncode is not None:
+                return
+            try:
+                if self._proc.stdin is not None and not self._proc.stdin.is_closing():
+                    self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self._proc.terminate()
+                await asyncio.wait_for(self._proc.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                self._proc.kill()
+                await self._proc.wait()
+            except ProcessLookupError:
+                pass
 
     @property
     def is_closed(self) -> bool:

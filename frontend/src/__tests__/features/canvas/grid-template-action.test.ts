@@ -89,13 +89,18 @@ describe('工作流 · 宫格功能（点功能建节点 → ↑ 才提交）', 
     awaitTaskCompletion.mockResolvedValue({ result: { output_url: '/static/out.png' } });
 
     const nextNodeId = spawnAssetBoardImageOpNode('img-1', '/static/a.png', 'sceneSettingSheet');
-    await runAssetBoardImageOp(nextNodeId as string);
+    await runAssetBoardImageOp(nextNodeId as string, 'sceneSettingSheet', {
+      model: 'studio-image', catalogId: 'studio-catalog', imageSize: '2K',
+    });
 
     expect(submitFreezoneTemplateEdit).toHaveBeenCalledWith('proj-1', {
       sourceUrl: '/static/a.png',
       mode: 'scene_setting_sheet',
       // 提示词留空 → 用功能名兜底。
       prompt: '场景设定图',
+      model: 'studio-image',
+      catalogId: 'studio-catalog',
+      imageSize: '2K',
     });
     expect(awaitTaskCompletion).toHaveBeenCalledWith('tk-1', 'proj-1');
     // output_url 已有 → 不再兜底查 job result。

@@ -156,10 +156,8 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
     aspectRatio,
     aspectRatioOptions,
   ) as FreezoneRedrawAspectRatio;
-  const qualityOptions = useMemo(
-    () => resolveModelQualityOptions(selectedModel),
-    [selectedModel],
-  );
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
   const creditCost = useGenerationCreditCost(
     'feature',
     selectedModel ? FREEZONE_IMAGE_FEATURES.edit : null,
@@ -167,9 +165,7 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
       surface: 'canvas',
       params: buildImageFeatureBillingParams(selectedModel, {
         size: effectiveImageSize,
-        ...(qualityOptions.length > 0
-          ? { quality: pickAllowedOption('medium', qualityOptions) }
-          : {}),
+        ...(quality ? { quality } : {}),
         operation: 'redraw',
         pricing_quantity: Math.min(Math.max(numImages, 1), 4),
       }),
@@ -462,7 +458,6 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
       nodeId: string,
       sourceUrl: string,
       maskUrl: string | null,
-      apiModel: string,
     ) => {
       try {
         const ref = await submitFreezoneRedraw(project, {
@@ -472,7 +467,9 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
           aspectRatio: effectiveAspectRatio,
           numImages: 1,
           imageSize: effectiveImageSize,
-          model: apiModel,
+          model: selectedModel?.apiModel,
+          catalogId: selectedModel?.catalogId,
+          quality,
         });
         updateNodeData(nodeId, generationTaskDescriptor(ref));
         const completed = await awaitTaskCompletion(ref.task_key, project, { taskType: ref.task_type });
@@ -505,7 +502,7 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
         });
       }
     },
-    [effectiveAspectRatio, effectiveImageSize, prompt, t, updateNodeData],
+    [effectiveAspectRatio, effectiveImageSize, prompt, quality, selectedModel, t, updateNodeData],
   );
 
   const handleSubmit = useCallback(async () => {
@@ -561,9 +558,8 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
         const uploaded = await uploadFreezoneImage(project, maskFile);
         maskUrl = uploaded.url.split('?')[0];
       }
-      const apiModel = selectedModel?.apiModel ?? modelId;
       nodeIds.forEach((id) =>
-        void runRedrawGeneration(project, id, sourceUrl, maskUrl, apiModel),
+        void runRedrawGeneration(project, id, sourceUrl, maskUrl),
       );
     } catch (err) {
       // 蒙版上传等前置步骤失败：把所有占位节点标记为失败。
@@ -585,7 +581,6 @@ export const RedrawOverlay = memo(({ node, imageSource, onClose }: RedrawOverlay
     createRedrawNode,
     findNodePosition,
     hasMask,
-    modelId,
     node,
     numImages,
     onClose,

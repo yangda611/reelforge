@@ -3312,6 +3312,28 @@ def _compile_dynamic_recipe_items_intent(
             phases.append("compose")
 
     edges = _dedupe_intent_edges(edges)
+    consumed_external_ids = {
+        endpoint
+        for edge in edges
+        for endpoint in (edge.get("source"), edge.get("target"))
+        if endpoint in external_ids
+    }
+    dangling_external_ids = sorted(external_ids - consumed_external_ids)
+    if dangling_external_ids:
+        # An external input is an existing canvas node the plan consumes. Declared
+        # but unread, it would compile into a disconnected node and surface as a
+        # graph error the Agent cannot act on, so name the fix instead.
+        return _intent_error(
+            "external input is declared but nothing consumes it: "
+            + ", ".join(dangling_external_ids),
+            path="external_inputs",
+            hint=(
+                "Reference each external input id from at least one item's "
+                "depends_on or reference_inputs so the plan actually reads it, or "
+                "remove the declaration. An external input must also be a real "
+                "canvas node of that media kind: a script/text node is not an image."
+            ),
+        )
     skill_id = _text(skill.get("id"))
     title = _text(intent.get("title")) or _catalog_label(skill)
     if skill_id == "social-content-campaign":

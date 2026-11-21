@@ -688,6 +688,7 @@ class FreezoneCharacterMultiViewRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -860,6 +861,7 @@ class FreezoneUpscaleRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
     camera: Optional[FreezoneImageCameraConfig] = Field(
         default=None,
@@ -906,6 +908,7 @@ class FreezoneOutpaintRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -950,6 +953,7 @@ class FreezoneRedrawRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -991,6 +995,7 @@ class FreezoneRelightRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 

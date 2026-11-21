@@ -16,6 +16,9 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -37,6 +40,15 @@ _warned_repo_state_fallback = False
 
 
 _DEFAULT_HERMES_MODEL = "DC-hermes-LLM"
+
+# config.yaml is reconciled by several independent helpers, and a project turn
+# can call them from concurrent request threads. A plain read-text → mutate →
+# write-text cycle lets two writers interleave and leaves a half-merged file:
+# the tail of one dump appended to the head of another. That is not merely noisy
+# — Hermes then falls back to its built-in defaults, silently dropping the
+# gateway route, and every turn fails with APIConnectionError. So all
+# config.yaml mutation goes through one lock and one atomic replace.
+_CONFIG_YAML_LOCK = threading.RLock()
 _DRAMACLAW_HERMES_PROVIDER_NAME = "dramaclaw"
 _DRAMACLAW_HERMES_PROVIDER = f"custom:{_DRAMACLAW_HERMES_PROVIDER_NAME}"
 _DRAMACLAW_HERMES_KEY_ENV = "NEWAPI_API_KEY"
@@ -329,6 +341,53 @@ def _root_value(*names: str) -> str:
     return ""
 
 
+def _read_config_yaml(config_yaml: Path) -> str | None:
+    """Read config.yaml, or None when it is absent/unreadable."""
+    try:
+        return config_yaml.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _write_config_yaml(config_yaml: Path, text: str) -> bool:
+    """Atomically replace config.yaml.
+
+    A temp file in the same directory plus ``os.replace`` means a concurrent
+    reader never observes a partially written file, and a crash mid-write leaves
+    the previous good config intact rather than a truncated one.
+    """
+    tmp = config_yaml.with_name(f"{config_yaml.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, config_yaml)
+    except OSError as exc:
+        _log.warning("failed to write hermes config yaml at %s: %s", config_yaml, exc)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _quarantine_broken_config_yaml(config_yaml: Path, text: str) -> Path | None:
+    """Preserve an unparseable config.yaml before regenerating it.
+
+    The operator's intended overrides are the only copy of their preferences, so
+    the broken text is kept next to the file (never deleted) even though we
+    replace the live file with a working one.
+    """
+    backup = config_yaml.with_name(
+        f"{config_yaml.name}.corrupt.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+    )
+    try:
+        if not backup.exists():
+            backup.write_text(text, encoding="utf-8")
+        return backup
+    except OSError:
+        return None
+
+
 def _effective_newapi_gateway() -> tuple[str, str]:
     """Return the independent LLM gateway used by Hermes."""
     from novelvideo.model_gateway_settings import get_effective_agent_llm_config
@@ -512,6 +571,98 @@ _OLD_SOUL_IDENTITY_TEXT = (
 )
 
 
+def hermes_workspace_path(
+    username: str,
+    *,
+    profile: str = "director",
+    project_state_dir: str | Path | None = None,
+) -> Path:
+    normalized_profile = "freezone" if profile == "freezone" else "director"
+    if project_state_dir is not None:
+        return Path(project_state_dir) / "agents" / "hermes" / normalized_profile
+    home_name = ".hermes-freezone" if normalized_profile == "freezone" else ".hermes"
+    return _state_root() / username / home_name
+
+
+def _align_persisted_session_route(home: Path) -> None:
+    """Point Hermes' frozen per-session route back at the configured gateway.
+
+    Hermes snapshots ``provider``/``base_url``/``api_mode`` into the
+    ``sessions.model_config`` column when a session is created, and its ACP
+    restore path prefers that snapshot over the config.yaml it loads
+    (``acp_adapter.session._restore`` feeds it to ``_make_agent``, where the
+    snapshot's ``base_url``/``api_mode`` beat whatever
+    ``resolve_runtime_provider`` came back with). A session created while the
+    workspace was misconfigured is therefore pinned to the wrong endpoint for
+    the rest of its life: we saw a row pointing at ``openrouter.ai`` with no
+    key, so every turn died as APIConnectionError while config.yaml looked
+    correct. Correcting the file alone cannot fix those sessions, so align the
+    snapshot whenever the workspace is (re)materialized.
+
+    The comparison deliberately ignores ``provider``: Hermes re-persists a
+    named custom endpoint as the bare ``"custom"`` after each turn it runs, so
+    treating that as drift would rewrite a correctly-routed row on every spawn.
+    Only ``base_url`` and ``api_mode`` decide where the request goes — the
+    credential itself arrives per turn.
+    """
+    db_path = home / "state.db"
+    if not db_path.is_file():
+        return
+    try:
+        desired_base_url = str(_newapi_base_url() or "").strip().rstrip("/")
+        desired_api_mode = _hermes_model_api_mode()
+    except Exception as exc:  # noqa: BLE001 - gateway may be unconfigured
+        _log.warning("cannot resolve the hermes gateway route for %s: %s", home, exc)
+        return
+    if not desired_base_url:
+        # An empty endpoint means the deployment has no gateway configured yet;
+        # writing it would replace a stale-but-real route with a broken one.
+        return
+    desired_provider = _DRAMACLAW_HERMES_PROVIDER
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2.0)
+    except sqlite3.Error as exc:
+        _log.warning("cannot open hermes state db at %s: %s", db_path, exc)
+        return
+    try:
+        rows = conn.execute(
+            "select id, model_config from sessions where model_config is not null"
+        ).fetchall()
+        updates: list[tuple[str, str]] = []
+        for session_id, raw in rows:
+            try:
+                meta = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(meta, dict):
+                continue
+            if (
+                str(meta.get("base_url") or "").rstrip("/") == desired_base_url
+                and meta.get("api_mode") == desired_api_mode
+            ):
+                continue
+            meta["provider"] = desired_provider
+            meta["base_url"] = desired_base_url
+            meta["api_mode"] = desired_api_mode
+            updates.append((json.dumps(meta, ensure_ascii=False), session_id))
+        if updates:
+            with conn:
+                conn.executemany(
+                    "update sessions set model_config = ? where id = ?", updates
+                )
+            _log.warning(
+                "realigned %d hermes session(s) at %s onto the configured gateway",
+                len(updates),
+                db_path,
+            )
+    except sqlite3.Error as exc:
+        # A busy or half-migrated database must not block the user's turn; the
+        # next spawn retries.
+        _log.warning("cannot realign hermes session routes at %s: %s", db_path, exc)
+    finally:
+        conn.close()
+
+
 def ensure_user_hermes_workspace(
     username: str,
     *,
@@ -537,13 +688,9 @@ def ensure_user_hermes_workspace(
     Returns the HERMES_HOME path (caller passes as ``HERMES_HOME`` env var).
     """
     normalized_profile = "freezone" if profile == "freezone" else "director"
-    if project_state_dir is not None:
-        home = Path(project_state_dir) / "agents" / "hermes" / normalized_profile
-    else:
-        home_name = (
-            ".hermes-freezone" if normalized_profile == "freezone" else ".hermes"
-        )
-        home = _state_root() / username / home_name
+    home = hermes_workspace_path(
+        username, profile=normalized_profile, project_state_dir=project_state_dir
+    )
     home.mkdir(parents=True, exist_ok=True)
     try:
         home.chmod(0o700)
@@ -572,17 +719,14 @@ def ensure_user_hermes_workspace(
     plugins_dir.mkdir(exist_ok=True)
     _materialize_plugin_links(plugins_dir, profile=normalized_profile)
 
-    # hermes config (only write if missing — user may have customized)
+    # hermes config (only write if missing — user may have customized). The
+    # existence check happens under the same lock as the reconcilers: two
+    # concurrent workspace creations would otherwise both see "missing", and the
+    # slower template write would undo the other thread's gateway route.
     config_yaml = home / "config.yaml"
-    if not config_yaml.exists():
-        config_yaml.write_text(
-            (
-                _default_freezone_config_yaml()
-                if normalized_profile == "freezone"
-                else _default_config_yaml()
-            ),
-            encoding="utf-8",
-        )
+    with _CONFIG_YAML_LOCK:
+        if not config_yaml.exists():
+            _write_config_yaml(config_yaml, _config_yaml_template(normalized_profile))
     if normalized_profile == "freezone":
         _ensure_freezone_config_policy(config_yaml)
         _ensure_freezone_python_hooks(home)
@@ -603,6 +747,7 @@ def ensure_user_hermes_workspace(
             pass
     _remove_managed_model_env_values(env_file)
     _ensure_gateway_env_file(env_file)
+    _align_persisted_session_route(home)
 
     return home
 
@@ -1051,49 +1196,51 @@ def _materialize_skill_links(skills_dir: Path, *, profile: str = "director") -> 
 
 
 def _ensure_default_plugin_enabled(config_yaml: Path) -> None:
-    """Non-destructively add repo default plugins to legacy configs."""
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    missing = [
-        name
-        for name in sorted(DEFAULT_HERMES_PLUGINS)
-        if not re.search(rf"(?m)^    - {re.escape(name)}(?:\s*(?:#.*)?)?$", text)
-    ]
-    if not missing:
-        return
-    if "plugins:" not in text:
-        plugin_names = "\n".join(f"    - {name}" for name in missing)
-        new_text = text.rstrip() + f"\nplugins:\n  enabled:\n{plugin_names}\n"
-    elif re.search(r"(?m)^  enabled:\s*$", text):
-        new_text = re.sub(
-            r"(?m)^  enabled:\s*$",
-            lambda m: (
-                m.group(0)
-                + "\n"
-                + "".join(f"    - {name}\n" for name in missing).rstrip()
-            ),
-            text,
-            count=1,
-        )
-    else:
-        new_text = re.sub(
-            r"(?m)^plugins:\s*$",
-            lambda m: (
-                m.group(0)
-                + "\n  enabled:\n"
-                + "".join(f"    - {name}\n" for name in missing).rstrip()
-            ),
-            text,
-            count=1,
-        )
-    if new_text == text:
-        return
-    try:
-        config_yaml.write_text(new_text.rstrip() + "\n", encoding="utf-8")
-    except OSError:
-        return
+    """Non-destructively add repo default plugins to legacy configs.
+
+    Text-level editing (rather than a YAML round-trip) keeps hand-written comments
+    and ordering intact, so it must still take the shared lock: an unlocked
+    read-modify-write would clobber a concurrent gateway/model update.
+    """
+    with _CONFIG_YAML_LOCK:
+        text = _read_config_yaml(config_yaml)
+        if text is None:
+            return
+        missing = [
+            name
+            for name in sorted(DEFAULT_HERMES_PLUGINS)
+            if not re.search(rf"(?m)^    - {re.escape(name)}(?:\s*(?:#.*)?)?$", text)
+        ]
+        if not missing:
+            return
+        if "plugins:" not in text:
+            plugin_names = "\n".join(f"    - {name}" for name in missing)
+            new_text = text.rstrip() + f"\nplugins:\n  enabled:\n{plugin_names}\n"
+        elif re.search(r"(?m)^  enabled:\s*$", text):
+            new_text = re.sub(
+                r"(?m)^  enabled:\s*$",
+                lambda m: (
+                    m.group(0)
+                    + "\n"
+                    + "".join(f"    - {name}\n" for name in missing).rstrip()
+                ),
+                text,
+                count=1,
+            )
+        else:
+            new_text = re.sub(
+                r"(?m)^plugins:\s*$",
+                lambda m: (
+                    m.group(0)
+                    + "\n  enabled:\n"
+                    + "".join(f"    - {name}\n" for name in missing).rstrip()
+                ),
+                text,
+                count=1,
+            )
+        if new_text == text:
+            return
+        _write_config_yaml(config_yaml, new_text.rstrip() + "\n")
 
 
 def _configured_max_turns(env_name: str, default: int) -> int:
@@ -1122,164 +1269,188 @@ def _configured_tool_search_mode() -> str:
     return "auto"
 
 
+def _config_yaml_template(profile: str) -> str:
+    return (
+        _default_freezone_config_yaml()
+        if profile == "freezone"
+        else _default_config_yaml()
+    )
+
+
+def _recover_broken_config_yaml(config_yaml: Path, text: str, *, profile: str) -> bool:
+    """Replace an unparseable config.yaml with a freshly rendered template.
+
+    Hermes treats an unparseable config as "no config" and silently runs on its
+    built-in defaults — no gateway route, no disabled toolsets — which surfaces
+    to the user as a bare APIConnectionError on every turn instead of a config
+    error. Leaving the file in that state makes the workspace unusable forever,
+    so regenerate it (the broken text is preserved as a ``.corrupt.*.bak``).
+    """
+    backup = _quarantine_broken_config_yaml(config_yaml, text)
+    _log.warning(
+        "hermes config yaml at %s is unparseable; regenerating %s profile "
+        "template (broken copy kept at %s)",
+        config_yaml,
+        profile,
+        backup,
+    )
+    return _write_config_yaml(config_yaml, _config_yaml_template(profile))
+
+
+def _mutate_config_yaml(
+    config_yaml: Path, mutate, *, profile: str | None = None
+) -> bool:
+    """Load → mutate → atomically save config.yaml under the shared lock.
+
+    ``mutate`` receives the parsed dict and returns True when it changed
+    something (avoids rewriting an unchanged file). With ``profile`` set the
+    file is regenerated if it cannot be parsed; without it the helper only warns,
+    because the profile policy pass already owns recovery.
+    """
+    with _CONFIG_YAML_LOCK:
+        text = _read_config_yaml(config_yaml)
+        if text is None:
+            return False
+        try:
+            config = yaml.safe_load(text) or {}
+        except yaml.YAMLError:
+            if profile is None:
+                _log.warning("failed to parse hermes config yaml at %s", config_yaml)
+                return False
+            return _recover_broken_config_yaml(config_yaml, text, profile=profile)
+        if not isinstance(config, dict):
+            config = {}
+        if not mutate(config):
+            return False
+        return _write_config_yaml(config_yaml, _dump_hermes_config_yaml(config))
+
+
 def _ensure_director_config_policy(config_yaml: Path) -> None:
     """Keep the outer assistant on a small, DramaClaw-only agent surface."""
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    try:
-        config = yaml.safe_load(text) or {}
-    except yaml.YAMLError:
-        _log.warning("failed to parse director hermes config yaml at %s", config_yaml)
-        return
-    if not isinstance(config, dict):
-        config = {}
 
-    config["enabled_toolsets"] = ["hermes-acp", "memory"]
-    plugins = config.get("plugins")
-    if not isinstance(plugins, dict):
-        plugins = {}
-    plugins["enabled"] = ["dramaclaw", "websearch"]
-    config["plugins"] = plugins
+    def mutate(config: dict) -> bool:
+        config["enabled_toolsets"] = ["hermes-acp", "memory"]
+        plugins = config.get("plugins")
+        if not isinstance(plugins, dict):
+            plugins = {}
+        plugins["enabled"] = ["dramaclaw", "websearch"]
+        config["plugins"] = plugins
 
-    agent = config.get("agent")
-    if not isinstance(agent, dict):
-        agent = {}
-    agent["max_turns"] = _configured_max_turns("HERMES_DIRECTOR_MAX_TURNS", 4)
-    config["agent"] = agent
+        agent = config.get("agent")
+        if not isinstance(agent, dict):
+            agent = {}
+        agent["max_turns"] = _configured_max_turns("HERMES_DIRECTOR_MAX_TURNS", 4)
+        config["agent"] = agent
+        return True
 
-    try:
-        config_yaml.write_text(_dump_hermes_config_yaml(config), encoding="utf-8")
-    except OSError:
-        _log.warning(
-            "failed to enforce director hermes config policy at %s", config_yaml
-        )
+    _mutate_config_yaml(config_yaml, mutate, profile="director")
 
 
 def _ensure_freezone_config_policy(config_yaml: Path) -> None:
     """Force the Freezone Hermes profile to expose only canvas-oriented tools."""
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    try:
-        config = yaml.safe_load(text) or {}
-    except yaml.YAMLError:
-        _log.warning("failed to parse freezone hermes config yaml at %s", config_yaml)
-        return
-    if not isinstance(config, dict):
-        config = {}
 
-    config["enabled_toolsets"] = ["hermes-acp", "freezone-acp", "memory"]
-    plugins = config.get("plugins")
-    if not isinstance(plugins, dict):
-        plugins = {}
-    plugins["enabled"] = ["freezone", "websearch"]
-    config["plugins"] = plugins
+    def mutate(config: dict) -> bool:
+        config["enabled_toolsets"] = ["hermes-acp", "freezone-acp", "memory"]
+        plugins = config.get("plugins")
+        if not isinstance(plugins, dict):
+            plugins = {}
+        plugins["enabled"] = ["freezone", "websearch"]
+        config["plugins"] = plugins
 
-    agent = config.get("agent")
-    if not isinstance(agent, dict):
-        agent = {}
-    agent["max_turns"] = _configured_max_turns("HERMES_FREEZONE_MAX_TURNS", 12)
-    # 虾画 worker 是画布 agent,不是 coding agent:关掉 Hermes 的 coding 姿态,
-    # 否则每个 system prompt 多 ~3.9k 字符,且教模型用 registry 已禁用的
-    # read_file/patch/terminal 等工具。
-    agent["coding_context"] = "off"
-    config["agent"] = agent
+        agent = config.get("agent")
+        if not isinstance(agent, dict):
+            agent = {}
+        agent["max_turns"] = _configured_max_turns("HERMES_FREEZONE_MAX_TURNS", 12)
+        # 虾画 worker 是画布 agent,不是 coding agent:关掉 Hermes 的 coding 姿态,
+        # 否则每个 system prompt 多 ~3.9k 字符,且教模型用 registry 已禁用的
+        # read_file/patch/terminal 等工具。
+        agent["coding_context"] = "off"
+        config["agent"] = agent
 
-    tools = config.get("tools")
-    if not isinstance(tools, dict):
-        tools = {}
-    tool_search = tools.get("tool_search")
-    if not isinstance(tool_search, dict):
-        tool_search = {}
-    # Tool Search defaults to progressive disclosure so the Freezone plugin's
-    # large schema catalog is not serialized on every model request. Operators
-    # can set HERMES_TOOL_SEARCH_MODE=off for an explicit compatibility
-    # rollback. skill_manage stays removed at registry level by sitecustomize
-    # so Hermes cannot self-create project skills.
-    tool_search["enabled"] = _configured_tool_search_mode()
-    tools["tool_search"] = tool_search
-    skill_manage = tools.get("skill_manage")
-    if not isinstance(skill_manage, dict):
-        skill_manage = {}
-    skill_manage["enabled"] = "off"
-    tools["skill_manage"] = skill_manage
-    config["tools"] = tools
+        tools = config.get("tools")
+        if not isinstance(tools, dict):
+            tools = {}
+        tool_search = tools.get("tool_search")
+        if not isinstance(tool_search, dict):
+            tool_search = {}
+        # Tool Search defaults to progressive disclosure so the Freezone plugin's
+        # large schema catalog is not serialized on every model request. Operators
+        # can set HERMES_TOOL_SEARCH_MODE=off for an explicit compatibility
+        # rollback. skill_manage stays removed at registry level by sitecustomize
+        # so Hermes cannot self-create project skills.
+        tool_search["enabled"] = _configured_tool_search_mode()
+        tools["tool_search"] = tool_search
+        skill_manage = tools.get("skill_manage")
+        if not isinstance(skill_manage, dict):
+            skill_manage = {}
+        skill_manage["enabled"] = "off"
+        tools["skill_manage"] = skill_manage
+        config["tools"] = tools
 
-    disabled_toolsets = config.get("disabled_toolsets")
-    if not isinstance(disabled_toolsets, list):
-        disabled_toolsets = []
-    disabled = [str(item).strip() for item in disabled_toolsets if str(item).strip()]
-    for item in [
-        "dramaclaw",
-        "dramaclaw-acp",
-        "bash",
-        "shell",
-        "terminal",
-        "subprocess",
-        "file_write",
-        "file_read",
-        "edit",
-        "write",
-        "read",
-        "glob",
-        "grep",
-    ]:
-        if item not in disabled:
-            disabled.append(item)
-    config["disabled_toolsets"] = disabled
+        disabled_toolsets = config.get("disabled_toolsets")
+        if not isinstance(disabled_toolsets, list):
+            disabled_toolsets = []
+        disabled = [str(item).strip() for item in disabled_toolsets if str(item).strip()]
+        for item in [
+            "dramaclaw",
+            "dramaclaw-acp",
+            "bash",
+            "shell",
+            "terminal",
+            "subprocess",
+            "file_write",
+            "file_read",
+            "edit",
+            "write",
+            "read",
+            "glob",
+            "grep",
+        ]:
+            if item not in disabled:
+                disabled.append(item)
+        config["disabled_toolsets"] = disabled
+        return True
 
-    try:
-        config_yaml.write_text(_dump_hermes_config_yaml(config), encoding="utf-8")
-    except OSError:
-        _log.warning(
-            "failed to enforce freezone hermes config policy at %s", config_yaml
-        )
+    _mutate_config_yaml(config_yaml, mutate, profile="freezone")
 
 
 def _ensure_default_toolsets_enabled(config_yaml: Path) -> None:
     """Non-destructively add repo default toolsets to legacy configs."""
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    original_text = text
-    text = _migrate_acp_toolsets(text)
-    missing = [
-        name
-        for name in sorted(DEFAULT_HERMES_TOOLSETS)
-        if not re.search(rf"(?m)^  - {re.escape(name)}(?:\s*(?:#.*)?)?$", text)
-    ]
-    if not missing:
-        if text == original_text:
+    with _CONFIG_YAML_LOCK:
+        text = _read_config_yaml(config_yaml)
+        if text is None:
             return
-        try:
-            config_yaml.write_text(text.rstrip() + "\n", encoding="utf-8")
-        except OSError:
+        original_text = text
+        text = _migrate_acp_toolsets(text)
+        missing = [
+            name
+            for name in sorted(DEFAULT_HERMES_TOOLSETS)
+            if not re.search(rf"(?m)^  - {re.escape(name)}(?:\s*(?:#.*)?)?$", text)
+        ]
+        if not missing:
+            if text == original_text:
+                return
+            _write_config_yaml(config_yaml, text.rstrip() + "\n")
             return
-        return
-    if "enabled_toolsets:" not in text:
-        addition = "enabled_toolsets:\n" + "".join(f"  - {name}\n" for name in missing)
-        new_text = text.rstrip() + "\n\n" + addition
-    else:
-        new_text = re.sub(
-            r"(?m)^enabled_toolsets:\s*$",
-            lambda m: (
-                m.group(0)
-                + "\n"
-                + "".join(f"  - {name}\n" for name in missing).rstrip()
-            ),
-            text,
-            count=1,
-        )
-        if new_text == text:
-            return
-    try:
-        config_yaml.write_text(new_text.rstrip() + "\n", encoding="utf-8")
-    except OSError:
-        return
+        if "enabled_toolsets:" not in text:
+            addition = "enabled_toolsets:\n" + "".join(
+                f"  - {name}\n" for name in missing
+            )
+            new_text = text.rstrip() + "\n\n" + addition
+        else:
+            new_text = re.sub(
+                r"(?m)^enabled_toolsets:\s*$",
+                lambda m: (
+                    m.group(0)
+                    + "\n"
+                    + "".join(f"  - {name}\n" for name in missing).rstrip()
+                ),
+                text,
+                count=1,
+            )
+            if new_text == text:
+                return
+        _write_config_yaml(config_yaml, new_text.rstrip() + "\n")
 
 
 def _migrate_acp_toolsets(text: str) -> str:
@@ -1326,75 +1497,63 @@ def _ensure_model_gateway_config(config_yaml: Path) -> None:
     environment. Existing workspaces are normalized lazily on their next spawn,
     so releases need no separate workspace migration.
     """
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    try:
-        config = yaml.safe_load(text) or {}
-    except yaml.YAMLError:
-        _log.warning("failed to parse hermes config yaml at %s", config_yaml)
-        return
-    if not isinstance(config, dict):
-        return
-    model = config.get("model")
-    if not isinstance(model, dict):
-        model = {}
-        config["model"] = model
-    changed = False
-    desired_model = {
-        "default": _hermes_model_default(),
-        "provider": _DRAMACLAW_HERMES_PROVIDER,
-        "context_length": int(_hermes_model_context_length()),
-    }
-    for key, value in desired_model.items():
-        if model.get(key) != value:
-            model[key] = value
-            changed = True
-    for secret_or_legacy_key in ("api_key", "api", "base_url"):
-        if secret_or_legacy_key in model:
-            model.pop(secret_or_legacy_key, None)
-            changed = True
 
-    providers = config.get("custom_providers")
-    if not isinstance(providers, list):
-        providers = []
-        config["custom_providers"] = providers
-        changed = True
-    managed_provider = next(
-        (
-            item
-            for item in providers
-            if isinstance(item, dict)
-            and str(item.get("name") or "").strip().lower()
-            == _DRAMACLAW_HERMES_PROVIDER_NAME
-        ),
-        None,
-    )
-    if managed_provider is None:
-        managed_provider = {"name": _DRAMACLAW_HERMES_PROVIDER_NAME}
-        providers.append(managed_provider)
-        changed = True
-    desired_provider = {
-        "name": _DRAMACLAW_HERMES_PROVIDER_NAME,
-        "base_url": _newapi_base_url(),
-        "key_env": _DRAMACLAW_HERMES_KEY_ENV,
-        "api_mode": _hermes_model_api_mode(),
-    }
-    for key, value in desired_provider.items():
-        if managed_provider.get(key) != value:
-            managed_provider[key] = value
+    def mutate(config: dict) -> bool:
+        changed = False
+        model = config.get("model")
+        if not isinstance(model, dict):
+            model = {}
+            config["model"] = model
+        desired_model = {
+            "default": _hermes_model_default(),
+            "provider": _DRAMACLAW_HERMES_PROVIDER,
+            "context_length": int(_hermes_model_context_length()),
+        }
+        for key, value in desired_model.items():
+            if model.get(key) != value:
+                model[key] = value
+                changed = True
+        for secret_or_legacy_key in ("api_key", "api", "base_url"):
+            if secret_or_legacy_key in model:
+                model.pop(secret_or_legacy_key, None)
+                changed = True
+
+        providers = config.get("custom_providers")
+        if not isinstance(providers, list):
+            providers = []
+            config["custom_providers"] = providers
             changed = True
-    for secret_key in ("api_key", "api"):
-        if secret_key in managed_provider:
-            managed_provider.pop(secret_key, None)
+        managed_provider = next(
+            (
+                item
+                for item in providers
+                if isinstance(item, dict)
+                and str(item.get("name") or "").strip().lower()
+                == _DRAMACLAW_HERMES_PROVIDER_NAME
+            ),
+            None,
+        )
+        if managed_provider is None:
+            managed_provider = {"name": _DRAMACLAW_HERMES_PROVIDER_NAME}
+            providers.append(managed_provider)
             changed = True
-    if not changed:
-        return
-    try:
-        config_yaml.write_text(_dump_hermes_config_yaml(config), encoding="utf-8")
-    except OSError:
-        _log.warning("failed to sync managed model gateway into %s", config_yaml)
+        desired_provider = {
+            "name": _DRAMACLAW_HERMES_PROVIDER_NAME,
+            "base_url": _newapi_base_url(),
+            "key_env": _DRAMACLAW_HERMES_KEY_ENV,
+            "api_mode": _hermes_model_api_mode(),
+        }
+        for key, value in desired_provider.items():
+            if managed_provider.get(key) != value:
+                managed_provider[key] = value
+                changed = True
+        for secret_key in ("api_key", "api"):
+            if secret_key in managed_provider:
+                managed_provider.pop(secret_key, None)
+                changed = True
+        return changed
+
+    _mutate_config_yaml(config_yaml, mutate)
 
 
 class _IndentedSafeDumper(yaml.SafeDumper):
@@ -1427,32 +1586,20 @@ def _ensure_model_config_from_env(config_yaml: Path) -> None:
         overrides["context_length"] = int(_hermes_model_context_length())
     if not overrides:
         return
-    try:
-        text = config_yaml.read_text(encoding="utf-8")
-    except OSError:
-        return
-    try:
-        config = yaml.safe_load(text) or {}
-    except yaml.YAMLError:
-        _log.warning("failed to parse hermes config yaml at %s", config_yaml)
-        return
-    if not isinstance(config, dict):
-        return
-    config_model = config.setdefault("model", {})
-    if not isinstance(config_model, dict):
-        config_model = {}
-        config["model"] = config_model
-    changed = False
-    for key, value in overrides.items():
-        if config_model.get(key) != value:
-            config_model[key] = value
-            changed = True
-    if not changed:
-        return
-    try:
-        config_yaml.write_text(_dump_hermes_config_yaml(config), encoding="utf-8")
-    except OSError:
-        _log.warning("failed to apply hermes model env overrides to %s", config_yaml)
+
+    def mutate(config: dict) -> bool:
+        changed = False
+        config_model = config.setdefault("model", {})
+        if not isinstance(config_model, dict):
+            config_model = {}
+            config["model"] = config_model
+        for key, value in overrides.items():
+            if config_model.get(key) != value:
+                config_model[key] = value
+                changed = True
+        return changed
+
+    _mutate_config_yaml(config_yaml, mutate)
 
 
 def _materialize_plugin_links(plugins_dir: Path, *, profile: str = "director") -> None:

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
+import type { FixedFeatureSubmitFields } from '@/features/canvas/domain/fixedFeatureModelRequest';
 import {
   fetchFreezoneJobResult,
   submitFreezoneScene360,
@@ -38,7 +39,7 @@ export interface Scene360ImageResult {
 export function scene360Image(
   sourceNodeId: string,
   imageSource: string,
-  opts: {
+  opts: FixedFeatureSubmitFields & {
     displayName: string;
     aspectRatio: FreezoneScene360AspectRatio;
   },
@@ -82,6 +83,10 @@ export function scene360Image(
       const ref = await submitFreezoneScene360(project, {
         referenceUrl: imageSource.split('?')[0],
         aspectRatio: opts.aspectRatio,
+        model: opts.model,
+        catalogId: opts.catalogId,
+        imageSize: opts.imageSize,
+        quality: opts.quality,
       });
       useCanvasStore.getState().updateNodeData(nextNodeId, generationTaskDescriptor(ref));
       const completed = await awaitTaskCompletion(ref.task_key, project);

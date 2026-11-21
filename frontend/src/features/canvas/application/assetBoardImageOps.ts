@@ -19,6 +19,7 @@ import {
 import { readUrl } from '@/lib/url-params';
 import { useCanvasStore } from '@/stores/canvasStore';
 
+import type { FixedFeatureSubmitFields } from '@/features/canvas/domain/fixedFeatureModelRequest';
 import { GRID_ACTION_MODE_MAP, type GridActionKey } from './gridTemplateAction';
 import { generationTaskDescriptor } from './resumeGeneration';
 
@@ -274,21 +275,22 @@ function submitOp(
   sourceUrl: string,
   prompt: string,
   data: Record<string, unknown>,
+  modelFields: FixedFeatureSubmitFields,
 ): Promise<FreezoneJobRef> {
   if (isGridOpKey(opKey)) {
     return submitFreezoneTemplateEdit(project, {
       sourceUrl,
       mode: GRID_ACTION_MODE_MAP[opKey],
       prompt,
+      ...modelFields,
     });
   }
   // 宫格之外只剩全景（多角度/打光已从功能表撤下，见 AssetBoardImageOpKey）。
   // 全景的比例是它自己那套 2:1 / 21:9，不吃通用比例。
-  const imageSize = readString(data, 'size') ?? undefined;
   return submitFreezoneScene360(project, {
     referenceUrl: sourceUrl,
     aspectRatio: resolveScene360AspectRatio(data),
-    ...(imageSize ? { imageSize } : {}),
+    ...modelFields,
   });
 }
 
@@ -300,14 +302,17 @@ function submitOp(
  *
  * @returns settle 时 resolve 的后台链（不 reject）。
  */
-export async function runAssetBoardImageOp(nodeId: string): Promise<void> {
+export async function runAssetBoardImageOp(
+  nodeId: string,
+  opKey: AssetBoardImageOpKey,
+  modelFields: FixedFeatureSubmitFields,
+): Promise<void> {
   const project = readUrl().project;
   const store = useCanvasStore.getState();
   const node = store.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return;
   const data = node.data as Record<string, unknown>;
-  const opKey = data.imageOpKey;
-  if (!isAssetBoardImageOpKey(opKey)) return;
+  if (data.imageOpKey !== opKey || data.isGenerating) return;
 
   const sourceUrl = readString(data, 'imageOpSourceUrl');
   if (!project || !sourceUrl) {
@@ -328,7 +333,7 @@ export async function runAssetBoardImageOp(nodeId: string): Promise<void> {
   });
 
   try {
-    const ref = await submitOp(project, opKey, sourceUrl, prompt, data);
+    const ref = await submitOp(project, opKey, sourceUrl, prompt, data, modelFields);
     useCanvasStore.getState().updateNodeData(nodeId, generationTaskDescriptor(ref));
     const completed = await awaitTaskCompletion(ref.task_key, project);
     const directUrl = completed.result?.['output_url'] as string | undefined;

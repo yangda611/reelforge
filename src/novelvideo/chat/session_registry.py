@@ -91,10 +91,11 @@ def _chat_run_lock_project_for_turn(
     *,
     tool_mode: str,
     store_scope: Any | None = None,
+    default_canvas: str = "",
 ) -> str:
     if tool_mode != "freezone_canvas":
         return project
-    canvas_id = str(getattr(store_scope, "canvas_id", "") or "").strip()
+    canvas_id = str(getattr(store_scope, "canvas_id", "") or "").strip() or default_canvas
     agent_id = str(getattr(store_scope, "agent_id", "") or "main").strip() or "main"
     if canvas_id:
         return f"freezone:{project}:canvas:{canvas_id}:agent:{agent_id}"

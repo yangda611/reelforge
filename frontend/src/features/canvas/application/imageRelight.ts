@@ -135,6 +135,8 @@ export function relightImage(
         prompt: buildRelightPrompt(payload.smartMode),
         imageSize: payload.imageSize,
         model: payload.apiModel,
+        ...(payload.catalogId ? { catalogId: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       });
       useCanvasStore.getState().updateNodeData(nextNodeId, generationTaskDescriptor(ref));
       const completed = await awaitTaskCompletion(ref.task_key, project, {

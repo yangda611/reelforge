@@ -911,7 +911,7 @@ Canvas write contract:
   single text deliverable) or for the one empty previzNode of a 预演台 request. When producing
   multiple standalone or per-clip text deliverables (e.g. one text node per clip/shot) without
   media generation, use one freezone_emit_canvas_command batch of create_node (textAnnotationNode)
-  commands (optionally with connect_nodes/layout_nodes) instead of repeating freezone_create_node
+  commands (optionally with create_edge/layout_nodes) instead of repeating freezone_create_node
   or wrapping text-only cards in a media WorkflowPlan. Use one freezone_emit_canvas_command batch
   for several ordinary non-workflow canvas edits. Use FREEZONE_CANVAS_CONTEXT's canvas_id. Do not
   precheck pipeline failure unless the user asks about status.
@@ -2382,21 +2382,25 @@ def _pipeline_continuation_instructions(prompt: str, *, tool_mode: str) -> str:
     return f"{_DRAMACLAW_CONTINUATION_INSTRUCTIONS}\n\n"
 
 
-def _chat_backend() -> str:
-    preferred = (
+def configured_chat_backend() -> str:
+    return (
         os.environ.get("DRAMACLAW_CHAT_BACKEND")
         or os.environ.get("SUPERTALE_CHAT_BACKEND")
-        or "codex"
-    ).strip().lower() or "codex"
+        or "hermes"
+    ).strip().lower() or "hermes"
+
+
+def _chat_backend() -> str:
+    preferred = configured_chat_backend()
     if preferred == "hermes":
-        # Explicit "hermes" must succeed — do NOT silently fall back to
-        # claude/codex. A missing hermes binary is a config error to surface.
         if is_hermes_backend_available():
             return "hermes"
-        raise RuntimeError(
+        from novelvideo.chat.hermes_fork_requirement import HermesForkMissing
+
+        raise HermesForkMissing(
             "DRAMACLAW_CHAT_BACKEND=hermes requested but hermes is unavailable. "
-            "Run `uv tool install 'hermes-agent[acp]'`, "
-            "then run `hermes doctor` to diagnose."
+            "Install the ReelForge fork with `bash scripts/setup-hermes.sh` "
+            "and set HERMES_CLI_PATH to its executable."
         )
     if preferred == "codex":
         if is_codex_backend_available():
@@ -2415,11 +2419,7 @@ def _chat_backend() -> str:
             "DRAMACLAW_CHAT_BACKEND=claude requested but Claude is unavailable. "
             "Install claude-agent-sdk and ensure CLAUDE_CLI_PATH points to a valid claude binary."
         )
-    if is_codex_backend_available():
-        return "codex"
-    if is_claude_backend_available():
-        return "claude"
-    return preferred
+    raise RuntimeError("DRAMACLAW_CHAT_BACKEND must be hermes, codex, or claude.")
 
 
 def _claude_cli_path() -> Path:
@@ -4730,10 +4730,12 @@ async def stream_assistant_reply(
             surface,
             surface_context=surface_context,
         )
+    hermes = (str(backend or "").strip() or configured_chat_backend()) == "hermes"
     lock_project = _chat_run_lock_project_for_turn(
         project,
         tool_mode=tool_mode,
-        store_scope=store_scope,
+        store_scope=(execution_context or store_scope) if hermes else store_scope,
+        default_canvas="default" if hermes else "",
     )
     run_lock_id = _acquire_chat_run_lock(username, lock_project)
     heartbeat_task = asyncio.create_task(

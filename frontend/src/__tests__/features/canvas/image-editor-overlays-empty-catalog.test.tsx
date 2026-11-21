@@ -7,17 +7,20 @@
 // 去，界面显示一切正常，用户点下去才被后端 `_resolve_catalog_request` 用 409 顶
 // 回来。拉取失败时的兜底是对的（不然接口一抖用户就干不了活），把「没配」伪装成
 // 「有」是错的。
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UpscaleEditorOverlay } from "@/features/canvas/ui/UpscaleEditorOverlay";
+import { EraseOverlay } from "@/features/canvas/ui/EraseOverlay";
 import { RedrawOverlay } from "@/features/canvas/ui/RedrawOverlay";
 import type { CanvasNode } from "@/features/canvas/domain/canvasNodes";
 
 // NodeToolbar 要挂在真的 ReactFlow store 上才渲染内容，这里只关心工具条里的按钮。
-vi.mock("@xyflow/react", () => ({
+vi.mock("@xyflow/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@xyflow/react")>(),
   NodeToolbar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Position: { Top: "top", Bottom: "bottom" },
+  useViewport: () => ({ zoom: 1 }),
   useStore: (selector: (state: { transform: number[] }) => unknown) =>
     selector({ transform: [0, 0, 1] }),
 }));
@@ -32,6 +35,8 @@ const CATALOG_MODEL = {
   apiModel: "google/gemini-2.5-flash-image-preview",
   label: "Studio Image",
   resolutionOptions: ["1K", "4K"],
+  catalogId: "cat-upscale",
+  qualityOptions: ["low", "high"],
 };
 
 type ImageCatalogState = {
@@ -68,6 +73,11 @@ vi.mock("@/features/canvas/hooks/useFreezoneImageModels", async (importOriginal)
 }));
 
 const submitFreezoneUpscale = vi.fn();
+const submitFreezoneRedraw = vi.fn();
+
+vi.mock("@/lib/mask-highlight", () => ({
+  buildRedHighlightMaskBlob: async () => new Blob(),
+}));
 const fetchFreezoneJobResult = vi.fn();
 const awaitTaskCompletion = vi.fn();
 const useGenerationCreditCost = vi.fn();
@@ -76,6 +86,8 @@ vi.mock("@/api/ops", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/ops")>();
   return {
     ...actual,
+    uploadFreezoneImage: async () => ({ url: "/static/mask.png" }),
+    submitFreezoneRedraw: (...args: unknown[]) => submitFreezoneRedraw(...args),
     submitFreezoneUpscale: (...args: unknown[]) => submitFreezoneUpscale(...args),
     fetchFreezoneJobResult: (...args: unknown[]) => fetchFreezoneJobResult(...args),
   };
@@ -123,11 +135,24 @@ beforeEach(() => {
     job_id: "up-1",
     task_key: "freezone_image:up-1",
   });
+  submitFreezoneRedraw.mockResolvedValue({
+    task_type: "freezone_redraw", job_id: "erase-1", task_key: "freezone_redraw:erase-1",
+  });
   awaitTaskCompletion.mockResolvedValue({ result: { output_url: "https://x/out.png" } });
   useGenerationCreditCost.mockReturnValue({ data: undefined, error: null });
 });
 
 describe("超分面板", () => {
+  it("submits the catalog identity and effective quality used for billing", async () => {
+    render(<UpscaleEditorOverlay node={UPSCALE_NODE} />);
+    expect(useGenerationCreditCost.mock.calls[0][2].params).toMatchObject({
+      catalog_id: "cat-upscale", size: "1K", quality: "low",
+    });
+    fireEvent.click(screen.getByTitle("upscaleEditor.submit"));
+    await waitFor(() => expect(submitFreezoneUpscale).toHaveBeenCalledWith("demo", expect.objectContaining({
+      model: "google/gemini-2.5-flash-image-preview", catalogId: "cat-upscale", imageSize: "1K", quality: "low",
+    })));
+  });
   it("后台一个图片模型都没配时禁用提交，点了也不发请求", () => {
     imageCatalogState = EMPTY_CATALOG;
     render(<UpscaleEditorOverlay node={UPSCALE_NODE} />);
@@ -166,4 +191,39 @@ describe("重绘面板", () => {
     const button = screen.getByTitle("modelParams.noModelsAvailable");
     expect(button).toBeDisabled();
   });
+});
+
+it("Erase submits the catalog model, resolution and quality it quoted", async () => {
+  const image = new Image(10, 10);
+  Object.defineProperties(image, { naturalWidth: { value: 10 }, naturalHeight: { value: 10 } });
+  const imageMock = vi.spyOn(window, "Image").mockImplementation(function () { return image; });
+  const pixels = new Uint8ClampedArray(4);
+  const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    getImageData: () => ({ data: pixels, width: 1, height: 1 }),
+    beginPath: () => {},
+    arc: () => {},
+    fill: () => { pixels[3] = 255; },
+  } as unknown as CanvasRenderingContext2D);
+  try {
+    const { container } = render(
+      <EraseOverlay node={REDRAW_NODE} imageSource="https://x/src.png" onClose={() => {}} />,
+    );
+    act(() => { image.dispatchEvent(new Event("load")); });
+    const canvas = container.querySelectorAll("canvas")[1];
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 10, 10);
+    canvas.setPointerCapture = () => {};
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5 });
+    fireEvent.pointerUp(canvas);
+
+    expect(useGenerationCreditCost.mock.lastCall?.[2].params).toMatchObject({
+      operation: "erase", catalog_id: "cat-upscale", size: "1K", quality: "low",
+    });
+    fireEvent.click(screen.getByTitle("canvas.eraseOverlay.submit"));
+    await waitFor(() => expect(submitFreezoneRedraw).toHaveBeenCalledWith("demo", expect.objectContaining({
+      model: "google/gemini-2.5-flash-image-preview", catalogId: "cat-upscale", imageSize: "1K", quality: "low",
+    })));
+  } finally {
+    context.mockRestore();
+    imageMock.mockRestore();
+  }
 });

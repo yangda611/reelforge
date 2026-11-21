@@ -12,10 +12,6 @@ services:
       file: docker-compose.release.yml
       service: api
     image: reelforge-local/api
-    # Source images include the pinned Codex runtime and the reviewed Hermes fork.
-    environment:
-      DRAMACLAW_CHAT_BACKEND: "${DRAMACLAW_CHAT_BACKEND:-codex}"
-      HERMES_CLI_PATH: /usr/local/bin/hermes
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,7 +21,7 @@ services:
       args:
         DEBIAN_APT_MIRROR: "${DEBIAN_APT_MIRROR:-}"
         INSTALL_WORLD: "${INSTALL_WORLD:-0}"
-        # Keep the reviewed Hermes fork available for explicit fallback.
+        # Build the ReelForge Hermes fork used by the default assistant.
         HERMES_REPO: "${HERMES_REPO:-https://github.com/dramaclaw/hermes-agent.git}"
         HERMES_REF: "${HERMES_REF:-brainclaw/evidence-plane}"
   newapi:

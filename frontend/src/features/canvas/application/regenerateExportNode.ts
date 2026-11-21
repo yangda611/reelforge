@@ -28,6 +28,9 @@ interface FreezoneRedrawRequest {
   maskUrl: string;
   aspectRatio: string;
   imageSize: string;
+  model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 function readFreezoneRedrawRequest(
@@ -42,6 +45,9 @@ function readFreezoneRedrawRequest(
     maskUrl: req.maskUrl,
     aspectRatio: typeof req.aspectRatio === 'string' ? req.aspectRatio : 'original',
     imageSize: typeof req.imageSize === 'string' ? req.imageSize : '2K',
+    ...(typeof req.model === 'string' ? { model: req.model } : {}),
+    ...(typeof req.catalogId === 'string' ? { catalogId: req.catalogId } : {}),
+    ...(typeof req.quality === 'string' ? { quality: req.quality } : {}),
   };
 }
 
@@ -65,11 +71,9 @@ async function regenerateFreezoneRedrawNode(
 
   try {
     const ref = await submitFreezoneRedraw(project, {
-      sourceUrl: request.sourceUrl,
-      maskUrl: request.maskUrl,
+      ...request,
       aspectRatio: request.aspectRatio as FreezoneRedrawAspectRatio,
       numImages: 1,
-      imageSize: request.imageSize,
     });
     useCanvasStore.getState().updateNodeData(nodeId, generationTaskDescriptor(ref));
     const completed = await awaitTaskCompletion(ref.task_key, project, { taskType: ref.task_type });

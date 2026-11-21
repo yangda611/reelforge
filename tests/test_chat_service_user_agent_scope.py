@@ -5311,24 +5311,32 @@ def test_explicit_codex_does_not_fallback_when_unavailable(monkeypatch):
         chat_service._chat_backend()
 
 
-def test_chat_backend_defaults_to_codex_app_server(monkeypatch):
+def test_invalid_chat_backend_does_not_start_another_runtime(monkeypatch):
+    monkeypatch.setenv("DRAMACLAW_CHAT_BACKEND", "herems")
+    monkeypatch.setenv("SUPERTALE_CHAT_BACKEND", "codex")
+    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
+
+    with pytest.raises(RuntimeError, match="DRAMACLAW_CHAT_BACKEND"):
+        chat_service.get_chat_backend_name()
+
+
+def test_chat_backend_defaults_to_hermes_when_both_are_available(monkeypatch):
     monkeypatch.delenv("DRAMACLAW_CHAT_BACKEND", raising=False)
     monkeypatch.delenv("SUPERTALE_CHAT_BACKEND", raising=False)
     monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
     monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
-    monkeypatch.setattr(chat_service, "is_claude_backend_available", lambda: True)
 
-    assert chat_service._chat_backend() == "codex"
+    assert chat_service._chat_backend() == "hermes"
 
 
-def test_default_codex_does_not_fallback_when_unavailable(monkeypatch):
+def test_default_hermes_does_not_fallback_when_unavailable(monkeypatch):
     monkeypatch.delenv("DRAMACLAW_CHAT_BACKEND", raising=False)
     monkeypatch.delenv("SUPERTALE_CHAT_BACKEND", raising=False)
-    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: False)
-    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
-    monkeypatch.setattr(chat_service, "is_claude_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: False)
 
-    with pytest.raises(RuntimeError, match="Codex is unavailable"):
+    with pytest.raises(RuntimeError, match="hermes is unavailable"):
         chat_service._chat_backend()
 
 

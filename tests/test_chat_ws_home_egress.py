@@ -860,6 +860,37 @@ def _send_project_turn(harness, *, text: str = "画个分镜") -> list[dict]:
     return frames
 
 
+@pytest.mark.asyncio
+async def test_home_turn_blocks_clear_before_worker_acquisition(harness):
+    from fastapi import HTTPException
+
+    routes = harness.chat_routes
+    original = routes._stream_home_turn
+    responses = []
+
+    async def check_clear_before_worker(**kwargs):
+        try:
+            await routes.clear_chat_scope(
+                routes.ClearChatRequest(scope={"kind": "home"}),
+                user={"username": _USERNAME},
+            )
+        except HTTPException as exc:
+            responses.append(exc.status_code)
+        else:
+            responses.append(200)
+        await original(**kwargs)
+
+    _use_authz(harness.monkeypatch, _Authz(kind="platform"))
+    harness.monkeypatch.setattr(routes, "_stream_home_turn", check_clear_before_worker)
+    frames = await asyncio.wait_for(
+        _home_turn_via_asgi(harness, text="正在处理的消息", turn_id="clear-race"),
+        timeout=10,
+    )
+
+    assert responses == [409]
+    assert any(frame.get("type") == "chat.done" for frame in frames), frames
+
+
 def test_c2_11_concurrent_home_turn_runs_its_own_admission(harness):
     """并发 home 回合必须走**自己的**准入，不得继承 project 回合的 authorization。
 

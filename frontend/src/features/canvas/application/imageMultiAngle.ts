@@ -119,6 +119,8 @@ export function multiAngleImage(
         shotSize: payload.zoom,
         prompt: payload.promptOverride ?? '',
         model: payload.apiModel,
+        ...(payload.catalogId ? { catalogId: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
         imageSize: payload.imageSize,
       });
       useCanvasStore.getState().updateNodeData(nextNodeId, generationTaskDescriptor(ref));

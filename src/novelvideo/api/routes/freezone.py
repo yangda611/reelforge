@@ -1419,6 +1419,7 @@ async def _start_or_enqueue_mainline_scene_360_candidate_job(
     node_id: str | None,
     catalog_id: str | None = None,
     execution_catalog_id: str | None = None,
+    execution_provider: str | None = None,
     task_display: dict[str, str] | None = None,
 ) -> dict:
     return await _start_or_enqueue_mainline_scene_360_task(
@@ -1435,6 +1436,7 @@ async def _start_or_enqueue_mainline_scene_360_candidate_job(
         node_id=node_id,
         catalog_id=catalog_id,
         execution_catalog_id=execution_catalog_id,
+        execution_provider=execution_provider,
         auto_commit=False,
         task_display=task_display,
     )
@@ -1455,11 +1457,20 @@ async def _start_or_enqueue_mainline_scene_360_task(
     node_id: str | None,
     catalog_id: str | None = None,
     execution_catalog_id: str | None = None,
+    execution_provider: str | None = None,
     auto_commit: bool = True,
     task_display: dict[str, str] | None = None,
 ) -> dict:
     task_type = "stage_asset"
     step = "pano_from_master"
+    if model is None and not catalog_id:
+        execution_provider, model, entry = await _resolve_fixed_image_model(
+            None, None, requester_user_id=ctx.requester_user_id,
+            reference_count=1 + bool(reverse_url),
+            panorama=True,
+        )
+        image_size, quality = _fixed_image_settings(entry, image_size, quality, panorama=True)
+        catalog_id = execution_catalog_id = _catalog_entry_id(entry) or None
     await _require_scoped_media_model(
         "image",
         catalog_id or model or FREEZONE_DEFAULT_IMAGE_MODEL,
@@ -1481,9 +1492,10 @@ async def _start_or_enqueue_mainline_scene_360_task(
         else _new_job_id()
     )
     artifact_dir = outputs_dir(project_dir, "mainline_scene_360") / job_id
-    resolved_provider, resolved_model = _split_provider_and_model(
-        "newapi",
-        model or FREEZONE_DEFAULT_IMAGE_MODEL,
+    resolved_provider, resolved_model = (
+        (execution_provider, model)
+        if execution_catalog_id and execution_provider
+        else _split_provider_and_model("newapi", model or FREEZONE_DEFAULT_IMAGE_MODEL)
     )
     if not execution_catalog_id:
         from novelvideo.stage_asset_tasks import (
@@ -1625,7 +1637,10 @@ async def _start_or_enqueue_freezone_edit_job(
         else aspect_ratio
     )
     job_id = _new_job_id()
-    resolved_provider, resolved_model = _split_provider_and_model(provider, model)
+    # A resolved catalog model is an API model name, not a legacy selection key.
+    resolved_provider, resolved_model = (
+        (provider, model) if catalog_id else _split_provider_and_model(provider, model)
+    )
     normalized_provider = _resolve_freezone_image_provider(resolved_provider)
     billing: dict[str, Any] = {}
     if billing_feature_key:
@@ -1754,12 +1769,13 @@ async def _start_or_enqueue_freezone_edit_path(
     model: str | None,
     quality: str | None,
     billing_operation: str,
+    catalog_id: str | None = None,
 ) -> dict:
     task_type = "freezone_edit"
     if ctx is not None:
         await _require_scoped_media_model(
             "image",
-            model or FREEZONE_DEFAULT_IMAGE_MODEL,
+            catalog_id or model or FREEZONE_DEFAULT_IMAGE_MODEL,
             requester_user_id=ctx.requester_user_id,
         )
     from novelvideo.api.routes.model_credits import freezone_image_task_billing
@@ -1775,6 +1791,7 @@ async def _start_or_enqueue_freezone_edit_path(
             "size": image_size,
             **({"quality": quality} if quality else {}),
             "operation": billing_operation,
+            **({"catalog_id": catalog_id, "pricing_model": model} if catalog_id else {}),
         },
     )
     if ctx is not None:
@@ -1795,6 +1812,7 @@ async def _start_or_enqueue_freezone_edit_path(
                 "image_size": image_size,
                 "provider": provider,
                 "model": model,
+                **({"catalog_id": catalog_id} if catalog_id else {}),
                 "quality": quality,
                 "billing": billing,
             },
@@ -1828,12 +1846,13 @@ async def _start_or_enqueue_freezone_mask_edit_path(
     provider: str,
     model: str | None,
     billing_operation: str,
+    catalog_id: str | None = None,
 ) -> dict:
     task_type = "freezone_mask_edit"
     if ctx is not None:
         await _require_scoped_media_model(
             "image",
-            model or FREEZONE_DEFAULT_IMAGE_MODEL,
+            catalog_id or model or FREEZONE_DEFAULT_IMAGE_MODEL,
             requester_user_id=ctx.requester_user_id,
         )
     from novelvideo.api.routes.model_credits import freezone_image_task_billing
@@ -1849,6 +1868,7 @@ async def _start_or_enqueue_freezone_mask_edit_path(
             "size": image_size,
             "quality": quality,
             "operation": billing_operation,
+            **({"catalog_id": catalog_id, "pricing_model": model} if catalog_id else {}),
         },
     )
     if ctx is not None:
@@ -1870,6 +1890,7 @@ async def _start_or_enqueue_freezone_mask_edit_path(
                 "quality": quality,
                 "provider": provider,
                 "model": model,
+                **({"catalog_id": catalog_id} if catalog_id else {}),
                 "billing": billing,
             },
         )
@@ -5116,23 +5137,15 @@ async def freezone_scene_360(
     scene_id = _infer_scene_id_from_master_path(base_path, project_dir)
     if not scene_id:
         raise HTTPException(400, "could not infer scene_id from reference_url")
-    # 与 /freezone/gen 同一口径：EE 里目录是权威的，模型和目录身份都要在目录里
-    # 对得上才放行。原来这条路由直接采信 body —— 客户端可以随便报一个便宜的
-    # catalog_id 配一个贵的 model，报价按前者、执行按后者。
-    _schema, _params, catalog_entry = await _resolve_catalog_request(
-        "image",
-        body.catalog_id or body.model,
-        None,
-        mode="image_to_image",
+    catalog_provider, catalog_model, catalog_entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
         requester_user_id=ctx.requester_user_id,
+        reference_count=1 + bool(body.reverse_reference_url),
+        panorama=True,
     )
-    # 只取模型：这条老路由的 provider 是 scene_360_builder 那边按环境变量解析的
-    # （`resolve_scene_360_image_provider`），不走网关那套 provider/model 组合，
-    # 所以这里必须发裸 apiModel，不能带 provider 前缀。
-    _catalog_provider, catalog_model = _catalog_image_execution_selection(
-        catalog_entry,
-        requested_provider=None,
-        requested_model=body.model,
+    image_size, quality = _fixed_image_settings(
+        catalog_entry, body.image_size, body.quality, panorama=True,
     )
     kwargs = {
         "ctx": ctx,
@@ -5141,14 +5154,12 @@ async def freezone_scene_360(
         "description": None,
         "master_url": body.reference_url,
         "reverse_url": body.reverse_reference_url,
-        "model": catalog_model or body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
-        # 画布面板按所选模型实际支持的档位报价并把它发下来；这里在 2K 上限内
-        # 原样使用，否则「报价 1K、执行 2K」，媒体模型目录配的分辨率在这条路由
-        # 等于没生效。
-        "image_size": _cap_mainline_scene_360_image_size(body.image_size),
-        "quality": body.quality,
+        "model": catalog_model,
+        "execution_provider": catalog_provider,
+        "image_size": image_size,
+        "quality": quality,
         # 计费身份以目录条目为准，不采信 body —— 它直接决定按哪条目录规则扣费。
-        "catalog_id": _catalog_entry_id(catalog_entry) or body.catalog_id or None,
+        "catalog_id": _catalog_entry_id(catalog_entry) or None,
         # Only an entry resolved by the server catalog may authorize a dynamic
         # execution model. A client-supplied legacy catalog_id is billing data,
         # not model authority.
@@ -5477,6 +5488,12 @@ async def freezone_multi_view(
     ctx, username, project_name, project_dir, output_dir = (
         await _resolve_freezone_project(project, user)
     )
+    provider, model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
+        requester_user_id=ctx.requester_user_id,
+    )
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
     return await _start_or_enqueue_freezone_edit_job(
         ctx=ctx,
         username=username,
@@ -5487,12 +5504,13 @@ async def freezone_multi_view(
         base_url=body.source_url,
         extra_reference_urls=[],
         aspect_ratio="16:9",
-        image_size=body.image_size or "2K",
+        image_size=image_size,
         camera=body.camera,
         style=body.style,
-        provider=None,
-        model=body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
-        quality=body.quality or "medium",
+        provider=provider,
+        model=model,
+        catalog_id=_catalog_entry_id(entry) or None,
+        quality=quality,
         billing_feature_key="freezone.image_multi_view",
         billing_operation="multi_view",
     )
@@ -5512,6 +5530,13 @@ async def freezone_relight(
     ctx, username, project_name, project_dir, output_dir = (
         await _resolve_freezone_project(project, user)
     )
+    provider, model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
+        requester_user_id=ctx.requester_user_id,
+        reference_count=1 + bool(body.lighting_reference_url),
+    )
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
     return await _start_or_enqueue_freezone_edit_job(
         ctx=ctx,
         username=username,
@@ -5524,12 +5549,13 @@ async def freezone_relight(
             [body.lighting_reference_url] if body.lighting_reference_url else []
         ),
         aspect_ratio="16:9",
-        image_size=body.image_size or "2K",
+        image_size=image_size,
         camera=None,
         style=None,
-        provider=None,
-        model=body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
-        quality=body.quality or "medium",
+        provider=provider,
+        model=model,
+        catalog_id=_catalog_entry_id(entry) or None,
+        quality=quality,
         billing_feature_key="freezone.image_relight",
         billing_operation="relight",
     )
@@ -5549,24 +5575,12 @@ async def freezone_template_edit(
     ctx, username, project_name, project_dir, output_dir = (
         await _resolve_freezone_project(project, user)
     )
-    # 与 /freezone/edit 同一口径：EE 里目录是权威的，模型和目录身份都要在目录里
-    # 对得上才放行。原来这条路由直接采信 body —— 客户端可以随便报一个便宜的
-    # catalog_id 配一个贵的 model，报价按前者、执行按后者。
-    _schema, _params, catalog_entry = await _resolve_catalog_request(
-        "image",
-        body.catalog_id or body.model,
-        None,
-        mode="image_to_image",
+    provider, model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
         requester_user_id=ctx.requester_user_id,
     )
-    # provider 也一并取目录条目的：这条路由和 /freezone/edit 共用
-    # `_start_or_enqueue_freezone_edit_job`，它会按 provider/model 走网关，
-    # 目录里配的 openrouter 模型再按默认 provider 路由就送错家了。
-    execution_provider, execution_model = _catalog_image_execution_selection(
-        catalog_entry,
-        requested_provider=None,
-        requested_model=body.model,
-    )
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
     return await _start_or_enqueue_freezone_edit_job(
         ctx=ctx,
         username=username,
@@ -5577,16 +5591,13 @@ async def freezone_template_edit(
         base_url=body.source_url,
         extra_reference_urls=[],
         aspect_ratio=_template_edit_aspect_ratio(body.mode),
-        image_size=body.image_size or "2K",
+        image_size=image_size,
         camera=body.camera,
         style=body.style,
-        provider=execution_provider,
-        model=execution_model or body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
-        quality=body.quality or "medium",
-        # 画布报价时带了目录身份就必须原样传下来，否则前端按目录规则报价、
-        # 后端按旧的 image_selection 规则扣费，两边价格对不上。
-        # 身份以目录条目为准，不采信 body —— 它直接决定按哪条目录规则扣费。
-        catalog_id=_catalog_entry_id(catalog_entry) or body.catalog_id or None,
+        provider=provider,
+        model=model,
+        quality=quality,
+        catalog_id=_catalog_entry_id(entry) or None,
         billing_feature_key="freezone.image_grid",
         billing_operation=body.mode,
     )
@@ -5742,11 +5753,16 @@ async def freezone_upscale(
 
     job_id = _new_job_id()
     resolved_aspect_ratio = _resolve_outpaint_aspect_ratio(source_path, "original")
-    resolved_provider, resolved_model = _split_provider_and_model(
-        None,
-        body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
+    resolved_provider, resolved_model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
+        requester_user_id=ctx.requester_user_id,
     )
-    provider = _resolve_freezone_image_provider(resolved_provider, strict=False)
+    if entry is None:
+        resolved_provider, resolved_model = _split_provider_and_model(None, resolved_model)
+    provider = _resolve_freezone_image_provider(resolved_provider, strict=entry is not None)
+    catalog_id = _catalog_entry_id(entry) or None
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
 
     try:
         return await _start_or_enqueue_freezone_edit_path(
@@ -5762,10 +5778,11 @@ async def freezone_upscale(
             base_path=source_path,
             extra_reference_paths=[],
             aspect_ratio=resolved_aspect_ratio,
-            image_size=body.image_size,
+            image_size=image_size,
             provider=provider,
             model=resolved_model,
-            quality=body.quality or "medium",
+            catalog_id=catalog_id,
+            quality=quality,
             billing_operation="upscale",
         )
     except RuntimeError as e:
@@ -5811,11 +5828,16 @@ async def freezone_outpaint(
         target_aspect_ratio=resolved_aspect_ratio,
     )
     job_id = _new_job_id()
-    resolved_provider, resolved_model = _split_provider_and_model(
-        None,
-        body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
+    resolved_provider, resolved_model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
+        requester_user_id=ctx.requester_user_id,
     )
-    provider = _resolve_freezone_image_provider(resolved_provider, strict=False)
+    if entry is None:
+        resolved_provider, resolved_model = _split_provider_and_model(None, resolved_model)
+    provider = _resolve_freezone_image_provider(resolved_provider, strict=entry is not None)
+    catalog_id = _catalog_entry_id(entry) or None
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
 
     try:
         return await _start_or_enqueue_freezone_edit_path(
@@ -5831,10 +5853,11 @@ async def freezone_outpaint(
             base_path=padded_base_path,
             extra_reference_paths=[],
             aspect_ratio=resolved_aspect_ratio,
-            image_size=body.image_size,
+            image_size=image_size,
             provider=provider,
             model=resolved_model,
-            quality=body.quality or "medium",
+            catalog_id=catalog_id,
+            quality=quality,
             billing_operation="outpaint",
         )
     except RuntimeError as e:
@@ -5871,11 +5894,17 @@ async def freezone_redraw(
     resolved_aspect_ratio = _resolve_outpaint_aspect_ratio(
         source_path, body.aspect_ratio
     )
-    resolved_provider, resolved_model = _split_provider_and_model(
-        None,
-        body.model or FREEZONE_DEFAULT_IMAGE_MODEL,
+    resolved_provider, resolved_model, entry = await _resolve_fixed_image_model(
+        body.model if "model" in body.model_fields_set else None,
+        body.catalog_id,
+        requester_user_id=ctx.requester_user_id,
+        reference_count=1 + bool(body.mask_url),
     )
-    provider = _resolve_freezone_image_provider(resolved_provider, strict=False)
+    if entry is None:
+        resolved_provider, resolved_model = _split_provider_and_model(None, resolved_model)
+    provider = _resolve_freezone_image_provider(resolved_provider, strict=entry is not None)
+    catalog_id = _catalog_entry_id(entry) or None
+    image_size, quality = _fixed_image_settings(entry, body.image_size, body.quality)
 
     if body.mask_url:
         try:
@@ -5905,10 +5934,11 @@ async def freezone_redraw(
                     body.camera,
                 ),
                 aspect_ratio=resolved_aspect_ratio,
-                image_size=body.image_size,
-                quality=body.quality or "medium",
+                image_size=image_size,
+                quality=quality,
                 provider=provider,
                 model=resolved_model,
+                catalog_id=catalog_id,
                 billing_operation=("erase" if not body.prompt.strip() else "redraw"),
             )
         except RuntimeError as e:
@@ -5929,10 +5959,11 @@ async def freezone_redraw(
             base_path=source_path,
             extra_reference_paths=[],
             aspect_ratio=resolved_aspect_ratio,
-            image_size=body.image_size,
+            image_size=image_size,
             provider=provider,
             model=resolved_model,
-            quality=body.quality or "medium",
+            catalog_id=catalog_id,
+            quality=quality,
             billing_operation="redraw",
         )
     except RuntimeError as e:
@@ -8124,6 +8155,102 @@ def _catalog_image_execution_selection(
     return provider, model
 
 
+def _image_catalog_accepts_references(entry: dict[str, Any], count: int) -> bool:
+    limit = entry.get("referenceImageMax")
+    modes = entry.get("supportedModes")
+    return (
+        (type(limit) is not int or limit < 0 or limit >= count)
+        and (not modes or "image_to_image" in modes)
+    )
+
+
+def _usable_image_catalog_entry(entry: dict[str, Any]) -> bool:
+    try:
+        provider, _ = _catalog_image_execution_selection(
+            entry, requested_provider=None, requested_model=None
+        )
+        _resolve_freezone_image_provider(provider)
+    except HTTPException:
+        return False
+    return bool(_catalog_entry_id(entry))
+
+
+def _fixed_image_sizes(
+    entry: dict[str, Any] | None, *, panorama: bool,
+) -> list[str] | None:
+    options = _catalog_resolution_options(entry)
+    if panorama and options:
+        return [
+            option for option in options
+            if _IMAGE_SIZE_TIER_BY_CASEFOLD.get(option.casefold())
+            in _IMAGE_SIZE_TIERS[:3]
+        ]
+    return options
+
+
+def _fixed_image_settings(
+    entry: dict[str, Any] | None,
+    image_size: str | None,
+    quality: str | None,
+    *,
+    panorama: bool = False,
+) -> tuple[str, str]:
+    size = (
+        _cap_mainline_scene_360_image_size(image_size)
+        if panorama else image_size or "2K"
+    )
+    sizes = _fixed_image_sizes(entry, panorama=panorama)
+    if sizes:
+        size = next((opt for opt in sizes if opt.casefold() == size.casefold()), sizes[0])
+    if panorama:
+        size = _cap_mainline_scene_360_image_size(size)
+    resolved_quality = quality or "medium"
+    qualities = (entry or {}).get("qualityOptions")
+    if isinstance(qualities, list) and qualities:
+        resolved_quality = (
+            resolved_quality if resolved_quality in qualities else qualities[0]
+        )
+    return size, resolved_quality
+
+
+async def _resolve_fixed_image_model(
+    model: str | None,
+    catalog_id: str | None,
+    *,
+    requester_user_id: str,
+    reference_count: int = 1,
+    panorama: bool = False,
+) -> tuple[str | None, str, dict[str, Any] | None]:
+    requested = str(model or "").strip()
+    allow_default = not catalog_id and requested in {"", FREEZONE_DEFAULT_IMAGE_MODEL}
+    # Older clients sent built-in display labels. Match their registered IDs
+    # against the scoped catalog, without treating an unknown label as a default.
+    registered_id = next(
+        (key for key, item in IMAGE_GENERATION_SELECTIONS.items() if item["label"] == requested),
+        requested,
+    )
+    _schema, _params, entry = await _resolve_catalog_request(
+        "image",
+        catalog_id or requested or FREEZONE_DEFAULT_IMAGE_MODEL,
+        None,
+        mode="image_to_image",
+        requester_user_id=requester_user_id,
+        image_reference_count=reference_count,
+        allow_image_default=allow_default,
+        image_selection_alias=registered_id if registered_id != requested else "",
+        image_panorama=panorama,
+    )
+    if entry is None:
+        return None, registered_id or FREEZONE_DEFAULT_IMAGE_MODEL, None
+    matched_model = requested if requested in _catalog_entry_identifiers(entry) else registered_id
+    provider, execution_model = _catalog_image_execution_selection(
+        entry,
+        requested_provider=None,
+        requested_model=None if allow_default else matched_model,
+    )
+    return _resolve_freezone_image_provider(provider), execution_model or FREEZONE_DEFAULT_IMAGE_MODEL, entry
+
+
 async def _resolve_catalog_request(
     media_type: str,
     model: str | None,
@@ -8131,6 +8258,10 @@ async def _resolve_catalog_request(
     *,
     mode: str | None = None,
     requester_user_id: str | None = None,
+    image_reference_count: int | None = None,
+    allow_image_default: bool = False,
+    image_selection_alias: str = "",
+    image_panorama: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     requested = str(model or "").strip()
     catalog = (
@@ -8141,19 +8272,36 @@ async def _resolve_catalog_request(
         if requester_user_id is not None
         else await _ee_media_model_catalog(media_type)
     )
+    candidates = [item for item in catalog or [] if item.get("enabled") is not False]
+    if image_reference_count is not None:
+        candidates = [
+            item for item in candidates
+            if _image_catalog_accepts_references(item, image_reference_count)
+        ]
+    if image_panorama:
+        candidates = [
+            item for item in candidates
+            if _fixed_image_sizes(item, panorama=True) != []
+        ]
+    if allow_image_default:
+        candidates = [item for item in candidates if _usable_image_catalog_entry(item)]
     entry = next(
         (
             item
-            for item in catalog or []
-            if requested in _catalog_entry_identifiers(item)
+            for identifier in (requested, image_selection_alias)
+            if identifier
+            for item in candidates
+            if identifier in _catalog_entry_identifiers(item)
         ),
         None,
     )
+    if entry is None and allow_image_default and candidates:
+        # Only omitted selections and the old fixed-tool default can switch models.
+        entry = candidates[0]
     if entry is None:
-        # In EE the catalog is authoritative. Never fall back to CE's static
-        # model map when no enabled model matches the submitted identifier.
-        if catalog is not None and requested:
-            raise _media_model_unavailable(media_type, catalog)
+        # An empty or restricted catalog must not fall back to a static model.
+        if catalog is not None and (requested or allow_image_default):
+            raise _media_model_unavailable(media_type, candidates)
         if model_params:
             raise HTTPException(
                 400, "model parameters require a configured media model"
@@ -8181,9 +8329,9 @@ async def _resolve_catalog_request(
             and (key in active_keys or key not in defined_keys)
         }
         if media_type == "image" and entry.get("qualityOptions"):
-            schema = {**schema, "includeQuality": True}
+            schema = {"endpoint": expected_endpoint, **schema, "includeQuality": True}
         if media_type == "image" and entry.get("minPixels") is not None:
-            schema = {**schema, "minPixels": entry["minPixels"]}
+            schema = {"endpoint": expected_endpoint, **schema, "minPixels": entry["minPixels"]}
         values = validate_media_model_params(schema, filtered_params)
     except MediaModelSchemaError as exc:
         raise HTTPException(400, str(exc)) from exc
