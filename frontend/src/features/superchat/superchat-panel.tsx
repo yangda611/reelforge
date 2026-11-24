@@ -146,6 +146,7 @@ import {
   type DirectorVoicePolicy,
 } from "@/features/superchat/director-run-mode";
 import { ComposerWaitingStatus } from "@/features/superchat/composer-waiting-status";
+import { CANVAS_VISUAL_OVERVIEW_TYPE, needsCanvasVision, prepareCanvasVisualOverview } from "@/features/freezone/canvasVision";
 import { ChatTaskStatusBar } from "@/features/superchat/chat-task-status-bar";
 import { calculateTimelineContextDelta } from "@/features/superchat/timeline-scroll";
 import { useEventBus } from "@/task-center/event-bus-context";
@@ -427,6 +428,10 @@ const FREEZONE_TOOL_DISPLAY: Record<string, { title: string; description: string
     title: "创建分组",
     description: "准备把节点放入视觉分组",
   },
+  freezone_organize_canvas: {
+    title: "分类整理画布",
+    description: "准备按类别分组并无重叠排版画布节点",
+  },
   freezone_select_nodes: {
     title: "选择节点",
     description: "准备选中或聚焦画布节点",
@@ -450,6 +455,10 @@ const FREEZONE_TOOL_DISPLAY: Record<string, { title: string; description: string
   freezone_get_node_detail: {
     title: "读取节点",
     description: "获取单个节点详情",
+  },
+  freezone_plan_director_council: {
+    title: "六部门会诊",
+    description: "设计分镜或编译并会签提示词",
   },
   freezone_get_neighbor_graph: {
     title: "读取上下游",
@@ -3791,16 +3800,20 @@ function CanvasCommandApprovalCard({
           <div className="text-sm font-medium text-foreground">
             {isExecuting
               ? t("freezone.chat.canvasExecuting")
-              : approval.requiresUserChoice
-              ? t("freezone.chat.audioApproval.chooseVoiceTitle")
-              : "待确认的画布操作"}
+              : approval.requiresDestructiveConfirmation
+                ? "待确认的删除操作"
+                : approval.requiresUserChoice
+                  ? t("freezone.chat.audioApproval.chooseVoiceTitle")
+                  : "待确认的画布操作"}
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {isExecuting
               ? t("freezone.chat.canvasConfirmedExecuting")
-              : approval.requiresUserChoice
-              ? t("freezone.chat.audioApproval.chooseVoiceDescription")
-              : `Agent 计划执行 ${approval.commandCount} 个操作，确认后才会应用到画布。`}
+              : approval.requiresDestructiveConfirmation
+                ? "该操作会从当前画布删除节点或全部内容。未点击确认前不会执行。"
+                : approval.requiresUserChoice
+                  ? t("freezone.chat.audioApproval.chooseVoiceDescription")
+                  : `Agent 计划执行 ${approval.commandCount} 个操作，确认后才会应用到画布。`}
           </p>
         </div>
         <Badge variant="outline" className="rounded-md uppercase">{isExecuting ? "执行中" : "确认"}</Badge>
@@ -4107,9 +4120,11 @@ function CanvasCommandApprovalCard({
         >
           {isExecuting
             ? t("freezone.chat.canvasExecuting")
-            : approval.requiresUserChoice
-              ? t("freezone.chat.audioApproval.continue")
-              : t("freezone.chat.canvasConfirmExecution")}
+            : approval.requiresDestructiveConfirmation
+              ? "确认删除"
+              : approval.requiresUserChoice
+                ? t("freezone.chat.audioApproval.continue")
+                : t("freezone.chat.canvasConfirmExecution")}
         </Button>
       </div>
       {voicePickerAudioParams && (
@@ -5405,7 +5420,17 @@ function assistantClarificationEventsFromUiEvents(events: unknown[] | undefined)
 }
 
 function visibleAssistantClarificationEventsForMessage(message: ChatMessage): AssistantClarificationUiEvent[] {
-  return assistantClarificationEventsFromUiEvents(messageUiEvents(message)).filter((event) => event.submitted === true);
+  return assistantClarificationEventsFromUiEvents(messageUiEvents(message)).filter((event) => {
+    if (event.submitted !== true) return false;
+    const cancelled = event.cancelled === true
+      || event.action === "cancel"
+      || event.clarification_status === "cancelled";
+    const skipped = event.skipped === true || event.action === "skip";
+    if (cancelled || skipped || event.action === "recommended") return true;
+    const questions = Array.isArray(event.questions) ? event.questions : [];
+    const answers = event.answers && typeof event.answers === "object" ? event.answers : {};
+    return visibleAssistantClarificationTimelineItems(questions, answers, event.action).length > 0;
+  });
 }
 
 function pendingAssistantClarificationEventsForMessage(message: ChatMessage): AssistantClarificationUiEvent[] {
@@ -7167,6 +7192,9 @@ function AssistantClarificationSummaryCard({ event }: { event: AssistantClarific
     || event.action === "cancel"
     || event.clarification_status === "cancelled";
   const skipped = event.skipped === true || event.action === "skip";
+  if (!cancelled && !skipped && event.action !== "recommended" && answeredCount === 0) {
+    return null;
+  }
   const statusLabel = cancelled
     ? t("freezone.chat.clarification.cancelled")
     : skipped
@@ -9503,6 +9531,7 @@ function AttachmentChip({ attachment }: { attachment: ChatAttachment }) {
 }
 
 function shouldRenderAttachmentChip(attachment: ChatAttachment): boolean {
+  if (attachment.type === CANVAS_VISUAL_OVERVIEW_TYPE) return true;
   if (isCanvasNodeReferenceAttachment(attachment)) return true;
   if (!isImageAttachment(attachment) && !isVideoAttachment(attachment)) return true;
   return false;
@@ -10724,6 +10753,9 @@ function pushParsedCanvasJsonText(values: unknown[], text: string): void {
 }
 
 export function canvasCommandCandidateValues(message: ChatMessage): unknown[] {
+  if (message.role === "tool" && freezoneToolName(message) === "freezone_plan_director_council") {
+    return [];
+  }
   const values: unknown[] = [];
   if (message.role !== "tool") {
     const { blocks } = extractStructuredBlocks(message);
@@ -11313,6 +11345,7 @@ type PendingCanvasCommandApproval = {
   plans: CanvasCommandPlan[];
   externalMcpCommand?: boolean;
   requiresUserChoice?: boolean;
+  requiresDestructiveConfirmation?: boolean;
 };
 
 type CanvasApprovalImageParams = {
@@ -11591,6 +11624,8 @@ function canvasCommandPlanLabel(command: CanvasChatCommand): string {
       return "整理布局";
     case "group_nodes":
       return "创建普通组";
+    case "organize_canvas":
+      return "分类整理画布";
     case "move_nodes":
       return "移动节点";
     case "select_nodes":
@@ -11629,6 +11664,10 @@ function canvasCommandPlanPrimary(command: CanvasChatCommand): string | undefine
       return command.node_ids.join(", ");
     case "layout_nodes":
       return command.node_ids?.length ? command.node_ids.join(", ") : "当前画布";
+    case "organize_canvas":
+      return command.categories?.length
+        ? command.categories.map((category) => category.label).join(" / ")
+        : "当前画布";
     case "create_edge":
       return `${command.source} -> ${command.target}`;
     case "delete_edges":
@@ -11678,6 +11717,11 @@ function canvasCommandPlanDetails(command: CanvasChatCommand): string[] {
   } else if (command.type === "group_nodes") {
     details.push(`数量：${command.node_ids.length}`);
     if (command.label) details.push(`名称：${command.label}`);
+  } else if (command.type === "organize_canvas") {
+    if (command.categories?.length) {
+      details.push(`分组：${command.categories.length} 类`);
+    }
+    details.push(`排版：${command.layout_mode ?? "auto"}`);
   } else if (command.type === "move_nodes") {
     const moveCount = new Set([
       ...Object.keys(command.positions ?? {}),
@@ -13670,6 +13714,9 @@ export function SuperChatPanel({
       plans: canvasCommandPlansFromEnvelopes(detail.envelopes),
       externalMcpCommand: detail.externalMcpCommand === true,
       requiresUserChoice: detail.requiresUserChoice === true,
+      requiresDestructiveConfirmation: detail.envelopes.some((envelope) =>
+        envelope.commands.some((command) => command.type === "delete_nodes" || command.type === "clear_canvas"),
+      ),
     };
   }, [activeMessages, effectiveFreezoneCanvasId, freezoneAgentMatches, latestAssistantMessageId, variant]);
 
@@ -14616,7 +14663,7 @@ export function SuperChatPanel({
   useEffect(() => {
     if (canvasCommandExecutionMode !== "auto_execute") return;
     for (const approval of pendingCanvasCommandApprovals) {
-      if (approval.requiresUserChoice) continue;
+      if (approval.requiresUserChoice || approval.requiresDestructiveConfirmation) continue;
       // manual_ui 动作必须由用户主动确认。自动模式不能把“重试生成”擅自
       // 解释成“打开声线选择并改用自定义声线”。
       if (canvasApprovalRequiresManualUiAction(approval)) continue;
@@ -15161,7 +15208,25 @@ export function SuperChatPanel({
       const htmlReference = variant === "freezone" ? selectedHtmlReference : null;
       const sendPreparedMessage = async (displayText:string, attachments:ChatAttachment[], transportText:string):Promise<boolean> => {
         const activeHtml = variant === "freezone" ? activeHtmlArtifactContext(params.project) : null;
-        const sent = await chat.send(displayText,attachments,appendHtmlArtifactTransportContext(transportText,params.project,activeHtml,htmlReference));
+        let turnAttachments = attachments;
+        let turnText = transportText;
+        if (variant === "freezone" && params.project && effectiveFreezoneCanvasId && needsCanvasVision(displayText)) {
+          setPreparingSend(true);
+          try {
+            const state = useCanvasStore.getState();
+            const overview = await prepareCanvasVisualOverview(params.project, effectiveFreezoneCanvasId, state.nodes, state.edges);
+            if (overview) {
+              turnAttachments = [overview.attachment, ...attachments];
+              turnText += `\n\n${overview.context}`;
+            }
+          } catch (error) {
+            console.warn('[canvas vision] overview unavailable', error);
+            turnText += '\n\n[CANVAS_VISUAL_OVERVIEW_UNAVAILABLE] No canvas overview image was captured for this turn. Use structural tools; do not claim to see the current canvas.';
+          } finally {
+            setPreparingSend(false);
+          }
+        }
+        const sent = await chat.send(displayText,turnAttachments,appendHtmlArtifactTransportContext(turnText,params.project,activeHtml,htmlReference));
         if (sent && htmlReference) setSelectedHtmlReference(current => current === htmlReference ? null : current);
         return sent;
       };
@@ -15444,6 +15509,7 @@ export function SuperChatPanel({
       selectedHtmlReference,
       currentCanvasOntologyContext,
       existingCanvasNodeIds,
+      effectiveFreezoneCanvasId,
       params.project,
       recordUploadedFiles,
       reingestConfirmation,

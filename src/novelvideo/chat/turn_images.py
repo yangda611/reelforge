@@ -39,13 +39,16 @@ def referenced_image_paths(
 
     paths: list[Path] = []
     for attachment in attachments:
-        if attachment.get("type") != _CANVAS_NODE_REFERENCE_TYPE:
+        attachment_type = attachment.get("type")
+        if attachment_type not in {_CANVAS_NODE_REFERENCE_TYPE, "canvas_visual_overview"}:
             continue
         try:
             payload = json.loads(str(attachment.get("content") or ""))
         except ValueError:
             continue
         nodes = payload.get("nodes") if isinstance(payload, dict) else None
+        if attachment_type == "canvas_visual_overview" and isinstance(payload, dict):
+            nodes = [{"media_type": "image", "source_url": payload.get("source_url")}]
         for node in nodes if isinstance(nodes, list) else []:
             if not isinstance(node, dict) or node.get("media_type") != "image":
                 continue

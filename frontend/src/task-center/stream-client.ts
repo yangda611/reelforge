@@ -63,6 +63,7 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
   let unrecoverableFired = false;
   let regionSwitchHandler: (() => void) | null = null;
   let sessionExpiredHandler: (() => void) | null = null;
+  let visibilityHandler: (() => void) | null = null;
   let sessionCheckInFlight = false;
 
   const backoffs = opts.backoffMs ?? DEFAULT_BACKOFF;
@@ -77,10 +78,27 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
   // (initial connect w/o the param, or reconnect where server replays state).
   let pendingSnapshotWindow = !useSnapshotParam;
 
+  function isHidden() {
+    return typeof document !== "undefined" && document.visibilityState === "hidden";
+  }
+
+  function pause() {
+    clearTimers();
+    if (es) {
+      es.close();
+      es = null;
+    }
+    wasDisconnected = true;
+    if (polling) {
+      polling = false;
+      opts.onPollingStop?.();
+    }
+  }
+
   function resetWatchdog() {
     if (watchdogTimer) clearTimeout(watchdogTimer);
     watchdogTimer = setTimeout(() => {
-      if (closed) return;
+      if (closed || isHidden()) return;
       handleFailure("watchdog timeout");
     }, watchdogMs);
   }
@@ -110,12 +128,14 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
   }
 
   function scheduleReconnect() {
-    if (closed) return;
+    if (closed || isHidden() || es) return;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     const delay = polling
       ? pollingRetryMs
       : backoffs[Math.min(reconnectAttempt - 1, backoffs.length - 1)];
     reconnectTimer = setTimeout(() => {
-      if (closed) return;
+      reconnectTimer = null;
+      if (closed || isHidden()) return;
       open();
     }, delay);
   }
@@ -169,6 +189,10 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
 
   function open() {
     if (closed) return;
+    if (isHidden()) {
+      pause();
+      return;
+    }
     // Never leak a prior connection: any path that re-enters open() (stale
     // reconnect timer, double handleFailure) must close the existing ES first.
     if (es) {
@@ -186,8 +210,11 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
     if (useSnapshotParam) params.set("snapshot", "false");
     const qs = params.toString();
     const url = qs ? `${opts.streamPath}?${qs}` : opts.streamPath;
-    es = new EventSource(url, { withCredentials: true });
-    es.addEventListener("task_updated", (e) => {
+    const source = new EventSource(url, { withCredentials: true });
+    es = source;
+    const isCurrentSource = () => !closed && !isHidden() && es === source;
+    source.addEventListener("task_updated", (e) => {
+      if (!isCurrentSource()) return;
       try {
         const task = JSON.parse((e as MessageEvent).data) as TaskState;
         opts.onEvent(task, pendingSnapshotWindow ? "snapshot" : "live");
@@ -196,7 +223,8 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
       }
       handleStreamHealthy();
     });
-    es.addEventListener("deleted", (e) => {
+    source.addEventListener("deleted", (e) => {
+      if (!isCurrentSource()) return;
       try {
         const payload = JSON.parse((e as MessageEvent).data) as { task_key: string };
         opts.onDelete(payload.task_key);
@@ -205,18 +233,20 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
       }
       handleStreamHealthy();
     });
-    es.addEventListener("heartbeat", () => {
+    source.addEventListener("heartbeat", () => {
+      if (!isCurrentSource()) return;
       pendingSnapshotWindow = false;
       handleStreamHealthy();
     });
-    es.onerror = () => {
+    source.onerror = () => {
+      if (!isCurrentSource()) return;
       handleFailure("eventsource error");
     };
     resetWatchdog();
   }
 
   function handleFailure(_reason: string) {
-    if (closed) return;
+    if (closed || isHidden()) return;
     // Disarm both timers before scheduling a new reconnect. Otherwise an
     // onerror failure plus the still-armed watchdog each call handleFailure and
     // each schedule a reconnect, opening (and leaking) two EventSources.
@@ -287,6 +317,14 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
         sessionExpiredHandler = stopForSessionLoss;
         window.addEventListener(SESSION_EXPIRED_EVENT, sessionExpiredHandler);
       }
+      if (typeof document !== "undefined" && !visibilityHandler) {
+        visibilityHandler = () => {
+          if (closed) return;
+          if (isHidden()) pause();
+          else if (!es) open();
+        };
+        document.addEventListener("visibilitychange", visibilityHandler);
+      }
       open();
     },
     close() {
@@ -303,6 +341,14 @@ export function createStreamClient(opts: StreamClientOptions): StreamClient {
       if (typeof window !== "undefined" && sessionExpiredHandler) {
         window.removeEventListener(SESSION_EXPIRED_EVENT, sessionExpiredHandler);
         sessionExpiredHandler = null;
+      }
+      if (typeof document !== "undefined" && visibilityHandler) {
+        document.removeEventListener("visibilitychange", visibilityHandler);
+        visibilityHandler = null;
+      }
+      if (polling) {
+        polling = false;
+        opts.onPollingStop?.();
       }
     },
   };

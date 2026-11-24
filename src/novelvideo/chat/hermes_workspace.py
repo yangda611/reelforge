@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import threading
 import time
 from pathlib import Path
@@ -1114,6 +1115,35 @@ def _sync_freezone_native_skills(skills_dir: Path, username: str) -> None:
             )
 
 
+def _is_directory_link(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        return path.lstat().st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except OSError:
+        return False
+
+
+def _remove_directory_link(path: Path) -> None:
+    if os.name == "nt" and not path.is_symlink():
+        path.rmdir()
+    else:
+        path.unlink()
+
+
+def _create_directory_link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if os.name != "nt" or getattr(exc, "winerror", None) != 1314:
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+
+
 def _materialize_skill_links(skills_dir: Path, *, profile: str = "director") -> None:
     """Create / refresh symlinks from skills_dir/<name> → repo-pinned skills.
 
@@ -1165,11 +1195,11 @@ def _materialize_skill_links(skills_dir: Path, *, profile: str = "director") -> 
         if name.startswith("_"):
             continue  # reserve `_user` for hermes-learned
         link = skills_dir / name
-        if link.is_symlink():
+        if _is_directory_link(link):
             try:
                 if link.resolve() == target:
                     continue
-                link.unlink()  # stale → recreate
+                _remove_directory_link(link)  # stale → recreate
             except OSError:
                 continue
         elif link.exists():
@@ -1180,17 +1210,17 @@ def _materialize_skill_links(skills_dir: Path, *, profile: str = "director") -> 
             )
             continue
         try:
-            link.symlink_to(target)
+            _create_directory_link(link, target)
         except OSError as e:
             _log.warning("failed to link %s → %s: %s", link, target, e)
 
     # Remove stale symlinks (skill removed from repo mirror)
     for entry in skills_dir.iterdir():
-        if entry.name == "_user" or not entry.is_symlink():
+        if entry.name == "_user" or not _is_directory_link(entry):
             continue
         if entry.name not in want:
             try:
-                entry.unlink()
+                _remove_directory_link(entry)
             except OSError:
                 pass
 
@@ -1360,7 +1390,7 @@ def _ensure_freezone_config_policy(config_yaml: Path) -> None:
         agent = config.get("agent")
         if not isinstance(agent, dict):
             agent = {}
-        agent["max_turns"] = _configured_max_turns("HERMES_FREEZONE_MAX_TURNS", 12)
+        agent["max_turns"] = _configured_max_turns("HERMES_FREEZONE_MAX_TURNS", 24)
         # 虾画 worker 是画布 agent,不是 coding agent:关掉 Hermes 的 coding 姿态,
         # 否则每个 system prompt 多 ~3.9k 字符,且教模型用 registry 已禁用的
         # read_file/patch/terminal 等工具。
@@ -1633,11 +1663,11 @@ def _materialize_plugin_links(plugins_dir: Path, *, profile: str = "director") -
         if name.startswith("_"):
             continue
         link = plugins_dir / name
-        if link.is_symlink():
+        if _is_directory_link(link):
             try:
                 if link.resolve() == target:
                     continue
-                link.unlink()
+                _remove_directory_link(link)
             except OSError:
                 continue
         elif link.exists():
@@ -1647,16 +1677,16 @@ def _materialize_plugin_links(plugins_dir: Path, *, profile: str = "director") -
             )
             continue
         try:
-            link.symlink_to(target)
+            _create_directory_link(link, target)
         except OSError as e:
             _log.warning("failed to link %s → %s: %s", link, target, e)
 
     for entry in plugins_dir.iterdir():
-        if not entry.is_symlink():
+        if not _is_directory_link(entry):
             continue
         if entry.name not in want:
             try:
-                entry.unlink()
+                _remove_directory_link(entry)
             except OSError:
                 pass
 

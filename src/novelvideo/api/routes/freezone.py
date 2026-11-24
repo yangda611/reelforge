@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Literal, Optional
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
+import portalocker
 from fastapi import (
     APIRouter,
     Body,
@@ -36,6 +37,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from novelvideo.api.routes.voice_design import (
@@ -155,6 +157,22 @@ from novelvideo.config import (
 from novelvideo.director_world import DirectorWorldService
 from novelvideo.director_world.staging_prop_ai import generate_ai_staging_prop
 from novelvideo.freezone import canvas_store
+from novelvideo.freezone.director_council import (
+    DirectorCouncilError,
+    compile_director_council,
+    plan_director_council,
+)
+from novelvideo.freezone.director_council_store import (
+    CouncilCompileRequest,
+    CouncilPreviewRequest,
+    CouncilRecord,
+    SourceNodeMissing,
+    SourceTooLong,
+    read_record,
+    record_path,
+    save_record,
+    scene_from_canvas,
+)
 from novelvideo.freezone.agent_bundle_store import (
     export_agent_bundle,
     install_agent_bundle,
@@ -305,7 +323,7 @@ from novelvideo.freezone.studio import (
     studio_export_film_dir,
     studio_film_exists,
 )
-from novelvideo.ports import get_usage_meter
+from novelvideo.ports import get_product_surface_access, get_usage_meter
 from novelvideo.ports.local.usage import NoOpUsageMeter
 from novelvideo.freezone.route_helpers import (
     accepted_job_response as _accepted_job_response,
@@ -14653,6 +14671,124 @@ async def _prepare_workflow_draft_story_references(
     if not validated.get("ok"):
         raise HTTPException(400, validated)
     compiled.update(validated)
+
+
+@router.post(
+    "/projects/{project}/freezone/canvases/{canvas_id}/director-council",
+    tags=[TAG_FREEZONE_CANVAS],
+)
+async def freezone_director_council(
+    project: str,
+    canvas_id: str,
+    body: Annotated[CouncilPreviewRequest | CouncilCompileRequest, Body(discriminator="action")],
+    user: dict = Depends(get_api_user),
+):
+    """Plan or compile a read-only six-department creative result."""
+    if not CANVAS_ID_RE.fullmatch(canvas_id):
+        raise HTTPException(400, "invalid canvas_id")
+    ctx, _, _, project_dir, _ = await _resolve_freezone_project(project, user)
+    state_dir = _canvas_state_project_dir(ctx, project_dir)
+    actor = ctx.requester_user_id
+    access = await get_product_surface_access().get_effective_access(actor)
+    if not any(
+        item.get("surface_code") == "freezone_assistant" and item.get("available") is True
+        for item in access
+    ):
+        raise HTTPException(403, "Freezone assistant is unavailable")
+    from novelvideo.api.egress_binding import request_egress_scope
+    from novelvideo.ports.authz import AuthzError
+
+    async def source_canvas() -> dict:
+        try:
+            payload = await asyncio.to_thread(canvas_store.read_canvas, state_dir, canvas_id)
+        except (canvas_store.CanvasStoreError, CanvasLockBusy) as exc:
+            _raise_canvas_store_http(exc)
+        if payload is None and canvas_id != "default":
+            raise HTTPException(404, "canvas not found")
+        return payload or {}
+
+    async def perform(operation, *args):
+        meter = get_usage_meter()
+        await meter.require_feature_credit_balance(
+            user_id=actor, feature_key="assistant.chat", project_id=ctx.project_id,
+            resource_kind="chat", metadata={"source": "freezone_director_council"},
+        )
+        try:
+            async with asyncio.timeout(108), request_egress_scope(
+                requester_user_id=actor, project_id=ctx.project_id, task_type="freezone_director_council",
+            ):
+                meter.set_llm_usage_context(actor, project_id=ctx.project_id, resource_kind="chat")
+                try:
+                    return await operation(*args)
+                finally:
+                    meter.clear_llm_usage_context()
+        except TimeoutError:
+            raise HTTPException(504, "director council did not finish in time") from None
+        except AuthzError as exc:
+            raise HTTPException(403, detail={"code": exc.code}) from None
+        except DirectorCouncilError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    async def require_current_source(request: CouncilPreviewRequest, expected_hash: str) -> None:
+        try:
+            _, current_hash = scene_from_canvas(await source_canvas(), request)
+        except (SourceNodeMissing, SourceTooLong, ValidationError):
+            current_hash = ""
+        if current_hash != expected_hash:
+            raise HTTPException(409, "canvas source changed; refresh the preview before continuing")
+
+    if isinstance(body, CouncilPreviewRequest):
+        if not body.conditions_confirmed:
+            return {
+                "ok": True, "status": "needs_confirmation",
+                "confirmation": ["节奏与总时长", "视觉风格与画幅", "单段上限（可不指定）", "需要的提示词类型"],
+            }
+        try:
+            scene, source_hash = scene_from_canvas(await source_canvas(), body)
+        except (SourceNodeMissing, SourceTooLong) as exc:
+            raise HTTPException(409, str(exc)) from None
+        except ValidationError:
+            raise HTTPException(409, "selected scene inputs are missing or invalid") from None
+        preview = await perform(plan_director_council, scene)
+        await require_current_source(body, source_hash)
+        preview_id = uuid.uuid4().hex
+        record = CouncilRecord(source_hash=source_hash, scene=scene, preview=preview)
+        path = record_path(state_dir, canvas_id, actor, preview_id)
+        await asyncio.to_thread(save_record, path, record)
+        return {
+            "ok": True, "status": "preview_ready", "preview_id": preview_id,
+            "preview": preview.model_dump(mode="json"),
+        }
+
+    path = record_path(state_dir, canvas_id, actor, body.preview_id)
+    if not path.is_file():
+        raise HTTPException(404, "preview not found on this canvas")
+    lock = portalocker.Lock(str(path.with_suffix(".lock")), timeout=0, fail_when_locked=True)
+    try:
+        lock.acquire()
+    except portalocker.exceptions.LockException:
+        raise HTTPException(409, "this preview is already being compiled") from None
+    try:
+        record = await asyncio.to_thread(read_record, path)
+        if record is None:
+            raise HTTPException(404, "preview not found on this canvas")
+        snapshot_request = CouncilPreviewRequest(
+            action="preview", request=record.scene.request,
+            node_ids=[asset.node_id for asset in record.scene.assets],
+        )
+        await require_current_source(snapshot_request, record.source_hash)
+        result = record.compilation
+        if result is None:
+            result = await perform(compile_director_council, record.scene, record.preview)
+            await require_current_source(snapshot_request, record.source_hash)
+            record.compilation = result
+            await asyncio.to_thread(save_record, path, record)
+        return {
+            "ok": True, "preview_id": body.preview_id,
+            **result.model_dump(mode="json"),
+        }
+    finally:
+        lock.release()
 
 
 @router.post(

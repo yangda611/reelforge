@@ -3840,9 +3840,11 @@ def _handle_validate_commands(args: dict[str, Any], **_: Any) -> str:
             )
         commands = payload.get("commands")
         if isinstance(commands, list):
+            commands = _normalize_text_annotation_commands(commands)
             shape_error = _validate_write_commands_shape(project, canvas, commands)
             if shape_error:
                 return shape_error
+            payload = {**payload, "commands": _normalize_move_commands(commands)}
         return _request_canvas_context_from_frontend(
             project=project,
             canvas=canvas,
@@ -3886,6 +3888,7 @@ _COMMAND_TYPES = {
     "create_edge",
     "layout_nodes",
     "group_nodes",
+    "organize_canvas",
     "move_nodes",
     "select_nodes",
     "run_node_action",
@@ -4116,6 +4119,170 @@ def _validate_html_artifact_write(
             raise ValueError("reference_node_ids must be an array of non-empty node IDs or earlier client_id aliases")
 
 
+def _normalize_move_command(command: dict[str, Any]) -> dict[str, Any]:
+    def coordinate(value: Any) -> bool:
+        try:
+            return type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            return False
+
+    def position(value: Any) -> bool:
+        return (
+            isinstance(value, dict)
+            and "x" in value and "y" in value
+            and coordinate(value["x"])
+            and coordinate(value["y"])
+        )
+
+    def delta(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        for field in ("delta", "offset"):
+            if field in value:
+                if not position(value[field]):
+                    raise ValueError(f"{field} requires finite numeric x/y pairs")
+                return {"x": value[field]["x"], "y": value[field]["y"]}
+        if not any(field in value for field in ("dx", "dy", "x_delta", "y_delta")):
+            return None
+        result = {"x": value.get("dx", value.get("x_delta", 0)), "y": value.get("dy", value.get("y_delta", 0))}
+        if not position(result):
+            raise ValueError("dx and dy must be finite numbers")
+        return result
+
+    def read_vectors(values: Any, *, relative: bool = False) -> dict[str, Any]:
+        if values is None:
+            return {}
+        if isinstance(values, list):
+            vectors = {}
+            for item in values:
+                if not isinstance(item, dict):
+                    raise ValueError("move entries must be objects")
+                node_id = item.get("node_id", item.get("nodeId", item.get("id")))
+                if not isinstance(node_id, str) or not node_id.strip():
+                    raise ValueError("move entries require non-empty node IDs")
+                vector = delta(item) if relative else item.get("position", item)
+                if vector is None or (not relative and delta(item) is not None and "position" not in item and not position(item)):
+                    continue
+                if not position(vector):
+                    raise ValueError("move entries require finite numeric x/y pairs")
+                vectors[node_id] = {"x": vector["x"], "y": vector["y"]}
+            return vectors
+        if not isinstance(values, dict):
+            raise ValueError("positions/deltas must be node maps or move-entry arrays")
+        vectors = {}
+        for node_id, value in values.items():
+            if not isinstance(node_id, str) or not node_id.strip():
+                raise ValueError("move maps require non-empty node IDs")
+            vector = value if position(value) else delta(value) if relative else None
+            if not position(vector):
+                raise ValueError("positions/deltas must map node IDs to finite numeric x/y pairs")
+            vectors[node_id] = {"x": vector["x"], "y": vector["y"]}
+        return vectors
+
+    entries = command.get("nodes", command.get("moves"))
+    positions = read_vectors(command.get("positions", entries))
+    deltas = read_vectors(command.get("deltas", command.get("delta_positions", entries)), relative=True)
+    node_ids = command.get("node_ids", [command.get("node_id", command.get("nodeId"))])
+    if "position" in command or "x" in command or "y" in command:
+        if not isinstance(node_ids, list) or len(node_ids) != 1 or not isinstance(node_ids[0], str) or not node_ids[0].strip():
+            raise ValueError("a single absolute position requires exactly one node ID")
+        if "position" in command:
+            absolute = command["position"]
+        else:
+            absolute = {"x": command.get("x"), "y": command.get("y")}
+        if not position(absolute):
+            raise ValueError("absolute placement requires both finite numeric x and y")
+        positions.update({node_ids[0]: {"x": absolute["x"], "y": absolute["y"]}})
+    relative = delta(command)
+    if relative:
+        if not isinstance(node_ids, list) or not node_ids or any(
+            not isinstance(node_id, str) or not node_id.strip() for node_id in node_ids
+        ):
+            raise ValueError("relative movement requires non-empty node_ids")
+        deltas.update({node_id: dict(relative) for node_id in node_ids})
+    if not positions and not deltas:
+        raise ValueError("provide absolute positions or relative dx/dy")
+    return {"type": "move_nodes", **({"positions": positions} if positions else {}), **({"deltas": deltas} if deltas else {})}
+
+
+def _normalize_text_annotation_commands(commands: list[Any]) -> list[Any]:
+    normalized = []
+    for command in commands:
+        if (
+            isinstance(command, dict)
+            and command.get("type") in {"create_node", "add_next_node"}
+            and command.get("node_type") == "textAnnotationNode"
+        ):
+            data = command.get("data")
+            if (
+                isinstance(data, dict)
+                and not str(data.get("title") or "").strip()
+                and isinstance(data.get("displayName"), str)
+                and data["displayName"].strip()
+            ):
+                command = {**command, "data": {**data, "title": data["displayName"]}}
+        normalized.append(command)
+    return normalized
+
+
+def _normalize_move_commands(commands: list[Any]) -> list[Any]:
+    return [
+        _normalize_move_command(command)
+        if isinstance(command, dict) and command.get("type") == "move_nodes" else command
+        for command in commands
+    ]
+
+
+def _validate_layout_command(command: dict[str, Any]) -> None:
+    if "algorithm" in command:
+        raise ValueError(
+            "algorithm is unsupported; use mode instead (dagre/tree are not supported)"
+        )
+    mode = command.get("mode")
+    if not isinstance(mode, str) or mode not in {"horizontal", "vertical", "grid", "auto", "dag"}:
+        raise ValueError("mode must be auto, dag, horizontal, vertical, or grid")
+    if "node_ids" in command:
+        node_ids = command["node_ids"]
+        if not isinstance(node_ids, list) or any(
+            not isinstance(node_id, str) or not node_id.strip() for node_id in node_ids
+        ):
+            raise ValueError(
+                "node_ids must be an array of nonblank strings; omit it or use [] for the whole canvas"
+            )
+
+
+def _validate_organize_canvas_command(command: dict[str, Any]) -> None:
+    layout_mode = command.get("layout_mode")
+    if layout_mode is not None and (
+        not isinstance(layout_mode, str)
+        or layout_mode not in {"auto", "dag", "horizontal", "vertical", "grid"}
+    ):
+        raise ValueError("layout_mode must be auto, dag, horizontal, vertical, or grid")
+    categories = command.get("categories")
+    if categories is not None:
+        if not isinstance(categories, list):
+            raise ValueError("categories must be an array of {label, node_ids}")
+        for idx, entry in enumerate(categories):
+            if not isinstance(entry, dict):
+                raise ValueError(f"categories[{idx}] must be an object")
+            label = entry.get("label")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(f"categories[{idx}].label must be a non-empty string")
+            node_ids = entry.get("node_ids")
+            if not isinstance(node_ids, list) or not node_ids or any(
+                not isinstance(nid, str) or not nid.strip() for nid in node_ids
+            ):
+                raise ValueError(
+                    f"categories[{idx}].node_ids must be a non-empty array of node ids"
+                )
+    ungroup = command.get("ungroup_node_ids")
+    if ungroup is not None and (
+        not isinstance(ungroup, list)
+        or any(not isinstance(nid, str) or not nid.strip() for nid in ungroup)
+    ):
+        raise ValueError("ungroup_node_ids must be an array of nonblank strings")
+
+
 def _validate_write_commands_shape(
     project: str | None,
     canvas: str | None,
@@ -4170,6 +4337,39 @@ def _validate_write_commands_shape(
                     f"got {command_type!r}."
                 ),
             )
+        if command_type == "move_nodes":
+            try:
+                _normalize_move_command(command)
+            except ValueError as exc:
+                return _emit_command_error(
+                    project,
+                    canvas,
+                    "invalid_command_schema",
+                    f"commands[{index}] move_nodes: {exc}. "
+                    'Absolute: {"type":"move_nodes","positions":{"node-a":{"x":300,"y":120}}}; '
+                    'relative: {"type":"move_nodes","node_ids":["node-a"],"dx":100,"dy":0}.',
+                )
+        if command_type == "layout_nodes":
+            try:
+                _validate_layout_command(command)
+            except ValueError as exc:
+                return _emit_command_error(
+                    project,
+                    canvas,
+                    "invalid_command_schema",
+                    f"commands[{index}] layout_nodes: {exc}. "
+                    'Example: {"type":"layout_nodes","mode":"auto","node_ids":["node-a","node-b"]}.',
+                )
+        if command_type == "organize_canvas":
+            try:
+                _validate_organize_canvas_command(command)
+            except ValueError as exc:
+                return _emit_command_error(
+                    project,
+                    canvas,
+                    "invalid_command_schema",
+                    f"commands[{index}] organize_canvas: {exc}.",
+                )
         if "nodeType" in command:
             return _emit_command_error(
                 project,
@@ -6570,6 +6770,7 @@ def _emit_canvas_commands(
         return _emit_command_error(
             project, canvas, "empty_commands", "commands must be a non-empty array"
         )
+    commands = _normalize_text_annotation_commands(commands)
     handwritten_batch = (
         not allow_dynamic_workflow_batch
         and _looks_like_handwritten_workflow_batch(commands)
@@ -6621,6 +6822,7 @@ def _emit_canvas_commands(
     )
     if shape_error:
         return shape_error
+    commands = _normalize_move_commands(commands)
     recommendation_error = _resolve_canvas_generation_recommendations(project, canvas, commands)
     if recommendation_error is not None:
         return tool_result(recommendation_error)
@@ -6880,6 +7082,34 @@ def _handle_read_native_skill_file(args: dict[str, Any], **_: Any) -> str:
     )
 
 
+def _handle_plan_director_council(args: dict[str, Any], **_: Any) -> str:
+    name = "freezone_plan_director_council"
+    mismatch = _bound_scope_mismatch(args.get("project_id"), args.get("canvas_id"))
+    if mismatch is not None:
+        return _structured_tool_result(mismatch, tool_name=name)
+    if not _available():
+        return _structured_tool_result(
+            {"ok": False, "status": "unavailable", "error": "Freezone backend is unavailable"},
+            tool_name=name,
+        )
+    try:
+        project = quote(_project_from_args({}), safe="")
+        canvas = quote(_canvas_from_args({}), safe="")
+        body = {key: value for key, value in args.items() if key not in {"project_id", "canvas_id"}}
+        result = _request(
+            "POST", f"/projects/{project}/freezone/canvases/{canvas}/director-council", body=body
+        )
+    except (ValueError, TimeoutError) as exc:
+        result = {"ok": False, "status": "failed", "error": str(exc)}
+    if not isinstance(result.get("ok"), bool) or not result.get("status"):
+        result = {"ok": False, "status": "failed", "error": result.get("error") or "Invalid council response"}
+    if "revision" in result:
+        result["prompt_revision"] = result.pop("revision")
+    allowed = {*_RESULT_COMMON_PROPERTIES, *_RESULT_FIELDS[name]}
+    result = {key: value for key, value in result.items() if key in allowed}
+    return _structured_tool_result(result, tool_name=name)
+
+
 _AGENT_PRODUCT_OPERATION_ID_PATTERN = re.compile(r"^agent_product_[0-9a-f]{32}$")
 
 
@@ -7096,7 +7326,9 @@ def _handle_prepare_workflow_plan_draft(args: dict[str, Any], **_: Any) -> str:
         preview_instruction
         + "Do not call freezone_get_workflow: this result is the durable draft receipt. "
         "Do not mention credits, billing, pricing, or editions. "
-        "Wait for user confirmation and end this turn without another workflow write. "
+        "If FREEZONE_CANVAS_EXECUTION_MODE is auto_execute (and no explicit human-review gate requires pausing), "
+        "immediately call freezone_confirm_workflow_draft(draft_id=..., revision=...) in this same turn; "
+        "in manual_confirm, wait for user confirmation and end this turn without another workflow write. "
         "Only after a later user message explicitly requests a change, call "
         "freezone_patch_workflow_draft on this draft with changes.step_updates and/or "
         "changes.bindings and its expected_revision; when the change alters what the plan "
@@ -7319,6 +7551,39 @@ def _handle_begin_agent_product_generation(args: dict[str, Any], **_: Any) -> st
                 }
             )
         artifact_id = expected_artifact_id
+        if get_workflow_skill is not None:
+            skill_package = get_workflow_skill({"skill_id": skill_id, "compact": True})
+            skill_meta = (
+                skill_package.get("skill")
+                if isinstance(skill_package, dict)
+                and skill_package.get("ok")
+                and isinstance(skill_package.get("skill"), dict)
+                else None
+            )
+            actual_version = str((skill_meta or {}).get("version") or "").strip()
+            if actual_version and skill_version != actual_version:
+                recipe_ids = [
+                    str(recipe.get("id") or "").strip()
+                    for recipe in (skill_package.get("available_recipes") or [])
+                    if isinstance(recipe, dict) and str(recipe.get("id") or "").strip()
+                ]
+                return tool_result(
+                    {
+                        "ok": False,
+                        "status": "workflow_result_skill_version_mismatch",
+                        "error": "workflow_result_skill_version_mismatch",
+                        "skill_id": skill_id,
+                        "skill_version": skill_version,
+                        "actual_skill_version": actual_version,
+                        "expected_artifact_id": f"{skill_id}@{actual_version}",
+                        "available_recipe_ids": recipe_ids,
+                        "agent_instruction": (
+                            f"Use the exact skill.version={actual_version!r} from "
+                            f"freezone_get_workflow_skill(skill_id={skill_id!r}) for both "
+                            f"skill_version and artifact_id='{skill_id}@{actual_version}'."
+                        ),
+                    }
+                )
     normalized_inputs = (
         args.get("normalized_inputs")
         if isinstance(args.get("normalized_inputs"), dict)
@@ -7350,6 +7615,13 @@ def _handle_begin_agent_product_generation(args: dict[str, Any], **_: Any) -> st
     payload = response.get("data") if isinstance(response.get("data"), dict) else None
     if not response.get("ok") or payload is None:
         return tool_result(response)
+    size_limit_note = (
+        " HARD LIMIT: keep each single WorkflowPlan compact (<=18 nodes, <=35 edges, 50-90 char prompts); "
+        "NEVER exceed 20 nodes in one tool call or it WILL exceed the 300s stream timeout. "
+        "For >=20 new nodes, split cleanly into sequential <=18-node batches with a fresh operation_id per batch."
+        if product_kind == "workflow_result"
+        else ""
+    )
     return _structured_tool_result(
         {
             "ok": True,
@@ -7365,6 +7637,7 @@ def _handle_begin_agent_product_generation(args: dict[str, Any], **_: Any) -> st
                 "then submit it through the matching persisted result tool with this exact "
                 "operation_id. Reuse it only for transport retries before the operation becomes "
                 "terminal. A later regeneration requires a new generation attempt and operation."
+                f"{size_limit_note}"
             ),
         },
         tool_name="freezone_begin_agent_product_generation",
@@ -8023,7 +8296,9 @@ def _handle_prepare_workflow_draft(args: dict[str, Any], **_: Any) -> str:
         "freezone_get_workflow: this result is the durable draft receipt. Before asking for "
         "confirmation, "
         "do not mention credits, billing, pricing, or editions. "
-        "Wait for user confirmation. "
+        "If FREEZONE_CANVAS_EXECUTION_MODE is auto_execute (and no explicit human-review gate requires pausing), "
+        "immediately call freezone_confirm_workflow_draft with draft_id and revision in this same turn; "
+        "in manual_confirm, wait for user confirmation. "
         "For adjustments, patch this draft instead of rebuilding the intent. "
         "After confirmation, call freezone_confirm_workflow_draft with draft_id and revision."
     )
@@ -9321,19 +9596,17 @@ def _handle_move_nodes(args: dict[str, Any], **_: Any) -> str:
 
 
 def _handle_layout_nodes(args: dict[str, Any], **_: Any) -> str:
-    mode = str(args.get("mode") or "").strip()
-    if mode not in {"horizontal", "vertical", "grid"}:
-        return tool_result(
-            {
-                "ok": False,
-                "status": "mode_required",
-                "error": "mode must be horizontal, vertical, or grid",
-            }
-        )
-    command: dict[str, Any] = {"type": "layout_nodes", "mode": mode}
-    node_ids = args.get("node_ids")
-    if isinstance(node_ids, list):
-        command["node_ids"] = node_ids
+    command: dict[str, Any] = {"type": "layout_nodes"}
+    for field in ("mode", "node_ids", "algorithm"):
+        if field in args:
+            command[field] = args[field]
+    error = _validate_write_commands_shape(
+        str(args.get("project_id") or "").strip() or None,
+        str(args.get("canvas_id") or "").strip() or None,
+        [command],
+    )
+    if error is not None:
+        return error
     return _single_write_command(args, command)
 
 
@@ -9366,6 +9639,37 @@ def _handle_group_nodes(args: dict[str, Any], **_: Any) -> str:
     label = str(args.get("label") or "").strip()
     if label:
         command["label"] = label
+    client_id = str(args.get("client_id") or "").strip()
+    if client_id:
+        command["client_id"] = client_id
+    return _single_write_command(args, command)
+
+
+def _handle_organize_canvas(args: dict[str, Any], **_: Any) -> str:
+    command: dict[str, Any] = {
+        "type": "organize_canvas",
+        "layout_mode": str(args.get("layout_mode") or "auto").strip() or "auto",
+        "prune_empty_groups": (
+            True
+            if "prune_empty_groups" not in args
+            else bool(args.get("prune_empty_groups"))
+        ),
+    }
+    if isinstance(args.get("categories"), list):
+        command["categories"] = args["categories"]
+    if isinstance(args.get("ungroup_node_ids"), list):
+        command["ungroup_node_ids"] = [
+            str(item).strip()
+            for item in args["ungroup_node_ids"]
+            if isinstance(item, str) and item.strip()
+        ]
+    error = _validate_write_commands_shape(
+        str(args.get("project_id") or "").strip() or None,
+        str(args.get("canvas_id") or "").strip() or None,
+        [command],
+    )
+    if error is not None:
+        return error
     return _single_write_command(args, command)
 
 
@@ -9982,6 +10286,10 @@ _STUDIO_RESULT_FIELDS: dict[str, tuple[str, ...]] = {
 
 _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
     **_STORY_RESULT_FIELDS,
+    "freezone_plan_director_council": (
+        "project_id", "canvas_id", "preview_id", "confirmation", "preview",
+        "prompt_revision", "prompts", "review",
+    ),
     "freezone_observe_workflow_run": (
         "run_id",
         "run_status",
@@ -10239,6 +10547,13 @@ _RESULT_FIELDS: dict[str, tuple[str, ...]] = {
     "freezone_move_nodes": (*_CANVAS_RESULT_FIELDS, "node_ids", "positions"),
     "freezone_layout_nodes": (*_CANVAS_RESULT_FIELDS, "node_ids", "mode"),
     "freezone_group_nodes": (*_CANVAS_RESULT_FIELDS, "node_ids", "group_id"),
+    "freezone_organize_canvas": (
+        *_CANVAS_RESULT_FIELDS,
+        "categories",
+        "ungroup_node_ids",
+        "prune_empty_groups",
+        "layout_mode",
+    ),
     "freezone_select_nodes": (*_CANVAS_RESULT_FIELDS, "node_ids"),
     "freezone_run_node_action": (*_CANVAS_RESULT_FIELDS, "node_id", "action", "run_id"),
     "freezone_run_workflow": (*_WORKFLOW_RESULT_FIELDS, "direction", "run_id", "available_ids"),
@@ -10277,6 +10592,7 @@ _STUDIO_RESULT_SUCCESS_REQUIRED: dict[str, tuple[str, ...]] = {
 _RESULT_SUCCESS_REQUIRED: dict[str, tuple[str, ...]] = {
     **_STORY_SUCCESS_REQUIRED,
     **(_STUDIO_RESULT_SUCCESS_REQUIRED if _OPENFILM_STUDIO_ENABLED else {}),
+    "freezone_plan_director_council": (),
     "freezone_observe_workflow_run": (
         "run_id",
         "run_status",
@@ -10351,6 +10667,7 @@ _CANVAS_RESULT_TOOLS = {
     "freezone_move_nodes",
     "freezone_layout_nodes",
     "freezone_group_nodes",
+    "freezone_organize_canvas",
     "freezone_select_nodes",
     "freezone_open_mainline_projection",
     "freezone_run_node_action",
@@ -10406,6 +10723,15 @@ def _canvas_application_receipt_contract(
 
 
 def _success_contract(name: str) -> dict[str, Any]:
+    if name == "freezone_plan_director_council":
+        return {"oneOf": [
+            {"properties": {"status": {"const": "needs_confirmation"}}, "required": ["confirmation"]},
+            {"properties": {"status": {"const": "preview_ready"}}, "required": ["preview_id", "preview"]},
+            {
+                "properties": {"status": {"enum": ["ready", "needs_revision"]}},
+                "required": ["preview_id", "prompt_revision", "prompts", "review"],
+            },
+        ]}
     if name == "freezone_import_external_skill":
         return {"required": ["batch_id", "imports"]}
     if name == "freezone_get_skill_import":
@@ -10577,6 +10903,15 @@ def _output_schema(name: str) -> dict[str, Any]:
         raise RuntimeError(f"missing output contract for {name}")
     properties = dict(_RESULT_COMMON_PROPERTIES)
     properties.update({field: _result_field_schema(field) for field in fields})
+    if name == "freezone_plan_director_council":
+        properties.update({
+            "preview_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+            "prompt_revision": {"enum": ["v001", "v002"]},
+            "confirmation": {"type": "array", "items": {"type": "string"}},
+            "prompts": {"type": "array", "items": {"type": "object"}},
+            "review": {"type": "array", "items": {"type": "object"}},
+            "preview": {"type": "object"},
+        })
     schema: dict[str, Any] = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": f"{name}.result",
@@ -11767,24 +12102,81 @@ _CANVAS_COMMAND_ITEM_SCHEMA = {
             "layout_nodes",
             {
                 "node_ids": _NODE_IDS_SCHEMA,
-                "mode": {"type": "string", "enum": ["horizontal", "vertical", "grid"]},
+                "mode": {
+                    "type": "string",
+                    "enum": ["auto", "dag", "horizontal", "vertical", "grid"],
+                },
             },
             ["mode"],
         ),
         _command_variant(
             "group_nodes",
-            {"node_ids": _NODE_IDS_SCHEMA, "label": {"type": "string"}},
+            {
+                "client_id": _NON_EMPTY_STRING,
+                "node_ids": _NODE_IDS_SCHEMA,
+                "label": {"type": "string"},
+            },
             ["node_ids"],
         ),
         _command_variant(
+            "organize_canvas",
+            {
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": _NON_EMPTY_STRING,
+                            "node_ids": _NODE_IDS_SCHEMA,
+                        },
+                        "required": ["label", "node_ids"],
+                        "additionalProperties": False,
+                    },
+                },
+                "ungroup_node_ids": _NODE_IDS_SCHEMA,
+                "prune_empty_groups": {"type": "boolean"},
+                "layout_mode": {
+                    "type": "string",
+                    "enum": ["auto", "dag", "horizontal", "vertical", "grid"],
+                },
+            },
+            [],
+        ),
+        _command_variant(
             "move_nodes",
-            {"positions": _POSITIONS_SCHEMA},
+            {"positions": _POSITIONS_SCHEMA, "deltas": _POSITIONS_SCHEMA},
             ["positions"],
         ),
         _command_variant(
             "move_nodes",
             {"deltas": _POSITIONS_SCHEMA},
             ["deltas"],
+        ),
+        {
+            **_command_variant(
+                "move_nodes",
+                {
+                    "node_ids": _NODE_IDS_SCHEMA,
+                    "dx": {"type": "number"},
+                    "dy": {"type": "number"},
+                },
+                ["node_ids"],
+            ),
+            "anyOf": [{"required": ["dx"]}, {"required": ["dy"]}],
+        },
+        _command_variant(
+            "move_nodes",
+            {"node_ids": {**_NODE_IDS_SCHEMA, "maxItems": 1}, "position": _POSITION_SCHEMA},
+            ["node_ids", "position"],
+        ),
+        _command_variant(
+            "move_nodes",
+            {
+                "node_ids": {**_NODE_IDS_SCHEMA, "maxItems": 1},
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+            },
+            ["node_ids", "x", "y"],
         ),
         _command_variant(
             "select_nodes",
@@ -12952,6 +13344,37 @@ TOOLS = (
         _handle_begin_agent_product_generation,
     ),
     (
+        "freezone_plan_director_council",
+        _schema(
+            "freezone_plan_director_council",
+            (
+                "Run Freezone's six-department storyboard council. Preview after the user confirms "
+                "scene conditions; compile only after the user explicitly requests final prompts "
+                "from the returned preview_id. Neither stage writes canvas nodes or generates media."
+            ),
+            {
+                "action": {"type": "string", "enum": ["preview", "compile"]},
+                "request": {"type": "string", "description": "User's directing task and confirmed conditions"},
+                "source": {"type": "string", "description": "Verbatim user-provided story; do not invent"},
+                "node_ids": {"type": "array", "items": _NON_EMPTY_STRING, "maxItems": 12},
+                "observations": {"type": "object", "additionalProperties": {"type": "string"}},
+                "locked_dialogue": {"type": "array", "items": _NON_EMPTY_STRING},
+                "locked_facts": {"type": "array", "items": _NON_EMPTY_STRING},
+                "total_ms": {"type": "integer", "minimum": 1},
+                "segment_max_ms": {"type": "integer", "minimum": 1},
+                "deliverables": {
+                    "type": "array",
+                    "items": {"enum": ["video", "still", "first_frame", "last_frame"]},
+                },
+                "conditions_confirmed": {"type": "boolean"},
+                "preview_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                "prompts_authorized": {"type": "boolean", "const": True},
+            },
+            ["action"],
+        ),
+        _handle_plan_director_council,
+    ),
+    (
         "freezone_read_native_skill_file",
         _schema(
             "freezone_read_native_skill_file",
@@ -13262,12 +13685,12 @@ TOOLS = (
         "freezone_emit_canvas_command",
         _schema(
             "freezone_emit_canvas_command",
-            "Default Freezone write tool for ordinary non-workflow canvas edits. Submit one complete canvas_chat_commands.v1 commands array for the user's requested canvas changes. A request to create a downstream media node and actually generate its output is a mixed operation: use add_next_node + run_node_action in this one batch, give add_next_node a client_id, and use that same alias as run_node_action.node_id. When an existing node must be edited and then generated, use update_node_data + run_node_action in this one batch so generation reads the updated data without another model turn. Do not ask the user to click Generate after only creating or editing the node. Do not use this tool for registered or dynamic WorkflowPlans; use the appropriate persisted workflow draft tool instead. If commands[] fields are unclear, call freezone_get_canvas_command_catalog first.",
+            "Default Freezone write tool for ordinary non-workflow canvas edits. Submit one complete canvas_chat_commands.v1 commands array for the user's requested canvas changes. Deleting a group recursively deletes its descendants. To reorganize existing groups, first group their child nodes into the requested new groups, then delete the old groups after they are empty; never delete a non-empty group before reusing its child ids. A request to create a downstream media node and actually generate its output is a mixed operation: use add_next_node + run_node_action in this one batch, give add_next_node a client_id, and use that same alias as run_node_action.node_id. When an existing node must be edited and then generated, use update_node_data + run_node_action in this one batch so generation reads the updated data without another model turn. Do not ask the user to click Generate after only creating or editing the node. Do not use this tool for registered or dynamic WorkflowPlans; use the appropriate persisted workflow draft tool instead. If commands[] fields are unclear, call freezone_get_canvas_command_catalog first.",
             {
                 **_CANVAS_COMMAND_TOOL_SCOPE_PROPS,
                 "commands": {
                     "type": "array",
-                    "description": "Complete canvas_chat_commands.v1 commands array for ordinary non-workflow edits. For workflows, do not build this array manually; use a persisted workflow draft. Batch command objects require snake_case fields from freezone_get_canvas_command_catalog: type, node_type, source_node_id, node_id, node_ids, source, target, link_type, etc.",
+                    "description": "Complete canvas_chat_commands.v1 commands array for ordinary non-workflow edits. Deleting a group recursively deletes its descendants; to reorganize groups, group existing children first, then delete the old empty groups. For absolute move_nodes placement, use positions as a map keyed by node id/client_id to {x,y}; for relative movement use node_ids with dx/dy. Do not use node_ids with x/y or position in batch commands. For workflows, use a persisted workflow draft.",
                     "items": _CANVAS_COMMAND_ITEM_SCHEMA,
                 },
             },
@@ -13405,7 +13828,7 @@ TOOLS = (
         "freezone_delete_nodes",
         _schema(
             "freezone_delete_nodes",
-            "Single-operation tool only: delete nodes as one pure delete operation. When the user asks to delete every node or clear the canvas, pass scope=canvas and omit node_ids; do not inspect or read nodes first. For selected nodes, pass node_ids. For mixed delete/update/layout/link workflows, use one freezone_emit_canvas_command batch. Use this for node deletion, not for disconnecting edges.",
+            "Single-operation tool only: delete nodes as one pure delete operation. Deleting a group node also deletes its descendants. To reorganize or recategorize existing group members, first group the existing child nodes into their new groups, then delete the now-empty old groups; never delete a non-empty old group before reusing its child ids. When the user asks to delete every node or clear the canvas, pass scope=canvas and omit node_ids; do not inspect or read nodes first. For selected nodes, pass node_ids. For mixed delete/update/layout/link workflows, use one freezone_emit_canvas_command batch. Use this for node deletion, not for disconnecting edges.",
             {
                 **_SCOPE_PROPS,
                 "scope": {
@@ -13415,7 +13838,7 @@ TOOLS = (
                 },
                 "node_ids": {
                     "type": "array",
-                    "description": "Existing node ids to delete.",
+                    "description": "Existing node ids to delete. Deleting a group also deletes its descendants. For reorganization, group its children first and delete the old group only after it is empty.",
                     "items": {"type": "string"},
                 },
             },
@@ -13470,13 +13893,13 @@ TOOLS = (
         "freezone_layout_nodes",
         _schema(
             "freezone_layout_nodes",
-            "Single-operation tool only: auto-layout selected Freezone nodes, or the whole canvas when node_ids is omitted or empty. For create/link/layout workflows, use one freezone_emit_canvas_command batch.",
+            "Single-operation tool only: auto-layout selected Freezone nodes, or the whole canvas when node_ids is omitted or empty. Prefer mode='auto' for topological DAG and group-aware non-overlapping layout. For create/link/layout workflows, use one freezone_emit_canvas_command batch.",
             {
                 **_SCOPE_PROPS,
                 "mode": {
                     "type": "string",
-                    "enum": ["horizontal", "vertical", "grid"],
-                    "description": "Layout mode.",
+                    "enum": ["auto", "dag", "horizontal", "vertical", "grid"],
+                    "description": "Layout mode. Use 'auto' (recommended) for dependency-aware non-overlapping layout across groups and nodes.",
                 },
                 "node_ids": {
                     "type": "array",
@@ -13492,19 +13915,62 @@ TOOLS = (
         "freezone_group_nodes",
         _schema(
             "freezone_group_nodes",
-            "Single-operation tool only: create a plain visual group around related nodes as one pure grouping operation. This does not replace valid semantic edges, but it is the preferred fallback when no valid link_type exists. For mixed workflows, use one freezone_emit_canvas_command batch.",
+            "Single-operation tool only: create a plain visual group around related nodes as one pure grouping operation. Existing nodes may be moved from their old groups into the new group. For reorganization, group child nodes first, then delete old groups only after they are empty; deleting a non-empty group deletes its descendants. This does not replace valid semantic edges, but it is the preferred fallback when no valid link_type exists. For mixed workflows, use one freezone_emit_canvas_command batch.",
             {
                 **_SCOPE_PROPS,
                 "node_ids": {
                     "type": "array",
-                    "description": "At least two node ids/client_ids to group.",
+                    "description": "At least two existing node ids/client_ids to group. Existing nodes are moved into the new group. To reorganize old groups, group their children first and delete old groups after they are empty.",
                     "items": {"type": "string"},
                 },
                 "label": {"type": "string", "description": "Optional group label."},
+                "client_id": {"type": "string", "description": "Optional client_id so subsequent commands in the same batch can reference the created group."},
             },
             ["node_ids"],
         ),
         _handle_group_nodes,
+    ),
+    (
+        "freezone_organize_canvas",
+        _schema(
+            "freezone_organize_canvas",
+            "Organize, categorize, regroup, prune empty ordinary groups, and run deterministic non-overlapping layout across the Freezone canvas in one atomic step. Supports single-node categories cleanly without failing, preserves protected mainline/storyboard groups, and computes all group sizes and coordinates automatically.",
+            {
+                **_SCOPE_PROPS,
+                "categories": {
+                    "type": "array",
+                    "description": "Ordered semantic groups to organize nodes into, e.g. [{'label': '人物设定', 'node_ids': [...]}].",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "minLength": 1},
+                            "node_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string", "minLength": 1},
+                            },
+                        },
+                        "required": ["label", "node_ids"],
+                    },
+                },
+                "ungroup_node_ids": {
+                    "type": "array",
+                    "description": "Optional existing node ids to move out of ordinary groups to the top level.",
+                    "items": {"type": "string"},
+                },
+                "prune_empty_groups": {
+                    "type": "boolean",
+                    "description": "Automatically remove empty ordinary groups after regrouping (defaults to true).",
+                },
+                "layout_mode": {
+                    "type": "string",
+                    "enum": ["auto", "dag", "horizontal", "vertical", "grid"],
+                    "description": "Layout mode applied after grouping (defaults to 'auto').",
+                },
+            },
+            [],
+        ),
+        _handle_organize_canvas,
     ),
     (
         "freezone_select_nodes",

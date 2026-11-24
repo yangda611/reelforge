@@ -2207,6 +2207,199 @@ def test_newapi_image_edit_supports_explicit_data_url_reference_format(monkeypat
     assert posted["json"]["image"][0].startswith("data:image/jpeg;base64,")
 
 
+def test_newapi_image_result_download_retries_truncated_body(monkeypatch):
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+
+    attempts = {"post": 0, "get": 0}
+
+    class GenerateResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"url": "https://cdn.example.com/out.png"}]}
+
+    class ImageResponse:
+        status_code = 200
+        headers = {"content-length": "6"}
+
+        def raise_for_status(self):
+            return None
+
+        @property
+        def content(self):
+            return b"image!"
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            attempts["post"] += 1
+            return GenerateResponse()
+
+        async def get(self, url, *, headers=None):
+            attempts["get"] += 1
+            if attempts["get"] == 1:
+                # Mirrors the reported failure: peer closed the body early.
+                raise httpx.RemoteProtocolError(
+                    "peer closed connection without sending complete message body"
+                )
+            return ImageResponse()
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid.asyncio, "sleep", no_sleep)
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="retry prompt",
+            image_config={"aspect_ratio": "16:9", "image_size": "2K"},
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes == b"image!"
+    assert error == ""
+    # The billed generation POST must never be repeated by the download retry.
+    assert attempts["post"] == 1
+    assert attempts["get"] == 2
+
+
+def test_newapi_image_result_download_does_not_retry_client_error(monkeypatch):
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+
+    attempts = {"get": 0}
+
+    class GenerateResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"url": "https://cdn.example.com/expired.png"}]}
+
+    class NotFoundResponse:
+        status_code = 404
+        text = '{"error":{"message":"not found"}}'
+        headers = {}
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "not found",
+                request=httpx.Request("GET", "https://cdn.example.com/expired.png"),
+                response=self,
+            )
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            return GenerateResponse()
+
+        async def get(self, url, *, headers=None):
+            attempts["get"] += 1
+            return NotFoundResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="expired url prompt",
+            image_config={"aspect_ratio": "16:9", "image_size": "2K"},
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes is None
+    assert "HTTP 404" in error
+    assert attempts["get"] == 1
+
+
+def test_newapi_image_result_download_reports_transport_error_after_retries(
+    monkeypatch,
+):
+    import httpx
+    from novelvideo.generators import nanobanana_grid
+
+    attempts = {"get": 0}
+
+    class GenerateResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"url": "https://cdn.example.com/flaky.png"}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, *, headers, json):
+            return GenerateResponse()
+
+        async def get(self, url, *, headers=None):
+            attempts["get"] += 1
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body"
+            )
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(nanobanana_grid.asyncio, "sleep", no_sleep)
+
+    image_bytes, _text, error = run_async(
+        nanobanana_grid._call_newapi_image_api(
+            api_key="newapi-token",
+            model="LingShan-G2",
+            prompt="flaky prompt",
+            image_config={"aspect_ratio": "16:9", "image_size": "2K"},
+            base_url="http://newapi.test/v1",
+        )
+    )
+
+    assert image_bytes is None
+    assert "RemoteProtocolError" in error
+    assert attempts["get"] == nanobanana_grid._IMAGE_DOWNLOAD_MAX_ATTEMPTS
+
+
 def run_async(coro):
     import asyncio
 

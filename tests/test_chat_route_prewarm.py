@@ -1169,6 +1169,44 @@ def test_legacy_bridge_filter_uses_raw_message_kind_ttl(tmp_path) -> None:
 
 
 @pytest.mark.anyio
+async def test_canvas_context_watcher_includes_originating_scope(monkeypatch, tmp_path):
+    class CapturingWebSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+            raise RuntimeError("stop watcher after first send")
+
+    bridge_dir = tmp_path / "bridge"
+    monkeypatch.setattr(
+        chat_route, "_candidate_canvas_bridge_dirs_for_scope", lambda *_args: [bridge_dir]
+    )
+    requests = [{"type": "canvas_ontology"}]
+    envelope = {
+        "schema_version": "canvas_context_request.v1",
+        "canvas_id": "canvas-a",
+        "requests": requests,
+    }
+    canvas_command_bridge.put_pending_canvas_context(
+        key="context-key", project_id="project-a", canvas_id="canvas-a",
+        requests=requests, envelope=envelope, bridge_dir=bridge_dir,
+    )
+    scope = ChatScope(
+        kind="project", id="project-a", surface="freezone",
+        canvas_id="canvas-a", agent_id="agent-1",
+    )
+    websocket = CapturingWebSocket()
+    await chat_route._watch_pending_canvas_context_requests(
+        websocket=websocket, username="admin", scope=scope, turn_id="turn-a",
+        send_lock=None, emitted_bridge_keys=set(), started_at=0,
+    )
+    assert len(websocket.sent) == 1
+    assert websocket.sent[0]["scope"] == scope.to_dict()
+    assert websocket.sent[0]["envelope"] == envelope
+
+
+@pytest.mark.anyio
 async def test_watch_pending_skill_studio_events_emits_freezone_bridge_event(
     monkeypatch, tmp_path
 ) -> None:

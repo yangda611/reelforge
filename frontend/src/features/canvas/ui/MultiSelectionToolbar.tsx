@@ -27,10 +27,9 @@ import {
 import { useCanvasStore } from '@/stores/canvasStore';
 import {
   CANVAS_NODE_TYPES,
-  DEFAULT_NODE_WIDTH,
   type CanvasNode,
 } from '@/features/canvas/domain/canvasNodes';
-import { computeAutoLayout } from '@/features/canvas/application/autoLayout';
+import { computeAutoLayout, getNodeSize } from '@/features/canvas/application/autoLayout';
 import { collectBatchDeletableIds } from '@/features/canvas/domain/groupSelectionDelete';
 import { workflowGroupState } from '@/features/canvas/domain/workflowGroupState';
 import {
@@ -54,8 +53,6 @@ import { ZoomScaledToolbar } from '@/features/canvas/ui/ZoomScaledToolbar';
 
 // Gap (in flow units) kept between nodes when arranging.
 const ARRANGE_GAP = 32;
-// Fallback height when a node has not been measured yet.
-const DEFAULT_NODE_HEIGHT = 320;
 const MULTI_TOOLBAR_BUTTON_CLASS =
   'flex h-9 items-center gap-1.5 rounded-[12px] px-3 text-sm text-text-dark transition-colors hover:bg-[rgba(255,255,255,0.075)]';
 const MULTI_TOOLBAR_SEPARATOR_CLASS =
@@ -70,22 +67,6 @@ type MultiSelectionToolbarProps = {
   canvasId?: string;
 };
 
-function getNodeSize(node: CanvasNode): { width: number; height: number } {
-  return {
-    width:
-      typeof node.measured?.width === 'number'
-        ? node.measured.width
-        : typeof node.width === 'number'
-          ? node.width
-          : DEFAULT_NODE_WIDTH,
-    height:
-      typeof node.measured?.height === 'number'
-        ? node.measured.height
-        : typeof node.height === 'number'
-          ? node.height
-          : DEFAULT_NODE_HEIGHT,
-  };
-}
 
 export const MultiSelectionToolbar = memo(({
   projectId,
@@ -188,6 +169,16 @@ export const MultiSelectionToolbar = memo(({
       }
 
       const items = selectedNodes
+        .filter((node) => {
+          let parentId = node.parentId;
+          const visited = new Set<string>();
+          while (parentId && !visited.has(parentId)) {
+            visited.add(parentId);
+            if (selectedIds.includes(parentId)) return false;
+            parentId = nodeById.get(parentId)?.parentId;
+          }
+          return true;
+        })
         .map((node) => ({
           node,
           abs: resolveAbsolute(node),
@@ -265,7 +256,7 @@ export const MultiSelectionToolbar = memo(({
 
       setNodePositions(positions);
     },
-    [edges, nodeById, resolveAbsolute, selectedNodes, setNodePositions]
+    [edges, nodeById, resolveAbsolute, selectedIds, selectedNodes, setNodePositions]
   );
 
   const cancelArrangeMenuClose = useCallback(() => {

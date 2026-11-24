@@ -5448,6 +5448,56 @@ describe("useSuperChat websocket lifecycle", () => {
     expect(sockets).toHaveLength(0);
   });
 
+  it("dispatches canvas context only for the active project scope", async () => {
+    class TestWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor() { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    const sockets: TestWebSocket[] = [];
+    Object.defineProperty(globalThis, "WebSocket", {
+      value: TestWebSocket, writable: true, configurable: true,
+    });
+    const listener = vi.fn();
+    window.addEventListener("superchat/canvas-context-request", listener);
+    const hook = renderHook(({ project }) => useSuperChat({
+      project, displayName: "Tester", surface: "freezone", freezoneCanvasId: "canvas-a",
+    }), { initialProps: { project: "project-a" } });
+    try {
+      await waitFor(() => expect(sockets).toHaveLength(1));
+      hook.rerender({ project: "project-b" });
+      const oldScope = { kind: "project", id: "project-a", surface: "freezone", canvasId: "canvas-a" };
+      const currentScope = { ...oldScope, id: "project-b" };
+      await act(async () => {
+        sockets[0].onopen?.();
+        for (const scope of [oldScope, currentScope, undefined]) {
+          sockets[0].onmessage?.({ data: JSON.stringify({
+            type: "canvas.context.request", scope, turn_id: "turn-a", canvas_id: "canvas-a",
+            envelope: { schema_version: "canvas_context_request.v1", requests: [{ type: "canvas_ontology" }] },
+          }) } as MessageEvent);
+        }
+        for (const scope of [oldScope, currentScope]) {
+          sockets[0].onmessage?.({ data: JSON.stringify({
+            type: "tool.call", scope, turn_id: "turn-a", name: "freezone_get_canvas_ontology", input: {},
+          }) } as MessageEvent);
+          sockets[0].onmessage?.({ data: JSON.stringify({
+            type: "agent.tool.started", scope, turn_id: "turn-a", name: "freezone_get_canvas_ontology", input: {},
+          }) } as MessageEvent);
+        }
+      });
+      expect(listener).toHaveBeenCalledTimes(4);
+    } finally {
+      window.removeEventListener("superchat/canvas-context-request", listener);
+      hook.unmount();
+    }
+  });
+
   it("sends original user text separately from augmented transport text", async () => {
     localStorage.setItem("freezone.canvasCommandExecutionMode", "auto_execute");
     const sentFrames: string[] = [];
@@ -5920,6 +5970,50 @@ describe("useSuperChat websocket lifecycle", () => {
         .map((frame) => JSON.parse(frame) as Record<string, unknown>)
         .filter((frame) => frame.type === "scope.set"),
     ).toHaveLength(2);
+  });
+
+  it("preserves a streamed reply when done is batched without a final message", async () => {
+    const sockets: TestWebSocket[] = [];
+    class TestWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor() { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+    Object.defineProperty(globalThis, "WebSocket", {
+      value: TestWebSocket, writable: true, configurable: true,
+    });
+    const hook = renderHook(() =>
+      useSuperChat({ project: "project-batched-stream", displayName: "Tester" }),
+    );
+    await waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0];
+    const scope = { kind: "project", id: "project-batched-stream" };
+    await act(async () => {
+      socket.onopen?.();
+      socket.onmessage?.({
+        data: JSON.stringify({ type: "scope.changed", scope, history: [] }),
+      } as MessageEvent);
+    });
+    await act(async () => {
+      for (const frame of [
+        { type: "assistant.delta", text: "Completed reply", accumulated: true },
+        { type: "chat.done" },
+      ]) {
+        socket.onmessage?.({
+          data: JSON.stringify({ ...frame, scope, turn_id: "turn-batched" }),
+        } as MessageEvent);
+      }
+    });
+    expect(hook.result.current.busy).toBe(false);
+    expect(hook.result.current.messages.filter((item) => item.role === "assistant")
+      .map((item) => item.text)).toEqual(["Completed reply"]);
+    hook.unmount();
   });
 
   it("persists merged assistant parts after the final assistant message arrives", async () => {

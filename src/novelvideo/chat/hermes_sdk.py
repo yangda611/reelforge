@@ -14,6 +14,7 @@ See docs/hermes-acp-protocol.md for the full protocol.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -22,11 +23,12 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Sequence
 
 from novelvideo.security import SandboxSpec, wrap_command
 from novelvideo.chat import hermes_events
 from novelvideo.chat.runtime_port import ChatBackendEvent
+from novelvideo.chat.turn_images import MAX_TURN_IMAGES
 from novelvideo.chat.tool_policy import (
     DRAMACLAW_WRITE_TOOLS as _DRAMACLAW_WRITE_TOOLS,
     FREEZONE_CANVAS_WRITE_TOOLS as _FREEZONE_CANVAS_WRITE_TOOLS,
@@ -34,6 +36,26 @@ from novelvideo.chat.tool_policy import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _image_prompt_blocks(images: Sequence[str]) -> list[dict[str, str]]:
+    blocks = []
+    for image in images[:MAX_TURN_IMAGES]:
+        if not isinstance(image, str):
+            raise ValueError("Hermes image input must be an inline image data URL")
+        match = re.fullmatch(
+            r"data:(image/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)", image
+        )
+        if match is None:
+            raise ValueError("Hermes image input must be a supported base64 image data URL")
+        media_type, data = match.groups()
+        try:
+            base64.b64decode(data, validate=True)
+        except ValueError as exc:
+            raise ValueError("Hermes image input has invalid base64 data") from exc
+        blocks.append({"type": "image", "mimeType": media_type, "data": data})
+    return blocks
+
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -268,6 +290,69 @@ def _is_skill_loading_tool(name: object) -> bool:
     return str(name or "").strip() in {"skill", "skill_view"}
 
 
+def _is_discovery_or_setup_tool(name: object) -> bool:
+    return str(name or "").strip() in {
+        "skill",
+        "skill_view",
+        "skills_list",
+        "tool_search",
+        "tool_describe",
+    }
+
+
+def _coerce_tool_call_arguments(raw_args: object) -> object:
+    if isinstance(raw_args, str):
+        parsed = _coerce_tool_result(raw_args)
+        if isinstance(parsed, dict):
+            return parsed
+    return raw_args
+
+
+def _unwrap_hermes_tool_call(
+    tool_name: str,
+    tool_input: object,
+) -> tuple[str, object]:
+    """Unwrap Hermes progressive-disclosure ``tool_call`` bridge payloads.
+
+    When ``tools.tool_search`` is enabled, Hermes invokes Freezone/DramaClaw
+    tools via ``tool_call(name=..., arguments=...)`` or
+    ``tool_call(calls=[{name, arguments}, ...])``. Unwrapping single-target
+    calls restores accurate write-timeout extension, tool-call guard tracking,
+    and structured result lookup.
+    """
+    normalized = str(tool_name or "").strip()
+    if normalized != "tool_call":
+        return tool_name, tool_input
+    payload = _coerce_tool_result(tool_input)
+    if not isinstance(payload, dict):
+        return tool_name, tool_input
+    calls = payload.get("calls")
+    if isinstance(calls, list) and len(calls) == 1 and isinstance(calls[0], dict):
+        target_name = str(calls[0].get("name") or "").strip()
+        if target_name:
+            return target_name, _coerce_tool_call_arguments(calls[0].get("arguments"))
+    target_name = str(payload.get("name") or "").strip()
+    if target_name:
+        return target_name, _coerce_tool_call_arguments(payload.get("arguments"))
+    return tool_name, tool_input
+
+
+def _batch_tool_call_names(tool_name: str, tool_input: object) -> tuple[str, ...]:
+    unwrapped_name, unwrapped_input = _unwrap_hermes_tool_call(tool_name, tool_input)
+    if str(unwrapped_name or "").strip() != "tool_call":
+        return (unwrapped_name,) if unwrapped_name else ()
+    payload = _coerce_tool_result(unwrapped_input)
+    if isinstance(payload, dict) and isinstance(payload.get("calls"), list):
+        names = tuple(
+            str(entry.get("name") or "").strip()
+            for entry in payload["calls"]
+            if isinstance(entry, dict) and str(entry.get("name") or "").strip()
+        )
+        if names:
+            return names
+    return (unwrapped_name,) if unwrapped_name else ()
+
+
 def _turn_tool_call_limit_for_tool(name: object) -> int | None:
     if _is_freezone_tool(name):
         return FREEZONE_TURN_TOOL_CALL_LIMIT
@@ -333,23 +418,25 @@ class _TurnToolCallGuard:
             # Anonymous updates cannot be distinguished from a matching start.
             return None
 
-        tool_name = str(event.name or "").strip()
-        # Loading the workflow instructions is mandatory setup, not a business
-        # operation. Keep repeated-read detection below, but do not let the
-        # loader consume the per-turn action budget.
-        if not _is_skill_loading_tool(tool_name):
+        tool_name, effective_input = _unwrap_hermes_tool_call(
+            str(event.name or "").strip(), event.input
+        )
+        # Loading workflow instructions or discovering deferred tool schemas is
+        # setup, not a business operation. Keep repeated-read detection below,
+        # but do not let setup calls consume the per-turn action budget.
+        if not _is_discovery_or_setup_tool(tool_name):
             self.total += 1
         if tool_name == "freezone_validate_canvas_commands":
             try:
                 encoded_input = json.dumps(
-                    event.input,
+                    effective_input,
                     ensure_ascii=False,
                     sort_keys=True,
                     default=str,
                     separators=(",", ":"),
                 )
             except (TypeError, ValueError):
-                encoded_input = repr(event.input)
+                encoded_input = repr(effective_input)
             signature = f"{tool_name}:{encoded_input}"
             validation_count = self._validation_signature_counts.get(signature, 0) + 1
             self._validation_signature_counts[signature] = validation_count
@@ -358,8 +445,13 @@ class _TurnToolCallGuard:
                     "本轮操作已停止：虾画重复校验同一批画布命令，且没有执行新的写入。"
                     "请重新发送一条明确的继续或重试指令。"
                 )
-        if not _is_dramaclaw_write_tool(tool_name) and not _is_freezone_canvas_write_tool(tool_name):
-            if event.input is None:
+        batch_names = _batch_tool_call_names(tool_name, effective_input)
+        is_write_call = any(
+            _is_dramaclaw_write_tool(name) or _is_freezone_canvas_write_tool(name)
+            for name in batch_names
+        )
+        if not is_write_call:
+            if effective_input is None:
                 # Hermes "polished" tools (skill_view, read_file, search_files…)
                 # omit rawInput in the ACP event, and _split_tool_title reduces
                 # their titles to one word — without more detail, distinct reads
@@ -375,23 +467,31 @@ class _TurnToolCallGuard:
             else:
                 try:
                     encoded_input = json.dumps(
-                        event.input, ensure_ascii=False, sort_keys=True, default=str
+                        effective_input, ensure_ascii=False, sort_keys=True, default=str
                     )
                 except (TypeError, ValueError):
-                    encoded_input = repr(event.input)
+                    encoded_input = repr(effective_input)
             signature = f"{tool_name}:{encoded_input}"
             repeat_count = self._read_signature_counts.get(signature, 0) + 1
             self._read_signature_counts[signature] = repeat_count
             if repeat_count > REPEATED_READ_TOOL_CALL_LIMIT:
-                subject = "同一个画布节点" if _is_freezone_tool(tool_name) else "同一项状态"
+                subject = (
+                    "同一个画布节点"
+                    if any(_is_freezone_tool(name) for name in batch_names)
+                    else "同一项状态"
+                )
                 return (
                     f"本轮操作已停止：虾导重复读取{subject}，且没有产生新的操作。"
                     "请重新发送一条明确的继续或重试指令。"
                 )
 
-        call_limit = _turn_tool_call_limit_for_tool(tool_name)
+        limit_target = next(
+            (name for name in batch_names if _turn_tool_call_limit_for_tool(name) is not None),
+            tool_name,
+        )
+        call_limit = _turn_tool_call_limit_for_tool(limit_target)
         if call_limit is not None and self.total > call_limit:
-            return _tool_call_limit_stop_message(tool_name)
+            return _tool_call_limit_stop_message(limit_target)
         return None
 
 
@@ -1455,13 +1555,16 @@ class HermesSdkThread:
         so the first real message hits a ready session. Failures are logged, not
         raised — a failed warm just means the first stream() pays the cold start.
         """
-        if self._closed:
-            return
-        try:
-            await self._prepare()
-            _log.info("hermes worker warmed for user=%s session=%s", self._username, self.id)
-        except Exception as e:  # noqa: BLE001 - best-effort prewarm
-            _log.warning("hermes warm() failed for user=%s: %s", self._username, e)
+        # Session/load reads the same ACP stdout as stream(). A reconnect warm
+        # must not consume prompt notifications or its final response.
+        async with self._turn_lock:
+            if self._closed:
+                return
+            try:
+                await self._prepare()
+                _log.info("hermes worker warmed for user=%s session=%s", self._username, self.id)
+            except Exception as e:  # noqa: BLE001 - best-effort prewarm
+                _log.warning("hermes warm() failed for user=%s: %s", self._username, e)
 
     async def _stream_timeout_event(self, turn_id: str) -> ChatBackendEvent:
         """Retire a timed-out worker before returning control to the pool."""
@@ -1483,6 +1586,7 @@ class HermesSdkThread:
         self,
         prompt: str,
         *,
+        images: Sequence[str] = (),
         current_project: str | None = None,
         trajectory_id: str | None = None,
         project_id: str | None = None,
@@ -1504,6 +1608,7 @@ class HermesSdkThread:
                 raise RuntimeError("HermesSdkThread is closed")
             async for event in self._stream_turn(
                 prompt,
+                images=images,
                 current_project=current_project,
                 trajectory_id=trajectory_id,
                 project_id=project_id,
@@ -1515,6 +1620,7 @@ class HermesSdkThread:
         self,
         prompt: str,
         *,
+        images: Sequence[str] = (),
         current_project: str | None = None,
         trajectory_id: str | None = None,
         project_id: str | None = None,
@@ -1522,11 +1628,12 @@ class HermesSdkThread:
     ) -> AsyncIterator[ChatBackendEvent]:
         """Run one prompt while ``_turn_lock`` owns the ACP stdout reader."""
 
+        image_blocks = _image_prompt_blocks(images)
         await self._prepare()
         turn_id = uuid.uuid4().hex
         try:
             assert self._proc is not None and self._proc.stdout is not None
-            # Compose prompt blocks (ACP supports rich content; we send plain text).
+            # ACP transports inline images alongside the text for this turn.
             text = prompt
             if current_project:
                 text = f"[CONTEXT: current_project={current_project}]\n\n{prompt}"
@@ -1535,7 +1642,7 @@ class HermesSdkThread:
             prompt_params: dict[str, Any] = {
                 "sessionId": self.id,
                 "messageId": turn_id,
-                "prompt": [{"type": "text", "text": text}],
+                "prompt": [{"type": "text", "text": text}, *image_blocks],
             }
             # Per-turn egress capability. It rides in ACP _meta rather than in
             # the process environment or a session field because one Hermes
@@ -1606,13 +1713,23 @@ class HermesSdkThread:
                 if not line:
                     _log.warning(
                         "Hermes ACP stdout closed during stream: thread=%s turn=%s req_id=%s "
-                        "pending_tools=%s",
+                        "pending_tools=%s returncode=%s",
                         self.id,
                         turn_id,
                         req_id,
                         dict(self._tool_names_by_call_id),
+                        getattr(self._proc, "returncode", None),
                     )
-                    break
+                    await self.close()
+                    yield ChatBackendEvent(
+                        type="complete", thread_id=self.id, turn_id=turn_id,
+                        disposition="failed",
+                        text=(
+                            "本轮对话连接意外中断，后续处理未完成。"
+                            "已收到的执行回执会保留，系统不会自动重复提交操作。"
+                        ),
+                    )
+                    return
                 idle_deadline = _refresh_stream_idle_deadline(
                     now=loop.time(),
                     total_deadline=total_deadline,
@@ -1713,7 +1830,8 @@ class HermesSdkThread:
                     if ev.type == "tool_started":
                         tool_name = str(ev.name or "").strip()
                         active_tool_name = tool_name
-                        if _is_freezone_canvas_write_tool(tool_name):
+                        batch_names = _batch_tool_call_names(tool_name, ev.input)
+                        if any(_is_freezone_canvas_write_tool(name) for name in batch_names):
                             idle_deadline = min(
                                 total_deadline,
                                 loop.time() + CANVAS_COMMAND_RESULT_TIMEOUT + 30.0,
@@ -1868,6 +1986,7 @@ class HermesSdkThread:
             title = update.get("title") or update.get("kind") or "tool"
             tool_name, _body = _split_tool_title(title)
             tool_input = _first_present(update, "rawInput", "raw_input")
+            tool_name, tool_input = _unwrap_hermes_tool_call(tool_name, tool_input)
             call_id = str(
                 update.get("toolCallId")
                 or update.get("tool_call_id")
@@ -1906,6 +2025,11 @@ class HermesSdkThread:
             tool_input = self._tool_inputs_by_call_id.get(call_id or "")
             tool_started_at = self._tool_started_at_by_call_id.get(call_id or "")
             update_input = _first_present(update, "rawInput", "raw_input")
+            effective_input = update_input if update_input is not None else tool_input
+            if tool_name:
+                tool_name, effective_input = _unwrap_hermes_tool_call(
+                    tool_name, effective_input
+                )
             tool_output = _first_present(
                 update, "rawOutput", "raw_output", "result", "content"
             )
@@ -1921,7 +2045,7 @@ class HermesSdkThread:
             structured_result = _load_recent_freezone_tool_result(
                 self._env.get("DRAMACLAW_FREEZONE_TOOL_RESULT_DIR"),
                 tool_name,
-                tool_input=update_input if update_input is not None else tool_input,
+                tool_input=effective_input,
                 min_created_at=tool_started_at,
             )
             text = f"  {status}"
@@ -1931,7 +2055,7 @@ class HermesSdkThread:
                 name=tool_name,
                 call_id=call_id,
                 status=status,
-                input=update_input if update_input is not None else tool_input,
+                input=effective_input,
                 output=tool_output,
                 error=tool_error,
                 structured=structured_result,

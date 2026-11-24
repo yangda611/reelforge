@@ -195,6 +195,38 @@ export function shouldKeepCanvasOverlaysMounted(
   );
 }
 
+export function rejectUnhydratedCanvasContext({
+  status, hydratedCanvasId, hydratedProject, projectId, canvasId,
+  bridgeKey, turnId, anchorTextPrefix, agentId, label,
+}: {
+  status: CanvasSyncStatus;
+  hydratedCanvasId: string | null;
+  hydratedProject: string | null;
+  projectId: string;
+  canvasId: string;
+  bridgeKey: string | null;
+  turnId: string | null;
+  anchorTextPrefix: string | null;
+  agentId: string | null;
+  label: string;
+}): boolean {
+  if (
+    hydratedProject === projectId &&
+    shouldKeepCanvasOverlaysMounted(status, hydratedCanvasId, canvasId)
+  ) return false;
+
+  const errors = ["画布尚未加载完成，无法读取画布上下文，请稍后重试。"];
+  emitCanvasContextActivity({
+    turnId, anchorTextPrefix,
+    bridgeKey: bridgeKey ?? `context:${turnId ?? canvasId}:${Date.now()}`,
+    canvasId, agentId, status: "failed", labels: [label], errors, receivedAt: Date.now(),
+  });
+  reportCanvasContextToolResult({
+    bridgeKey, turnId, anchorTextPrefix, projectId, canvasId, agentId, responses: [], errors,
+  });
+  return true;
+}
+
 interface FreezoneShellProps {
   project: SupertaleProjectSummary;
   canvasId: string;
@@ -2077,6 +2109,17 @@ export function FreezoneShell({
         return;
       }
 
+      if (rejectUnhydratedCanvasContext({
+        status: sync.status,
+        hydratedCanvasId: sync.hydratedCanvasId,
+        hydratedProject: sync.hydratedProject,
+        projectId, canvasId, bridgeKey, turnId, anchorTextPrefix, agentId,
+        label: t("freezone.canvasCommand.canvasContext"),
+      })) {
+        setChatOpen(true);
+        return;
+      }
+
       void (async () => {
         const currentState = useCanvasStore.getState();
         const selectedNodeIds = currentState.nodes
@@ -2141,7 +2184,7 @@ export function FreezoneShell({
     return () => {
       window.removeEventListener(SUPERCHAT_CANVAS_CONTEXT_REQUEST_EVENT, handleCanvasContextRequest);
     };
-  }, [canvasId, projectId, sync.metadata]);
+  }, [canvasId, projectId, sync.metadata, sync.status, sync.hydratedCanvasId, sync.hydratedProject, t]);
 
   const canvasDefaultTarget = normalizePushTarget(
     (sync.metadata?.default_push_target ?? null) as

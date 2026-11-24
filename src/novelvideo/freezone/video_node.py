@@ -24,6 +24,7 @@ from typing import Any
 import portalocker
 
 from novelvideo.freezone.paths import freezone_root
+from novelvideo.freezone.defaults import FREEZONE_DEFAULT_VIDEO_BACKEND
 from novelvideo.video_duration import (
     normalize_video_duration_for_backend as normalize_video_duration_for_backend,
     video_duration_bounds_for_backend,
@@ -114,7 +115,6 @@ LEGACY_FREEZONE_VIDEO_LABEL_ALIASES: dict[str, str] = {
     "seedance 1.5 无声": "newapi_seedance-1.5-pro",
 }
 
-FREEZONE_DEFAULT_VIDEO_BACKEND = "newapi_seedance-2.0-fast"
 FREEZONE_NEWAPI_VIDEO_BACKENDS = {
     "newapi_seedance-2.0",
     "newapi_seedance-2.0-fast",

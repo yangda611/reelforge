@@ -42,6 +42,15 @@ except Exception:
 PY
 }
 
+freezone_runtime_is_ready() {
+  "$HERMES_PYTHON" "$root_dir/deploy/verify_freezone_runtime.py"
+}
+
+install_freezone_dependencies() {
+  uv pip install --python "$HERMES_PYTHON" -r "$root_dir/deploy/hermes-freezone-requirements.txt"
+  freezone_runtime_is_ready
+}
+
 if [ ! -x "$HERMES_PYTHON" ]; then
   if [ "$mode" = "--check" ] || [ "$mode" = "check" ]; then
     echo "Hermes isolated environment is not installed: $HERMES_ENV_DIR" >&2
@@ -57,6 +66,11 @@ if [ ! -x "$HERMES_PYTHON" ]; then
 fi
 
 if fork_is_installed; then
+  if [ "$mode" = "--check" ] || [ "$mode" = "check" ]; then
+    freezone_runtime_is_ready
+  else
+    install_freezone_dependencies
+  fi
   echo "Hermes fork is installed ($("$HERMES_CLI_PATH" --version 2>/dev/null | head -n 1))."
   exit 0
 fi
@@ -96,5 +110,7 @@ if ! fork_is_installed; then
   echo "survive the ACP router. Check $HERMES_SOURCE_DIR@$installed_sha." >&2
   exit 1
 fi
+
+install_freezone_dependencies
 
 echo "Hermes fork ready: ${installed_sha:0:12} ($("$HERMES_CLI_PATH" --version 2>/dev/null | head -n 1))"

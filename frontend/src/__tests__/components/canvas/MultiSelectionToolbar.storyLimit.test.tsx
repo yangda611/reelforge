@@ -22,6 +22,23 @@ vi.mock('@/features/freezone/canvasChatCommands', () => ({
 }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+it.each(['arrangeGrid', 'arrangeHorizontal', 'arrangeVertical'])('arranging %s moves selected groups without moving their selected children twice', (mode) => {
+  useCanvasStore.setState({ nodes: [
+    { id: 'g', type: 'groupNode', selected: true, position: { x: 100, y: 100 }, width: 1000, height: 900, measured: { width: 320, height: 200 }, data: {} },
+    { id: 'a', type: 'imageNode', selected: true, parentId: 'g', position: { x: 20, y: 34 }, measured: { width: 700, height: 800 }, data: {} },
+    { id: 'outside', type: 'imageNode', selected: true, position: { x: 150, y: 100 }, measured: { width: 700, height: 850 }, data: {} },
+  ] as CanvasNode[], edges: [] });
+  const view = render(<MultiSelectionToolbar />);
+  fireEvent.click(view.getByRole('button', { name: 'canvas.multiSelect.arrange' }));
+  const arrangeButtons = view.getAllByRole('button', { name: `canvas.multiSelect.${mode}` });
+  fireEvent.click(arrangeButtons[arrangeButtons.length - 1]);
+  const nodes = useCanvasStore.getState().nodes;
+  expect(nodes.find((node) => node.id === 'a')?.position).toEqual({ x: 20, y: 34 });
+  const group = nodes.find((node) => node.id === 'g')!;
+  const outside = nodes.find((node) => node.id === 'outside')!;
+  expect(outside.position.x >= group.position.x + 1000 || outside.position.y >= group.position.y + 900).toBe(true);
+});
+
 function seed(inGroup = false) {
   useCanvasStore.setState({ nodes: [
     { id: 'g', type: 'groupNode', position: { x: 0, y: 0 }, data: { storyGroup: true } },

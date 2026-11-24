@@ -17,8 +17,35 @@ from novelvideo.chat.tool_policy import (
 )
 
 
+def _unwrapped_tool_call_payload(event: Any) -> tuple[str, dict[str, Any] | None]:
+    raw_name = str(getattr(event, "name", "") or "").rsplit(".", 1)[-1].strip()
+    payload = getattr(event, "input", None)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            payload = None
+    args = payload if isinstance(payload, dict) else None
+    if raw_name == "tool_call" and args is not None:
+        calls = args.get("calls")
+        if isinstance(calls, list) and len(calls) == 1 and isinstance(calls[0], dict):
+            entry = calls[0]
+        else:
+            entry = args
+        target_name = str(entry.get("name") or "").rsplit(".", 1)[-1].strip()
+        if target_name:
+            target_args = entry.get("arguments")
+            if isinstance(target_args, str):
+                try:
+                    target_args = json.loads(target_args)
+                except (TypeError, ValueError):
+                    target_args = None
+            return target_name, (target_args if isinstance(target_args, dict) else None)
+    return raw_name, args
+
+
 def _codex_freezone_tool_name(event: Any) -> str:
-    return str(getattr(event, "name", "") or "").rsplit(".", 1)[-1].strip()
+    return _unwrapped_tool_call_payload(event)[0]
 
 
 def _json_objects_from_codex_tool_value(value: Any) -> list[dict[str, Any]]:
@@ -337,13 +364,7 @@ def _argument_path_parent(root: Any, path: Any) -> tuple[Any, Any] | None:
 
 
 def _codex_freezone_tool_arguments(event: Any) -> dict[str, Any] | None:
-    payload = getattr(event, "input", None)
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except (TypeError, ValueError):
-            return None
-    return payload if isinstance(payload, dict) else None
+    return _unwrapped_tool_call_payload(event)[1]
 
 
 def _argument_retry_signature(name: str, arguments: dict[str, Any]) -> str | None:

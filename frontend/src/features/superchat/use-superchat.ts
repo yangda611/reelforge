@@ -1944,8 +1944,8 @@ function canvasContextRequestFromToolCall(payload: ServerFrame): {
   };
 }
 
-function dispatchCanvasContextRequestFrame(payload: ServerFrame): void {
-  if (typeof window === "undefined") return;
+function dispatchCanvasContextRequestFrame(payload: ServerFrame, currentScope: ChatScope): void {
+  if (typeof window === "undefined" || !frameMatchesCurrentScope(payload, currentScope)) return;
   if (payload.type === "canvas.context.request") {
     window.dispatchEvent(new CustomEvent(SUPERCHAT_CANVAS_CONTEXT_REQUEST_EVENT, { detail: payload }));
     return;
@@ -2306,11 +2306,11 @@ export function useSuperChat({
       markTurnInactive(turnId);
       return;
     }
+    // React may apply this update after markTurnInactive clears the stream ref.
+    const finalText = streamTextRef.current;
     setMessages((current) => {
-      if (!streamTextRef.current.trim()) return current;
-      const next = upsertAssistantMessage(current, turnId, streamTextRef.current);
-
-      return next;
+      if (!finalText.trim()) return current;
+      return upsertAssistantMessage(current, turnId, finalText);
     });
     markTurnInactive(turnId);
     // Post-done history refresh is intentionally disabled; final assistant
@@ -2518,14 +2518,13 @@ export function useSuperChat({
           pendingClientTurnIdRef.current
           ?? activeTurnIdRef.current
           ?? (typeof frame.turn_id === "string" && frame.turn_id.trim() ? frame.turn_id : null);
-        if (turnId && streamTextRef.current.trim()) {
+        const displayText = streamTextRef.current;
+        if (turnId && displayText.trim()) {
           closeActiveThoughtPart(turnId);
           markTurnActive(turnId);
           // 助手真的回了内容：运行环境活着，清除缺失记忆。
           clearRuntimeMissingState();
           setMessages((current) => {
-            const displayText = streamTextRef.current;
-            if (!displayText.trim()) return current;
             return upsertAssistantMessage(current, turnId, displayText);
           });
         }
@@ -2673,7 +2672,7 @@ export function useSuperChat({
           });
         }
         if (frame.type === "agent.tool.started") {
-          dispatchCanvasContextRequestFrame(frame);
+          dispatchCanvasContextRequestFrame(frame, desiredScopeRef.current);
         }
         if (settings.showToolEvents) {
           if (frameMatchesCurrentScope(frame, desiredScopeRef.current)) {
@@ -2700,7 +2699,7 @@ export function useSuperChat({
         ) {
           break;
         }
-        dispatchCanvasContextRequestFrame(frame);
+        dispatchCanvasContextRequestFrame(frame, desiredScopeRef.current);
         if (settings.showToolEvents || shouldPreserveToolMessage(frame)) {
           setMessages((current) => upsertToolMessage(current, frame.type, frame));
         }
@@ -2751,7 +2750,7 @@ export function useSuperChat({
         if (typeof frame.turn_id === "string" && frame.turn_id.trim()) {
           closeActiveThoughtPart(frame.turn_id);
         }
-        dispatchCanvasContextRequestFrame(frame);
+        dispatchCanvasContextRequestFrame(frame, desiredScopeRef.current);
         break;
       case "skill_studio.event": {
         if (!frameMatchesCurrentScope(frame, desiredScopeRef.current)) break;

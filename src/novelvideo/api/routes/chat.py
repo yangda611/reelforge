@@ -3220,7 +3220,7 @@ def _collect_bridge_events(
             field = "envelope" if kind == "canvas_context" else "event"
             if (
                 not key
-                or key in emitted_bridge_keys
+                or (kind != "canvas_context" and key in emitted_bridge_keys)
                 or not isinstance(pending.get(field), dict)
             ):
                 continue
@@ -3320,6 +3320,7 @@ async def _watch_bridge_events(
                     frame = {
                         "type": "canvas.context.request",
                         "turn_id": turn_id,
+                        "scope": scope.to_dict(),
                         "canvas_id": pending["envelope"].get("canvas_id"),
                         "agent_id": scope.agent_id or "main",
                         "bridge_key": key,

@@ -29,7 +29,7 @@ import uuid
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 
 from novelvideo import config
 from novelvideo.chat.hermes_sdk import HermesSdkClient, HermesSdkThread
@@ -251,6 +251,7 @@ class _ManagedHermesThread:
         self,
         prompt: str,
         *,
+        images: Sequence[str] = (),
         current_project: str | None = None,
         trajectory_id: str | None = None,
         project_id: str | None = None,
@@ -266,12 +267,14 @@ class _ManagedHermesThread:
         # unit test still passed.
         await self._owner._begin_turn(self._slot)
         try:
+            image_kwargs = {"images": images} if images else {}
             async for event in self._slot.thread.stream(
                 prompt,
                 current_project=current_project,
                 trajectory_id=trajectory_id,
                 project_id=project_id,
                 gateway_api_key=gateway_api_key,
+                **image_kwargs,
             ):
                 yield event
         finally:
@@ -386,7 +389,6 @@ class HermesPool:
                     raise HermesDrainingError()
                 slot.authz_generation = authz_generation
                 if slot_key in self._dirty_profiles:
-                    self._dirty_profiles.discard(slot_key)
                     slot = await self._rotate_slot_locked(
                         slot,
                         model=model,
@@ -399,6 +401,7 @@ class HermesPool:
                         reason="profile-dirty",
                         resume_existing_session=False,
                     )
+                    self._dirty_profiles.discard(slot_key)
                 elif bool(getattr(slot.thread, "is_closed", False)):
                     slot = await self._rotate_slot_locked(
                         slot,
@@ -507,6 +510,7 @@ class HermesPool:
         async with self._lock:
             if slot.active_turns > 0:
                 slot.active_turns -= 1
+            slot.last_used = time.time()
             if slot.one_shot:
                 slot.state = "draining"
             if slot.state == "draining" and slot.active_turns == 0:
@@ -982,6 +986,10 @@ class HermesPool:
         The session identity still follows the caller's scope; only the egress
         identity is inherited, which is exactly why S3 split the two parameters.
         """
+        # Reconnect/prewarm and another tab may request a different scope while
+        # this worker is still streaming. Retire it only after that turn ends.
+        if slot.active_turns:
+            raise HermesDrainingError()
         evidence_metrics.observe(f"worker_rotated:{reason}")
         if resume_existing_session:
             self._remember_session(slot)
@@ -1202,8 +1210,10 @@ class HermesPool:
     async def _evict_lru_if_full(self) -> None:
         if len(self._slots) < self._max_workers:
             return
-        # Evict least-recently-used
-        victim = min(self._slots.values(), key=lambda s: s.last_used)
+        idle_slots = [slot for slot in self._slots.values() if slot.active_turns == 0]
+        if not idle_slots:
+            raise HermesDrainingError()
+        victim = min(idle_slots, key=lambda s: s.last_used)
         _log.info(
             "hermes pool full (%d); evicting LRU user=%s",
             self._max_workers,
@@ -1249,8 +1259,8 @@ class HermesPool:
                     victims = [
                         slot
                         for slot in self._slots.values()
-                        if (slot.state == "draining" and slot.active_turns == 0)
-                        or slot.last_used < cutoff
+                        if slot.active_turns == 0
+                        and (slot.state == "draining" or slot.last_used < cutoff)
                     ]
                     for v in victims:
                         _log.info("hermes worker idle-killed: user=%s", v.username)

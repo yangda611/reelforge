@@ -285,21 +285,37 @@ Plan id 不是画布节点 id。如果确认后的自定义方案需要变成多
 
 ### layout_nodes
 
-排列引用节点。
+排列引用节点或整张画布。
 
 ```json
 {
   "type": "layout_nodes",
   "node_ids": ["node_a", "node_b"],
-  "mode": "horizontal"
+  "mode": "auto"
 }
 ```
 
-允许的模式：`horizontal`、`vertical`、`grid`。
+允许的模式：`auto`（推荐，按真实节点尺寸与依赖拓扑自动分层无重叠布局，支持分组）、`dag`、`horizontal`、`vertical`、`grid`。
 
-如果正在排列刚创建的节点，且不需要定向到某个子集，优先完全省略 `node_ids`，让前端排列当前画布/分组，不必额外要求同 envelope alias。
+如果正在排列整张画布或刚创建的节点，且不需要定向到某个子集，优先省略 `node_ids`，让前端排列当前画布。
 
-大范围布局变化可能需要前端确认。
+### organize_canvas
+
+按语义分类一次完成重新分组、清理空旧组、并按真实节点尺寸无重叠排版（支持单节点分类）：
+
+```json
+{
+  "type": "organize_canvas",
+  "categories": [
+    { "label": "人物设定", "node_ids": ["node_a", "node_b"] },
+    { "label": "分镜镜头", "node_ids": ["node_c"] }
+  ],
+  "prune_empty_groups": true,
+  "layout_mode": "auto"
+}
+```
+
+大范围布局或整理变化可能需要前端确认。
 
 ### move_nodes
 
@@ -326,6 +342,7 @@ Plan id 不是画布节点 id。如果确认后的自定义方案需要变成多
 ```
 
 用户给出目标位置、你计算出最终 x/y 后对齐，或要通过 `client_id` 重新定位新建节点时，使用精确坐标。
+批量绝对定位优先把坐标写在 `positions` 的每个节点映射内。`node_ids + position` 和 `node_ids + x/y` 仅兼容单节点，不可用一个绝对位置定位多节点。单步 `freezone_move_nodes` 工具可用 `positions` 传绝对坐标，或用 `node_ids + dx/dy` 传相对偏移。
 
 ```json
 {

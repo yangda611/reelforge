@@ -5,6 +5,12 @@ import { createStreamClient } from "@/task-center/stream-client";
 import { sampleTask } from "@/__mocks__/msw/handlers/tasks";
 
 const PROJECT_STREAM_PATH = "/api/v1/projects/demo/tasks/stream";
+let visibility: DocumentVisibilityState = "visible";
+
+function setVisibility(state: DocumentVisibilityState) {
+  visibility = state;
+  document.dispatchEvent(new Event("visibilitychange"));
+}
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -36,14 +42,127 @@ class MockEventSource {
 }
 
 beforeEach(() => {
+  visibility = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   MockEventSource.instances.length = 0;
   // @ts-expect-error — replace global EventSource in test env
   globalThis.EventSource = MockEventSource;
   vi.useFakeTimers();
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("stream-client", () => {
+  it("releases hidden task streams and rehydrates once healthy on resume", () => {
+    const onReconnected = vi.fn();
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn(), onReconnected });
+    client.start();
+    const original = MockEventSource.instances[0];
+    original.dispatch("heartbeat", {});
+    setVisibility("hidden");
+    expect(original.readyState).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    expect(MockEventSource.instances).toHaveLength(1);
+    setVisibility("visible");
+    setVisibility("visible");
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(onReconnected).not.toHaveBeenCalled();
+    MockEventSource.instances[1].dispatch("heartbeat", {});
+    MockEventSource.instances[1].dispatch("heartbeat", {});
+    expect(onReconnected).toHaveBeenCalledOnce();
+    client.close();
+  });
+
+  it("waits for visibility when started hidden", () => {
+    setVisibility("hidden");
+    const onReconnected = vi.fn();
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn(), onReconnected });
+    client.start();
+    client.start();
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    setVisibility("visible");
+    expect(MockEventSource.instances).toHaveLength(1);
+    MockEventSource.instances[0].dispatch("heartbeat", {});
+    expect(onReconnected).toHaveBeenCalledOnce();
+    client.close();
+  });
+
+  it("ignores late events and errors from a paused source, including after resume", () => {
+    const onEvent = vi.fn();
+    const onDelete = vi.fn();
+    const onHealth = vi.fn();
+    const onReconnected = vi.fn();
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent, onDelete, onHealth, onReconnected });
+    client.start();
+    const original = MockEventSource.instances[0];
+    setVisibility("hidden");
+    onHealth.mockClear();
+    for (const state of ["hidden", "visible"] as const) {
+      setVisibility(state);
+      onHealth.mockClear();
+      original.dispatch("task_updated", sampleTask());
+      original.dispatch("deleted", { task_key: "stale" });
+      original.dispatch("heartbeat", {});
+      original.triggerError();
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(onDelete).not.toHaveBeenCalled();
+      expect(onHealth).not.toHaveBeenCalled();
+      expect(onReconnected).not.toHaveBeenCalled();
+    }
+    expect(MockEventSource.instances[1].readyState).toBe(1);
+    client.close();
+  });
+
+  it("cancels pending reconnects when hidden", () => {
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn() });
+    client.start();
+    MockEventSource.instances[0].triggerError();
+    setVisibility("hidden");
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    expect(MockEventSource.instances).toHaveLength(1);
+    client.close();
+  });
+
+  it.each([false, true])("stops polling and guards a session probe resolving after resume=%s", async (resume) => {
+    let resolveSession!: (active: boolean) => void;
+    const checkSession = vi.fn(() => new Promise<boolean>((resolve) => { resolveSession = resolve; }));
+    const onPollingStop = vi.fn();
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn(), onPollingStop, checkSession, backoffMs: [1], watchdogMs: 120_000 });
+    client.start();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      MockEventSource.instances[attempt].triggerError();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(checkSession).toHaveBeenCalledOnce();
+    setVisibility("hidden");
+    expect(onPollingStop).toHaveBeenCalledOnce();
+    if (resume) setVisibility("visible");
+    resolveSession(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockEventSource.instances).toHaveLength(resume ? 4 : 3);
+    if (!resume) expect(vi.getTimerCount()).toBe(0);
+    client.close();
+  });
+
+  it.each(["close", "session-expired"])("never resumes after %s while hidden", (termination) => {
+    const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn() });
+    client.start();
+    setVisibility("hidden");
+    if (termination === "close") client.close();
+    else window.dispatchEvent(new Event("session-expired"));
+    setVisibility("visible");
+    client.start();
+    vi.advanceTimersByTime(60_000);
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    client.close();
+  });
+
   it("opens exactly one EventSource with cookie credentials", () => {
     const client = createStreamClient({ streamPath: PROJECT_STREAM_PATH, onEvent: vi.fn(), onDelete: vi.fn(), onHealth: vi.fn() });
     client.start();

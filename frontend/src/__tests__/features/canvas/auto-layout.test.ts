@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ClaymoreLab
 import { describe, expect, it } from 'vitest';
 
-import { computeAutoLayout } from '@/features/canvas/application/autoLayout';
+import { computeAutoLayout, computeOrderedLayout, getNodeSize } from '@/features/canvas/application/autoLayout';
 import {
   CANVAS_NODE_TYPES,
   type CanvasEdge,
@@ -31,6 +31,37 @@ function centerY(pos: { x: number; y: number }): number {
 }
 
 describe('computeAutoLayout', () => {
+  it.each(['horizontal', 'vertical', 'grid'] as const)('spaces differently sized measured siblings in %s mode', (mode) => {
+    const nodes = [node('a', 30, 50), node('b', 40, 70), node('c', 20, 10)];
+    nodes[0].measured = { width: 900, height: 800 };
+    nodes[1].measured = { width: 450, height: 1100 };
+    const positions = computeOrderedLayout(nodes, mode);
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = positions[nodes[i].id];
+        const b = positions[nodes[j].id];
+        const sa = getNodeSize(nodes[i]);
+        const sb = getNodeSize(nodes[j]);
+        expect(a.x + sa.width <= b.x || b.x + sb.width <= a.x
+          || a.y + sa.height <= b.y || b.y + sb.height <= a.y).toBe(true);
+      }
+    }
+    expect(computeOrderedLayout(nodes.map((n) => ({ ...n, position: positions[n.id] })), mode)).toEqual(positions);
+  });
+
+  it('honors a resized group before its measurement refreshes and moves only roots', () => {
+    const group = { ...node('group', 100, 200), type: CANVAS_NODE_TYPES.group,
+      width: 1400, height: 1000, style: { width: 1400, height: 1000 } } as CanvasNode;
+    const child = { ...node('child', 20, 34), parentId: 'group' };
+    const other = node('other', 110, 210);
+    const { positions } = computeAutoLayout([group, child, other], []);
+    expect(positions.child).toBeUndefined();
+    expect(getNodeSize(group)).toEqual({ width: 1400, height: 1000 });
+    const a = positions.group;
+    const b = positions.other;
+    expect(a.x + 1400 <= b.x || b.x + NODE_W <= a.x
+      || a.y + 1000 <= b.y || b.y + NODE_H <= a.y).toBe(true);
+  });
   it('lays a linear chain out left-to-right following edge direction', () => {
     const nodes = [node('a', 0, 0), node('b', 0, 500), node('c', 0, 50), node('d', 0, 900)];
     const edges = [edge('a', 'b'), edge('b', 'c'), edge('c', 'd')];

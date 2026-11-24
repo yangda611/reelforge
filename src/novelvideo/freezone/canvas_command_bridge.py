@@ -19,8 +19,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import portalocker
-
 from novelvideo.sqlite_pragmas import configure_sqlite_connection
 
 BRIDGE_RESULT_TTL_SECONDS = 24 * 60 * 60
@@ -32,7 +30,9 @@ BRIDGE_PENDING_TTL_SECONDS = {
     # Keep this aligned with the default tool wait, not generation duration:
     # long-running actions return an accepted receipt and leave this inbox.
     "canvas_command": 10 * 60,
-    "canvas_context": 45,
+    # The worker waits 60 seconds by default; leave time for its timeout to
+    # resolve the request before the transport expires it.
+    "canvas_context": 10 * 60,
     "skill_studio_event": 10 * 60,
     # A tool wait may end after ten minutes; the user's card must outlive it.
     "clarification_event": 60 * 60,
@@ -834,11 +834,24 @@ def _key_lock(key: str, bridge_dir: str | Path | None = None):
     safe_key = "".join(ch for ch in key if ch.isalnum() or ch in {"-", "_"})[:128]
     lock_path = directory / f"{safe_key}.lock"
     with lock_path.open("a+") as lock_file:
-        portalocker.lock(lock_file, portalocker.LOCK_EX)
+        if os.name == "nt":
+            import msvcrt
+
+            # Match portalocker's Windows exclusive lock range and offset.
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 0x10000)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
-            portalocker.unlock(lock_file)
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 0x10000)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _canvas_command_idempotency_conflict(

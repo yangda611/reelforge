@@ -137,6 +137,37 @@ def repo_plugins(isolated_workspace):
     return plugins
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction fallback")
+def test_freezone_workspace_uses_junctions_without_symlink_privilege(
+    isolated_workspace, repo_skills, repo_plugins, monkeypatch
+):
+    import ctypes
+
+    def deny_symlink(*args, **kwargs):
+        raise ctypes.WinError(1314)
+
+    monkeypatch.setattr(Path, "symlink_to", deny_symlink)
+    home = hw.ensure_user_hermes_workspace("admin", profile="freezone")
+    skill = home / "skills" / "freezone"
+    plugin = home / "plugins" / "freezone"
+    assert (skill / "SKILL.md").is_file()
+    assert (plugin / "plugin.yaml").is_file()
+    assert skill.resolve() == (repo_skills / "freezone").resolve()
+    assert plugin.resolve() == (repo_plugins / "freezone").resolve()
+
+    hw.ensure_user_hermes_workspace("admin", profile="freezone")
+    assert (plugin / "plugin.yaml").is_file()
+    hw._remove_directory_link(plugin)
+    assert (repo_plugins / "freezone" / "plugin.yaml").is_file()
+    stale = isolated_workspace / "stale-plugin"
+    stale.mkdir()
+    (stale / "keep.txt").write_text("keep")
+    hw._create_directory_link(plugin, stale)
+    hw.ensure_user_hermes_workspace("admin", profile="freezone")
+    assert plugin.resolve() == (repo_plugins / "freezone").resolve()
+    assert (stale / "keep.txt").read_text() == "keep"
+
+
 def test_fresh_create_layout(isolated_workspace, repo_skills, repo_plugins):
     home = hw.ensure_user_hermes_workspace("admin")
     assert home.exists()

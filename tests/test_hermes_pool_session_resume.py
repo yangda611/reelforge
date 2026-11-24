@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import time
@@ -45,9 +46,148 @@ class _FakeThread:
     async def close(self) -> None:
         self.closed = True
 
+    async def warm(self) -> None:
+        pass
+
     @property
     def is_closed(self) -> bool:
         return self.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["active", "draining"])
+async def test_reaper_keeps_in_flight_turn_even_after_idle_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    from novelvideo.chat import hermes_pool
+
+    pool, _calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    try:
+        thread = await pool.get_for_user("alice")
+        pool._cleanup_task.cancel()
+        await asyncio.gather(pool._cleanup_task, return_exceptions=True)
+        slot = pool._slots["alice"]
+        slot.active_turns = 1
+        slot.state = state
+        slot.last_used = time.time() - pool._idle_kill_secs - 1
+        cycles = 0
+
+        async def one_reaper_cycle(_seconds):
+            nonlocal cycles
+            cycles += 1
+            if cycles > 1:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(hermes_pool.asyncio, "sleep", one_reaper_cycle)
+        await pool._reaper_loop()
+        assert pool._slots["alice"] is slot
+        assert not thread.closed
+        assert fake_auth.revoked == []
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_finish_turn_starts_idle_clock_at_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from novelvideo.chat import hermes_pool
+
+    pool, _calls, _fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    try:
+        await pool.get_for_user("alice")
+        slot = pool._slots["alice"]
+        await pool._begin_turn(slot)
+        completed_at = slot.last_used + 100
+        monkeypatch.setattr(hermes_pool.time, "time", lambda: completed_at)
+        await pool._finish_turn(slot)
+        assert slot.active_turns == 0
+        assert slot.last_used == completed_at
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_lru_evicts_only_idle_workers_and_refuses_when_all_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from novelvideo.chat.hermes_pool import HermesDrainingError
+
+    pool, _calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    try:
+        busy = await pool.get_for_user("alice")
+        idle = await pool.get_for_user("bob")
+        pool._max_workers = 2
+        active_slot = pool._slots["alice"]
+        await pool._begin_turn(active_slot)
+        active_slot.last_used = 0
+        await pool._evict_lru_if_full()
+        assert not busy.closed
+        assert idle.closed
+        assert fake_auth.revoked == ["token-2"]
+
+        pool._max_workers = 1
+        with pytest.raises(HermesDrainingError):
+            await pool._evict_lru_if_full()
+        assert pool._slots["alice"] is active_slot
+        assert not busy.closed
+        assert fake_auth.revoked == ["token-2"]
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["scope", "gateway", "dirty"])
+async def test_rotation_waits_for_active_turn_to_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    from novelvideo.chat.hermes_pool import HermesDrainingError
+
+    pool, calls, fake_auth, gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    try:
+        thread = await pool.get_for_user("alice", project_id="project_a", scope_kind="project")
+        slot = pool._slots["alice"]
+        await pool._begin_turn(slot)
+        project = "project_b" if reason == "scope" else "project_a"
+        if reason == "gateway":
+            gateway["fingerprint"] = "gateway-2"
+        if reason == "dirty":
+            pool.mark_user_profile_dirty("alice")
+
+        with pytest.raises(HermesDrainingError):
+            await pool.get_for_user("alice", project_id=project, scope_kind="project")
+        assert pool._slots["alice"] is slot
+        assert not thread.closed
+        assert fake_auth.revoked == []
+        assert calls == [("start", None)]
+        if reason == "dirty":
+            assert "alice" in pool._dirty_profiles
+
+        await pool._finish_turn(slot)
+        await pool.get_for_user("alice", project_id=project, scope_kind="project")
+        assert thread.closed
+        assert "alice" not in pool._dirty_profiles
+        assert len(calls) == 2
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_other_scope_does_not_interrupt_active_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool, calls, fake_auth, _gateway = _patch_fake_hermes_pool(tmp_path, monkeypatch)
+    try:
+        thread = await pool.get_for_user("alice", project_id="project_a", scope_kind="project")
+        slot = pool._slots["alice"]
+        await pool._begin_turn(slot)
+        await pool.prewarm("alice", project_id="project_b", scope_kind="project")
+        assert pool._slots["alice"] is slot
+        assert not thread.closed
+        assert calls == [("start", None)]
+        assert fake_auth.revoked == []
+    finally:
+        await pool.close_all()
 
 
 @pytest.mark.asyncio

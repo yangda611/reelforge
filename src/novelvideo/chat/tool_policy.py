@@ -124,6 +124,7 @@ FREEZONE_CANVAS_WRITE_TOOLS: frozenset[str] = frozenset(
         "freezone_layout_nodes",
         "freezone_move_nodes",
         "freezone_open_mainline_projection",
+        "freezone_organize_canvas",
         "freezone_run_node_action",
         "freezone_run_workflow",
         "freezone_select_nodes",

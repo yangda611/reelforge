@@ -689,7 +689,7 @@ def _attach_preflight_blockers(result: dict[str, Any], blockers: list[dict[str, 
     }
 
 
-_MAX_STANDARD_PLANNER_UNITS = 12
+_MAX_STANDARD_PLANNER_UNITS = 24
 _TEMPLATE_ISOMORPHIC = "template_isomorphic"
 
 

@@ -10,6 +10,7 @@ export const FREEZONE_CANVAS_WRITE_TOOL_NAMES = [
   "freezone_move_nodes",
   "freezone_layout_nodes",
   "freezone_group_nodes",
+  "freezone_organize_canvas",
   "freezone_select_nodes",
   "freezone_run_node_action",
   "freezone_open_mainline_projection",

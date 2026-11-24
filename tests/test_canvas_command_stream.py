@@ -98,6 +98,34 @@ async def test_sse_preserves_project_authorization(monkeypatch):
     assert error.value.status_code == 403
 
 
+async def test_context_redelivers_after_lease_with_same_connection(scoped_bridge, monkeypatch):
+    directory = scoped_bridge
+    bridge.put_pending_canvas_context(
+        key="context",
+        project_id="project",
+        canvas_id="canvas",
+        requests=[{"type": "node_detail", "node_id": "node"}],
+        envelope={"canvas_id": "canvas"},
+        bridge_dir=directory,
+    )
+    monkeypatch.setattr(bridge, "BRIDGE_DELIVERY_LEASE_SECONDS", 0.1)
+    hub = BridgeWatchHub()
+    scope = ChatScope(kind="project", id="project", surface="freezone", canvas_id="canvas")
+    emitted = set()
+    async with hub.subscribe([directory]):
+        for _ in range(100):
+            if hub.pending(directory, "project", "canvas", {"canvas_context"}):
+                break
+            await asyncio.sleep(0.01)
+        args = (hub, [directory], scope, "viewer", "turn", emitted, time.time(), "canvas_context")
+        first = await hub.run(chat._collect_bridge_events, *args)
+        assert [item["key"] for item in first] == ["context"]
+        assert await hub.run(chat._collect_bridge_events, *args) == []
+        await asyncio.sleep(0.15)
+        second = await hub.run(chat._collect_bridge_events, *args)
+        assert [item["key"] for item in second] == ["context"]
+
+
 async def test_session_historical_keys_do_not_block_lease_redelivery(scoped_bridge, monkeypatch):
     directory = scoped_bridge
     publish(directory, "session", False)
