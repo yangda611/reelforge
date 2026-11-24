@@ -9837,7 +9837,14 @@ async def freezone_video_omni_gen(
             400, "omni video currently only supports Seedance 2.0 models"
         )
 
+    from novelvideo.seedance2_i2v.models import infer_reference_media_kind
+
     raw_reference_items = [item.model_dump() for item in body.references]
+    for item in raw_reference_items:
+        raw_type = str(item.get("type") or "image").strip().lower()
+        raw_url = str(item.get("url") or "").strip()
+        if raw_type in {"image", "audio", "video"} and raw_url:
+            item["type"] = infer_reference_media_kind(raw_url, fallback=raw_type)
     reference_limits = _catalog_reference_limits(
         capabilities,
         image_default=9,

@@ -232,6 +232,35 @@ def is_generic_address(name: str) -> bool:
     return bool(stripped) and stripped in GENERIC_ADDRESS_TERMS
 
 
+_RELATIONAL_ZH_RE = re.compile(
+    r"^.{1,12}的(?:"
+    r"父亲|母亲|爸爸|妈妈|爹|娘|儿子|女儿|"
+    r"哥哥|姐姐|弟弟|妹妹|大哥|二哥|大姐|二姐|小弟|小妹|"
+    r"丈夫|妻子|老公|老婆|爷爷|奶奶|外公|外婆|"
+    r"叔叔|阿姨|舅舅|姑姑|表哥|表弟|表姐|表妹|堂哥|堂弟|堂姐|堂妹|"
+    r"未婚夫|未婚妻|前夫|前妻|男朋友|女朋友|男友|女友"
+    r")$"
+)
+_RELATIONAL_EN_RE = re.compile(
+    r"^.{1,24}'s\s+(?:"
+    r"father|mother|dad|mom|son|daughter|"
+    r"brother|sister|younger\s+brother|older\s+brother|younger\s+sister|older\s+sister|"
+    r"husband|wife|uncle|aunt|fiance|fiancée|boyfriend|girlfriend"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def is_relational_descriptor(name: str) -> bool:
+    """Whether ``name`` identifies someone only via a relationship to another person."""
+    normalized = normalize_character_name(name)
+    if not normalized or is_generic_address(normalized):
+        return False
+    return bool(
+        _RELATIONAL_ZH_RE.match(normalized) or _RELATIONAL_EN_RE.match(normalized)
+    )
+
+
 def title_qualified_of(long_name: str, short_name: str) -> bool:
     """Whether ``long_name`` is ``short_name`` plus only job titles.
 
@@ -801,6 +830,8 @@ ADJUDICATION_SYSTEM_PROMPT = """你是角色归一裁决器。
 - 两个都有大量独立证据、且看不出关联的候选，不要合并。
 - 称号、职务、群体、骂人的话（如"大小姐""校霸""扫把星"）如果只是用来称呼某个已知角色，
   应该并入那个角色；如果无法确定指向谁，放进 non_characters。
+- 亲属/关系指代（如"艾莉森的弟弟""林默的母亲"）如果原文上下文能明确看出它指向某个具名角色（如"杰"），
+  应归为同一组并以具名角色作为 canonical_name。
 - 不确定就不要合并，也不要放进 non_characters。漏合并只是留下重复项，错合并会毁掉数据。"""
 
 
@@ -849,9 +880,14 @@ def _adjudication_prompt(
         lines.append(detail)
 
         rare = len(item.evidence) <= _CONTEXT_WINDOW_EVIDENCE_THRESHOLD
-        shown = item.evidence if rare else item.evidence[:_ADJUDICATION_SAMPLE_QUOTES]
+        include_context = rare or is_relational_descriptor(item.name)
+        shown = (
+            item.evidence[:_CONTEXT_WINDOW_EVIDENCE_THRESHOLD]
+            if include_context
+            else item.evidence[:_ADJUDICATION_SAMPLE_QUOTES]
+        )
         for evidence in shown:
-            if rare and source_text:
+            if include_context and source_text:
                 start = max(0, int(evidence["source_start"]) - _CONTEXT_WINDOW_CHARS)
                 end = min(len(source_text), int(evidence["source_end"]) + _CONTEXT_WINDOW_CHARS)
                 window = source_text[start:end].replace("\n", " ")
@@ -913,10 +949,14 @@ async def adjudicate_characters(
     cast = roster or set()
     removed: set[str] = set()
 
-    def may_merge_away(candidate: MergedCharacter) -> bool:
+    def may_merge_away(candidate: MergedCharacter, primary_name: str) -> bool:
         """Whether this candidate is weak enough to be folded into another."""
         if _roster_protects(candidate.name, cast):
             return False
+        if is_relational_descriptor(candidate.name) and not is_relational_descriptor(
+            primary_name
+        ):
+            return len(candidate.evidence) <= _CONTEXT_WINDOW_EVIDENCE_THRESHOLD
         return len(candidate.evidence) <= _MERGEABLE_EVIDENCE_CEILING
 
     for group in result.groups:
@@ -932,19 +972,19 @@ async def adjudicate_characters(
             continue
 
         # The canonical name is decided here, not by the model: a cast-list name
-        # wins, then the best-attested one. Left to the model, a formal name can
-        # end up folded into a passing nickname.
+        # wins, then proper names over relational placeholders, then the best-attested one.
         primary = max(
             members,
             key=lambda item: (
                 _roster_protects(item.name, cast),
+                not is_relational_descriptor(item.name),
                 len(item.evidence),
             ),
         )
         for secondary in members:
             if secondary is primary or secondary.name in removed:
                 continue
-            if not may_merge_away(secondary):
+            if not may_merge_away(secondary, primary.name):
                 log(
                     f"  拒绝归并 {secondary.name} → {primary.name}："
                     f"证据 {len(secondary.evidence)} 条"

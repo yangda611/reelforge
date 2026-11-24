@@ -25,7 +25,10 @@ from novelvideo.project_config import (
     load_narrator_reference_audio_from_state_dir,
 )
 from novelvideo.seedance2_i2v.character_voice_storage import probe_voice_sample_duration_seconds
-from novelvideo.seedance2_i2v.models import Seedance2I2VMode
+from novelvideo.seedance2_i2v.models import (
+    Seedance2I2VMode,
+    infer_reference_media_kind,
+)
 from novelvideo.seedance2_i2v.spoken_dialogue import (
     speaker_display_name,
     unique_seedance2_dialogue_speakers,
@@ -1359,7 +1362,23 @@ def append_seedance2_user_reference_assets(
     audio_count = sum(
         1 for asset in assets if asset.selected and asset.request_field == "reference_audios"
     )
-    for path in _user_reference_paths(list(reference_image_paths), auto_image_paths):
+    raw_images = _user_reference_paths(list(reference_image_paths), auto_image_paths)
+    raw_audios = _user_reference_paths(list(reference_audio_paths), auto_audio_paths)
+    separated_images = list(
+        dict.fromkeys(
+            [p for p in raw_images if infer_reference_media_kind(p) != "audio"]
+            + [p for p in raw_audios if infer_reference_media_kind(p) == "image"]
+        )
+    )
+    separated_audios = list(
+        dict.fromkeys(
+            [p for p in raw_audios if infer_reference_media_kind(p) != "image"]
+            + [p for p in raw_images if infer_reference_media_kind(p) == "audio"]
+        )
+    )
+    for path in separated_images:
+        if path in auto_image_paths:
+            continue
         image_count += 1
         item_path = Path(path)
         validation_error = (
@@ -1378,7 +1397,9 @@ def append_seedance2_user_reference_assets(
                 validation_error=validation_error,
             )
         )
-    for path in _user_reference_paths(list(reference_audio_paths), auto_audio_paths):
+    for path in separated_audios:
+        if path in auto_audio_paths:
+            continue
         audio_count += 1
         item_path = Path(path)
         assets.append(

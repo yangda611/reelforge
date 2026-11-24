@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior
 
 from novelvideo.egress_context import TrustedEgressContext
 from novelvideo.model_gateway_runtime import (
@@ -26,6 +28,8 @@ from novelvideo.official_defaults import (
     DEFAULT_FREEZONE_TEXT_WRITER_MODEL,
     DEFAULT_FREEZONE_TRANSLATION_MODEL,
 )
+
+logger = logging.getLogger(__name__)
 
 FREEZONE_TRANSLATION_PROVIDER = "newapi"
 FREEZONE_TRANSLATION_MODEL = DEFAULT_FREEZONE_TRANSLATION_MODEL
@@ -207,6 +211,84 @@ _text_writer_agent: Optional[Agent] = None
 _story_script_agent: Optional[Agent] = None
 _video_story_script_agent: Optional[Agent] = None
 
+# 故事脚本一行 19 个字段，``shot_prompt``（8 段）与 ``video_motion_prompt``（6 段）
+# 还要带完整示例，单行稳定吃掉 1000-1400 token。网关默认 8192 输出预算大约只装得下
+# 6-7 行，稍长一点的剧本就会在 JSON 中途被截断 —— 表现为 ``Exceeded maximum output
+# retries`` 而不是「输出太长」。这里把默认输出预算抬到 32768，可用环境变量覆盖。
+#
+# 注意：不能无脑调大。超过上游模型真实 max output tokens 时网关会直接 4xx，
+# 比截断更难排查。所以这个值必须由部署方按实际网关模型校准。
+_STORY_SCRIPT_OUTPUT_TOKENS_ENV = "FREEZONE_STORY_SCRIPT_OUTPUT_TOKENS"
+_STORY_SCRIPT_DEFAULT_OUTPUT_TOKENS = 32768
+# 单次生成被截断后，改为按批生成。每批行数刻意保守：宁可可批次数多一点，
+# 也不要某批又撞上限。4 行 ≈ 4800-5600 token，即使网关只给 8192（A 被上游
+# clamp 的兜底场景）也留得住思考空间。视觉模式单行更长（要贴着画面写），批次更小。
+_STORY_SCRIPT_BATCH_ROWS = 4
+_STORY_SCRIPT_BATCH_ROWS_VISION = 3
+# 4 行 × 12 批 = 48 镜，正常剧集碰不到；真碰到就明确报错，而不是静默给半张表。
+_STORY_SCRIPT_MAX_BATCHES = 12
+# 结构化分批时，每批都带着这个「已写到的镜号」继续，保证 shot_no 连续且不重复。
+_STORY_SCRIPT_ROUNDS_ENV = "FREEZONE_STORY_SCRIPT_MAX_BATCHES"
+
+
+def _story_script_output_tokens() -> int | None:
+    """显式配置的输出预算；未配置时返回 ``None``（表示「按下面的默认规则」）。"""
+    import os
+
+    raw = os.environ.get(_STORY_SCRIPT_OUTPUT_TOKENS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _story_script_model_settings(model_env: str | None = None) -> dict[str, Any]:
+    """故事脚本的结构化输出设置：在通用设置之上补足输出预算。
+
+    只补 ``max_tokens``，不覆盖用户配置的 ``openai_reasoning_effort``。
+
+    优先级：显式 ``FREEZONE_STORY_SCRIPT_OUTPUT_TOKENS`` 最高 —— 部署方既然
+    点名了，就照办，超出窗口时由上下文预算抛 MODEL_CONTEXT_BUDGET_EXCEEDED，
+    那是明确报错，比默默截断好。没显式配置时，启用 ``NEWAPI_TEXT_CONTEXT_TOKENS``
+    的部署由上下文预算统一裁决（它会写回 ``NEWAPI_TEXT_OUTPUT_TOKENS``），
+    我们不再插手，避免两处预算打架。
+    """
+    from novelvideo.config import get_newapi_structured_output_model_settings
+    from novelvideo.utils.model_context_budget import TextContextBudget
+
+    settings = dict(get_newapi_structured_output_model_settings(model_env))
+    explicit = _story_script_output_tokens()
+    if explicit is not None:
+        settings["max_tokens"] = explicit
+    elif TextContextBudget.from_env() is None:
+        settings["max_tokens"] = _STORY_SCRIPT_DEFAULT_OUTPUT_TOKENS
+    return settings
+
+
+def _is_story_script_truncation(exc: BaseException) -> bool:
+    """判断异常是否只是「输出太长被截断」，而不是真正的失败。
+
+    两种形态都要接住：
+
+    - ``IncompleteToolCall``：结构化输出在 JSON 中途撞上 token 上限；
+    - ``UnexpectedModelBehavior`` 且消息提到 token limit：整段输出（含思考）
+      在产出一行之前就被截断。
+
+    重试耗尽（``Exceeded maximum output retries``）**不算**截断 —— 那是模型
+    反复写错字段，继续分批只会同样错下去。
+    """
+    if isinstance(exc, IncompleteToolCall):
+        return True
+    if isinstance(exc, UnexpectedModelBehavior):
+        text = str(exc).lower()
+        if text.startswith("exceeded maximum output retries"):
+            return False
+        return "token limit" in text or "max_tokens" in text
+    return False
+
 
 class FreezoneTranslationResult(BaseModel):
     """Structured translation result produced by the LLM."""
@@ -327,10 +409,7 @@ def resolve_freezone_story_script_model(model: str | None) -> dict[str, str]:
 def create_freezone_story_script_agent(model: str | None = None) -> Agent:
     """创建故事脚本生成 Agent。"""
     from novelvideo.api.schemas import FreezoneStoryScriptGenerateData
-    from novelvideo.config import (
-        get_newapi_structured_output_model_settings,
-        get_newapi_text_pydantic_model,
-    )
+    from novelvideo.config import get_newapi_text_pydantic_model
     from novelvideo.brainclaw_contract import BrainClawProfile
 
     resolve_freezone_story_script_model(model)
@@ -342,7 +421,7 @@ def create_freezone_story_script_agent(model: str | None = None) -> Agent:
     return Agent(
         llm_model,
         system_prompt=FREEZONE_STORY_SCRIPT_SYSTEM_PROMPT,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=_story_script_model_settings("FREEZONE_STORY_SCRIPT_MODEL"),
         output_type=FreezoneStoryScriptGenerateData,
         # 结构化脚本表字段多、且 shot_no/duration 是严格 int，模型偶尔会把时长写成
         # "2-5"/"3秒" 之类而过不了校验。默认 output_retries=1 只给一次纠正机会不够，
@@ -607,6 +686,129 @@ async def _run_story_script_stream(agent: Agent, user_prompt: Any) -> Any:
         return await result.get_output()
 
 
+def _story_script_max_batches() -> int:
+    import os
+
+    raw = os.environ.get(_STORY_SCRIPT_ROUNDS_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return value
+    return _STORY_SCRIPT_MAX_BATCHES
+
+
+def _story_script_batch_task(
+    base_task: str,
+    *,
+    start_shot: int,
+    row_count: int,
+    previous_summary: str = "",
+) -> str:
+    """给任务书追加「只写这一段」的批量约束。"""
+    end_shot = start_shot + row_count - 1
+    parts = [
+        base_task,
+        "",
+        "## 分批输出要求（重要）",
+        "上一次尝试一次性输出整张表时超出模型输出上限被截断，现在改为分批生成。",
+        f"本次只输出第 {start_shot} 到第 {end_shot} 镜，最多 {row_count} 行，不要多写。",
+        f"`shot_no` 必须从 {start_shot} 开始连续递增。",
+        "只输出这一段对应的 rows，不要重复前面已经生成过的镜头，也不要写结尾总结。",
+    ]
+    if previous_summary:
+        parts.append(f"前面已经写过的镜头概要（仅供衔接剧情，不要重复输出）：\n{previous_summary}")
+    return "\n".join(parts)
+
+
+def _merge_story_script_batches(batches: Sequence[Any], title: str) -> Any:
+    """把多批 rows 合成一张表，并重排 shot_no。"""
+    from novelvideo.api.schemas import FreezoneStoryScriptGenerateData
+
+    rows: list[Any] = []
+    for batch in batches:
+        rows.extend(list(getattr(batch, "rows", None) or []))
+    for index, row in enumerate(rows, start=1):
+        try:
+            row.shot_no = index
+        except Exception:
+            # 模型给的是可写对象；万一被冻结就保留原值，不让合并整体失败。
+            pass
+    return FreezoneStoryScriptGenerateData(
+        title=title or (getattr(batches[0], "title", "") if batches else ""),
+        rows=rows,
+    )
+
+
+async def _generate_story_script_resilient(
+    agent: Agent,
+    *,
+    task_text: str,
+    attachments: Sequence[Any] = (),
+    batch_rows: int,
+) -> Any:
+    """先按整表生成；一旦撞上输出上限，就自动降级为分批生成。
+
+    A（抬高 ``max_tokens``）让大部分剧本一次就能过；C（这里）兜住那些行数
+    确实超过单次上限的剧本。分批不是默认路径 —— 每批都要重新读一遍源剧本，
+    成本和耗时都会翻倍，只在真的被截断时才走。
+    """
+    def _prompt_for(text: str) -> Any:
+        return [text, *attachments] if attachments else text
+
+    try:
+        return await _run_story_script_stream(agent, _prompt_for(task_text))
+    except Exception as exc:
+        if not _is_story_script_truncation(exc):
+            raise
+        logger.warning(
+            "story script output truncated (%s); falling back to batched generation",
+            type(exc).__name__,
+        )
+
+    max_batches = _story_script_max_batches()
+    batches: list[Any] = []
+    title = ""
+    next_shot = 1
+    summary = ""
+    for _ in range(max_batches):
+        batch_task = _story_script_batch_task(
+            task_text,
+            start_shot=next_shot,
+            row_count=batch_rows,
+            previous_summary=summary,
+        )
+        data = await _run_story_script_stream(agent, _prompt_for(batch_task))
+        rows = list(getattr(data, "rows", None) or [])
+        if not rows:
+            break
+        if not title:
+            title = str(getattr(data, "title", "") or "")
+        batches.append(data)
+        next_shot += len(rows)
+        # 本批给的行数少于要求，说明剧情已经写完，不需要再要下一批。
+        if len(rows) < batch_rows:
+            break
+        tail = rows[-3:]
+        summary = "\n".join(
+            f"第 {getattr(row, 'shot_no', '?')} 镜：{str(getattr(row, 'visual_description', ''))[:60]}"
+            for row in tail
+        )
+    else:
+        # 每批都写满，说明还没写完就已经用光批次数。此时返回出去的是半张表，
+        # 下游会照着缺镜的脚本继续出图出视频 —— 静默的半成品比失败更糟。
+        raise RuntimeError(
+            f"story script still unfinished after {max_batches} batches "
+            f"({next_shot - 1} rows); raise FREEZONE_STORY_SCRIPT_MAX_BATCHES "
+            "or reduce the shot count"
+        )
+    if not batches:
+        raise RuntimeError("story script generation produced no rows in batched mode")
+    return _merge_story_script_batches(batches, title)
+
+
 async def generate_freezone_story_script(
     *,
     source_text: str,
@@ -627,8 +829,10 @@ async def generate_freezone_story_script(
     from novelvideo.model_gateway_runtime import model_gateway_request_scope
 
     with model_gateway_request_scope(egress_context):
-        return await _run_story_script_stream(
-            get_freezone_story_script_agent(model), task
+        return await _generate_story_script_resilient(
+            get_freezone_story_script_agent(model),
+            task_text=task,
+            batch_rows=_STORY_SCRIPT_BATCH_ROWS,
         )
 
 
@@ -639,10 +843,7 @@ def create_freezone_video_story_script_agent() -> Agent:
     story-script 别名 —— 带图请求只有视觉渠道能接。
     """
     from novelvideo.api.schemas import FreezoneStoryScriptGenerateData
-    from novelvideo.config import (
-        get_newapi_structured_output_model_settings,
-        get_newapi_text_pydantic_model,
-    )
+    from novelvideo.config import get_newapi_text_pydantic_model
     from novelvideo.brainclaw_contract import BrainClawProfile
     return Agent(
         get_newapi_text_pydantic_model(
@@ -652,7 +853,7 @@ def create_freezone_video_story_script_agent() -> Agent:
             capability="vision.analyze",
         ),
         system_prompt=FREEZONE_VIDEO_STORY_SCRIPT_SYSTEM_PROMPT,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=_story_script_model_settings("FREEZONE_VISION_MODEL"),
         output_type=FreezoneStoryScriptGenerateData,
         output_retries=model_gateway_output_retries(3),
         name="Freezone Video Story Script Generator",
@@ -727,8 +928,11 @@ async def generate_freezone_story_script_with_vision(
     from novelvideo.model_gateway_runtime import model_gateway_request_scope
 
     with model_gateway_request_scope(egress_context):
-        return await _run_story_script_stream(
-            get_freezone_video_story_script_agent(), [task, *attachments]
+        return await _generate_story_script_resilient(
+            get_freezone_video_story_script_agent(),
+            task_text=task,
+            attachments=attachments,
+            batch_rows=_STORY_SCRIPT_BATCH_ROWS_VISION,
         )
 
 

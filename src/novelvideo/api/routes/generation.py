@@ -284,6 +284,22 @@ def _is_grok_video_backend(video_backend: str | None) -> bool:
     return _seedance2_model_from_backend(video_backend) == "grok-video-channel"
 
 
+def _is_custom_prompt_panel_backend(video_backend: str | None) -> bool:
+    from novelvideo.generators.video_generator import parse_newapi_video_backend
+
+    if (
+        _is_seedance2_backend(video_backend)
+        or _is_happyhorse_backend(video_backend)
+        or _is_grok_video_backend(video_backend)
+    ):
+        return False
+    model = parse_newapi_video_backend(video_backend)
+    if not model:
+        return False
+    lowered = model.lower()
+    return not (lowered.startswith("seedance-1.") or lowered.startswith("seedance_1."))
+
+
 def _seedance2_api_resolution(resolution: str | None) -> str:
     text = str(resolution or "").strip()
     if text in {"480p", "720p", "1080p"}:
@@ -1294,7 +1310,7 @@ def _api_video_backend_options() -> list[VideoBackendOption]:
             is_seedance2
             or is_happyhorse
             or is_grok_video
-            or (model and not model.lower().startswith("seedance-1."))
+            or _is_custom_prompt_panel_backend(value)
         )
         backend_options.append(
             VideoBackendOption(
@@ -2618,6 +2634,7 @@ async def generate_single_video(
     is_seedance2 = _is_seedance2_backend(body.video_backend)
     is_happyhorse = _is_happyhorse_backend(body.video_backend)
     is_grok_video = _is_grok_video_backend(body.video_backend)
+    is_custom_prompt_panel = _is_custom_prompt_panel_backend(body.video_backend)
 
     # 首帧路径
     from novelvideo.seedance2_i2v.models import Seedance2I2VMode, parse_seedance2_config
@@ -2629,21 +2646,24 @@ async def generate_single_video(
         use_director_render=bool(body.use_director_render),
     )
     pre_merged_config_json = None
-    if is_seedance2 or is_happyhorse or is_grok_video:
-        pre_merged_config_json = _merge_seedance2_request_config(
-            beat,
-            seedance2_config_json=body.seedance2_config_json,
-            config_overrides=_seedance2_request_config_overrides(body),
-        )
+    if is_seedance2 or is_happyhorse or is_grok_video or is_custom_prompt_panel:
+        try:
+            pre_merged_config_json = _merge_seedance2_request_config(
+                beat,
+                seedance2_config_json=body.seedance2_config_json,
+                config_overrides=_seedance2_request_config_overrides(body),
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
     pre_sd_config = parse_seedance2_config(
         pre_merged_config_json or beat.get("seedance2_config_json")
     )
     skip_first_frame_guard = False
-    if is_seedance2:
-        if pre_sd_config.mode in {
-            Seedance2I2VMode.MULTIMODAL_REFERENCE,
-            Seedance2I2VMode.TEXT_TO_VIDEO,
-        } and not bool(pre_sd_config.s9_include_first_frame):
+    if is_seedance2 or is_custom_prompt_panel:
+        if pre_sd_config.mode == Seedance2I2VMode.TEXT_TO_VIDEO or (
+            pre_sd_config.mode == Seedance2I2VMode.MULTIMODAL_REFERENCE
+            and not bool(pre_sd_config.s9_include_first_frame)
+        ):
             skip_first_frame_guard = True
     elif is_happyhorse or is_grok_video:
         if pre_sd_config.mode in {
@@ -2862,6 +2882,7 @@ async def generate_single_video(
             )
             uses_prompt_panel = bool(
                 request_config_json is not None
+                or (is_custom_prompt_panel and str(merged_config.final_prompt or "").strip())
                 or (not prompt.strip() and str(merged_config.final_prompt or "").strip())
             )
             if uses_prompt_panel and str(merged_config.final_prompt or "").strip():
@@ -2899,6 +2920,8 @@ async def generate_single_video(
                     video_mode = "first_frame"
                     custom_panel_gen_mode = "text_to_video"
                 else:
+                    frame_path = None
+                    last_frame_path = None
                     custom_panel_gen_mode = "all_reference"
                     episode_obj = _episode_from_store_or_none(store, episode_num)
                     prop_menu = await _runtime_prop_menu_with_global_props(
@@ -2932,9 +2955,43 @@ async def generate_single_video(
                             "error": f"视频参考素材{condition}（声明 {declared_count} 项，可用 {declared_count - len(missing)} 项）："
                             + "；".join(missing),
                         }
+                    effective_final_prompt = str(merged_config.final_prompt or "")
+                    from novelvideo.s9_storyboard import (
+                        build_s9_slots_from_beat,
+                        is_s9_segment_beat,
+                        rebind_s9_prompt_with_active_assets,
+                        renumber_resolved_seedance2_assets,
+                    )
+
+                    if is_s9_segment_beat(beat) or merged_config.prompt_source in {
+                        "s9_script",
+                        "s9_generated",
+                    }:
+                        _subshots, s9_meta, slots = build_s9_slots_from_beat(
+                            beat,
+                            include_first_frame=bool(merged_config.s9_include_first_frame),
+                        )
+                        raw_slots = (
+                            list(s9_meta.segment_asset_slots)
+                            if s9_meta and s9_meta.segment_asset_slots
+                            else slots
+                        )
+                        effective_final_prompt, reordered_assets, _s9_missing = (
+                            rebind_s9_prompt_with_active_assets(
+                                effective_final_prompt,
+                                slots=raw_slots,
+                                assets=assets,
+                                include_first_frame=bool(
+                                    merged_config.s9_include_first_frame
+                                ),
+                            )
+                        )
+                        assets = renumber_resolved_seedance2_assets(reordered_assets)
+                        if effective_final_prompt.strip():
+                            prompt = normalize_seedance2_prompt(effective_final_prompt)
                     selected_assets = apply_prompt_audio_selection(
                         assets,
-                        merged_config.final_prompt,
+                        effective_final_prompt,
                         generate_audio=bool(merged_config.generate_audio),
                     )
                     resolved_video_references = [

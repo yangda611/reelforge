@@ -472,6 +472,11 @@ INTERACTION_VERBS = (
 )
 
 
+NON_LOCATION_GENERIC_SCENE_NAMES = frozenset(
+    {"室内", "外景", "内景", "本集主场景", "主场景", "无"}
+)
+
+
 class AssetCompiler:
     """以 SceneBlock 为单位编译本集场景和道具资产。"""
 
@@ -743,6 +748,15 @@ class AssetCompiler:
                     episode,
                     log,
                 )
+                if not scene_menu:
+                    log(
+                        "[AssetCompiler] 当前场次头未能匹配或生成基础场景，"
+                        "已回退为正文语义场景规划；项目类型仍保持精品剧。"
+                    )
+                    report(0.2, "从正文语义规划场景资产...")
+                    scene_menu, pending_scenes = await self._compile_narrated_scenes(
+                        source_text, episode, log
+                    )
         if not scene_menu and not allow_empty_scene_menu:
             raise ValueError("未识别到任何场景，请先生成逐行解说工作稿或补充场次地点")
 
@@ -899,12 +913,16 @@ class AssetCompiler:
         log: Callable[[str], None],
     ) -> list[str]:
         created: list[str] = []
-        generic_names = {"室内", "外景", "内景", "路边", "街边", "本集主场景", "主场景"}
+        compact_source = re.sub(r"\s+", "", source_text)
+        source_lines = split_literal_source_text(source_text) if source_text else []
         for decision in output.scenes:
+            if decision.action == "reuse":
+                await self._record_reused_scene_aliases(decision, log)
+                continue
             if decision.action != "create":
                 continue
             scene_name, _ = clean_scene_name_and_time(decision.scene_name)
-            if not scene_name or scene_name in generic_names:
+            if not scene_name or scene_name in NON_LOCATION_GENERIC_SCENE_NAMES:
                 continue
             if await self._find_existing_base_scene_by_name_or_alias(
                 [scene_name, decision.matched_existing_name, *(decision.aliases or [])]
@@ -915,10 +933,22 @@ class AssetCompiler:
                 for line in (decision.evidence_lines or [])
                 if str(line or "").strip()
             ]
+            has_evidence = not source_text or any(
+                line in source_text or re.sub(r"\s+", "", line) in compact_source
+                for line in evidence_lines
+            )
+            if not has_evidence:
+                has_evidence = any(
+                    re.sub(r"\s+", "", token) in compact_source
+                    for token in (scene_name, *(decision.aliases or []))
+                    if str(token or "").strip()
+                )
+            if not has_evidence:
+                continue
             if not evidence_lines:
-                continue
-            if source_text and not any(line in source_text for line in evidence_lines):
-                continue
+                evidence_lines = [
+                    line for line in source_lines if scene_name in line
+                ][:12] or source_lines[:12]
             live_action_kwargs = (
                 {"live_action": True} if self._is_live_action_style() else {}
             )
@@ -943,6 +973,47 @@ class AssetCompiler:
             created.append(scene.name)
             log(f"  AI补全基础场景: {scene.name}")
         return created
+
+    async def _record_reused_scene_aliases(
+        self,
+        decision: BaseSceneReconcileDecision,
+        log: Callable[[str], None],
+    ) -> None:
+        """Persist newly observed aliases onto a reused base scene."""
+
+        matched = await self._find_existing_base_scene_by_name_or_alias(
+            [
+                decision.matched_existing_name,
+                decision.scene_name,
+                *(decision.aliases or []),
+            ]
+        )
+        if not matched:
+            return
+        existing_aliases = [
+            str(alias or "").strip()
+            for alias in (getattr(matched, "aliases", []) or [])
+            if str(alias or "").strip()
+        ]
+        candidate_aliases = []
+        for raw_alias in (decision.scene_name, *(decision.aliases or [])):
+            cleaned, _ = clean_scene_name_and_time(raw_alias)
+            if (
+                cleaned
+                and cleaned != matched.name
+                and cleaned not in NON_LOCATION_GENERIC_SCENE_NAMES
+                and cleaned not in existing_aliases
+                and cleaned not in candidate_aliases
+            ):
+                candidate_aliases.append(cleaned)
+        if not candidate_aliases:
+            return
+        updated_aliases = [*existing_aliases, *candidate_aliases]
+        matched.aliases = updated_aliases
+        update_scene = getattr(self.store, "update_scene", None)
+        if callable(update_scene):
+            await update_scene(matched.name, aliases=updated_aliases)
+        log(f"  AI复用基础场景并补充别名: {matched.name} (+{', '.join(candidate_aliases)})")
 
     async def _find_existing_base_scene_by_name_or_alias(
         self,
@@ -1013,9 +1084,22 @@ class AssetCompiler:
                 location
             ) or await self._find_matching_scene(location)
             if not existing:
-                log(f"  跳过缺失基础场景: {location}（AI校对未创建或未复用）")
-                continue
-            else:
+                existing, is_new = await self._resolve_or_create_base_scene_from_block(
+                    location,
+                    block,
+                    episode,
+                    pending_scene_map,
+                    log,
+                )
+                if not existing:
+                    log(f"  跳过缺失基础场景: {location}（AI校对未创建或未复用）")
+                    continue
+                if is_new:
+                    pending_scenes.append(existing)
+                    pending_scene_map[location] = existing
+                    pending_scene_map[existing.name] = existing
+                    log(f"  兜底补建基础场景: {existing.name}")
+            elif existing.name not in pending_scene_map:
                 existing = await self._enrich_scene_prompt_from_block(
                     existing,
                     block,
@@ -1069,6 +1153,65 @@ class AssetCompiler:
             log(f"  场景: {existing.name}{extra}")
 
         return scene_menu, pending_scenes
+
+    async def _resolve_or_create_base_scene_from_block(
+        self,
+        location: str,
+        block: SceneBlock,
+        episode: Any,
+        pending_scene_map: dict[str, NovelScene],
+        log: Callable[[str], None],
+    ) -> tuple[NovelScene | None, bool]:
+        """Resolve a cleaned location or build a fallback base scene from the block."""
+
+        clean_location, _ = clean_scene_name_and_time(location)
+        scene_name = clean_location or str(location or "").strip()
+        if not scene_name or scene_name in NON_LOCATION_GENERIC_SCENE_NAMES:
+            return None, False
+
+        existing = pending_scene_map.get(scene_name) or await self._find_matching_scene(
+            scene_name
+        )
+        if existing is not None:
+            if existing.name not in pending_scene_map:
+                existing = await self._enrich_scene_prompt_from_block(
+                    existing,
+                    block,
+                    episode,
+                    persist=True,
+                    log=log,
+                )
+            return existing, False
+
+        interior_exterior = str(getattr(block, "interior_exterior", "") or "").strip()
+        guessed_type = self._guess_scene_type_from_name(scene_name)
+        if interior_exterior == "内":
+            scene_type = "interior"
+        elif interior_exterior == "外":
+            scene_type = "nature" if guessed_type == "nature" else "exterior"
+        else:
+            scene_type = guessed_type
+
+        live_action_kwargs = (
+            {"live_action": True} if self._is_live_action_style() else {}
+        )
+        ep_num = int(getattr(episode, "number", 1) or 1)
+        created = await enrich_scene_environment_from_context(
+            scene_name=scene_name,
+            aliases=[location] if location and location != scene_name else [],
+            scene_type=scene_type,
+            time_of_day=str(getattr(block, "time_of_day", "") or ""),
+            interior=scene_type == "interior",
+            episodes=[ep_num],
+            characters=list(getattr(block, "characters", []) or []),
+            context_lines=list(getattr(block, "lines", []) or []),
+            **live_action_kwargs,
+        )
+        created.notes = (
+            str(created.notes or "").strip()
+            or f"由 AssetCompiler 场景块兜底创建 (ep{ep_num})"
+        )
+        return created, True
 
     async def _compile_narrated_scenes(
         self,

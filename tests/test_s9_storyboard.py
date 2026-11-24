@@ -636,3 +636,160 @@ def test_build_seedance2_video_panel_state_exposes_s9_missing_assets_and_renumbe
         "图片2",
     ]
 
+
+@pytest.mark.asyncio
+async def test_s9_stage1_streams_and_preserves_validation_retries(monkeypatch):
+    from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+
+    from novelvideo import config as cfg_mod
+    from novelvideo import s9_storyboard as s9_mod
+
+    stream_calls = 0
+
+    def _forbidden_non_stream(*_args, **_kwargs):
+        raise AssertionError("非流式 request() 不应再被 Stage 1 调用")
+
+    valid_plan = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="雨夜试探",
+                planned_duration_seconds=3,
+                story_beat="林默敲下最后一行代码。",
+                exit_state="林默抬头看向门口。",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=3,
+                        start_seconds=0,
+                        end_seconds=3,
+                        audio_type="dialogue",
+                        speaker="林默",
+                        spoken_text="来得刚好。",
+                        content="林默敲击键盘后抬眼看向门口。",
+                    )
+                ],
+            )
+        ]
+    )
+
+    async def _stream_plan(_messages, _info):
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            # First streamed attempt fails schema validation to prove retries=3 still works.
+            yield {0: DeltaToolCall(name="final_result", json_args='{"segments": "bad"}')}
+            return
+        payload = valid_plan.model_dump_json(ensure_ascii=False)
+        mid = len(payload) // 2
+        yield {0: DeltaToolCall(name="final_result", json_args=payload[:mid])}
+        yield {0: DeltaToolCall(json_args=payload[mid:])}
+
+    streaming_model = FunctionModel(
+        function=_forbidden_non_stream,
+        stream_function=_stream_plan,
+    )
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_text_pydantic_model",
+        lambda *_args, **_kwargs: streaming_model,
+    )
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_structured_output_model_settings",
+        lambda *_args, **_kwargs: {},
+    )
+
+    plan = await s9_mod.run_s9_stage1_plan(
+        source_text="雨夜，林默敲下最后一行代码，抬头说道：来得刚好。",
+        episode_num=1,
+        episode_title="ep1",
+        style_context=s9_mod.resolve_s9_style_context(
+            visual_style="chinese_period_drama",
+            aspect_ratio="2:3",
+        ),
+        characters=[],
+        episode=SimpleNamespace(number=1, title="ep1"),
+        voice_available_names=set(),
+        max_segment_seconds=30,
+    )
+
+    assert stream_calls == 2
+    assert len(plan.segments) == 1
+    assert plan.segments[0].title == "雨夜试探"
+
+
+@pytest.mark.asyncio
+async def test_s9_stage2_streams_prompt_instead_of_blocking_request(monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+
+    from novelvideo import config as cfg_mod
+    from novelvideo import s9_storyboard as s9_mod
+
+    stream_calls = 0
+
+    def _forbidden_non_stream(*_args, **_kwargs):
+        raise AssertionError("非流式 request() 不应再被 Stage 2 调用")
+
+    async def _stream_prompt(_messages, _info):
+        nonlocal stream_calls
+        stream_calls += 1
+        yield "【参考职责】\n@图片1绑定林默。\n"
+        yield "【全局光影画风】\n真人电影。\n"
+        yield "【注意事项】\n无字幕。\n"
+        yield "分镜1（0秒到4秒）：0秒—4秒，林默看向门口。"
+
+    streaming_model = FunctionModel(
+        function=_forbidden_non_stream,
+        stream_function=_stream_prompt,
+    )
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_text_pydantic_model",
+        lambda *_args, **_kwargs: streaming_model,
+    )
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_structured_output_model_settings",
+        lambda *_args, **_kwargs: {},
+    )
+
+    seg = S9SegmentPlan(
+        segment_number=1,
+        title="试探",
+        planned_duration_seconds=4,
+        story_beat="林默看向门口。",
+        exit_state="门外人影停步。",
+        shots=[
+            S9SubShot(
+                shot_number=1,
+                planned_duration_seconds=4,
+                start_seconds=0,
+                end_seconds=4,
+                content="林默看向门口。",
+            )
+        ],
+    )
+    slots = [
+        S9SegmentAssetSlot(
+            slot=1,
+            media_type="image",
+            asset_kind="identity",
+            name="林默",
+            asset_id="林默_青年",
+        )
+    ]
+    rendered = await s9_mod.run_s9_stage2_segment_prompt(
+        segment=seg,
+        slots=slots,
+        style_context=s9_mod.resolve_s9_style_context(
+            visual_style="chinese_period_drama",
+            aspect_ratio="2:3",
+        ),
+    )
+
+    assert stream_calls == 1
+    assert "【参考职责】" in rendered
+    assert "分镜1（0秒到4秒）" in rendered
+
+

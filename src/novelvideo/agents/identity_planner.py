@@ -10,7 +10,7 @@
 """
 
 import re
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
@@ -20,6 +20,7 @@ from novelvideo.config import (
     get_newapi_structured_output_model_settings,
     get_newapi_text_pydantic_model,
 )
+from novelvideo.model_gateway_runtime import model_gateway_output_retries
 from novelvideo.models import CharacterIdentity
 from novelvideo.shared.env_guard import preserve_st_env
 from novelvideo.cognee.ladybug_access import ladybug_graph_access
@@ -114,8 +115,26 @@ class EpisodeDefaultIdentities(BaseModel):
     """Pass A 的输出：每个出场角色的默认身份。"""
 
     defaults: list[DefaultIdentityRequirement] = Field(
-        default_factory=list, description="每个出场角色的现实主线默认身份（每人一个）"
+        description="每个出场角色的现实主线默认身份（每人一个，不可省略或返回空列表）"
     )
+
+    @model_validator(mode="after")
+    def validate_context_defaults(self, info: ValidationInfo):
+        context = info.context if isinstance(info.context, dict) else None
+        if not context:
+            return self
+        validator = context.get("validate_defaults")
+        if not callable(validator):
+            return self
+        try:
+            self.defaults = validator(self.defaults)
+        except ValueError as exc:
+            context["last_error"] = str(exc)
+            context["last_raw_defaults"] = [
+                (d.character_name, d.visual_state) for d in self.defaults
+            ]
+            raise
+        return self
 
 
 class EpisodeIdentityRequirements(BaseModel):
@@ -124,6 +143,28 @@ class EpisodeIdentityRequirements(BaseModel):
     requirements: list[IdentityRequirement] = Field(
         default_factory=list, description="本集需要的其他非默认身份列表（不含默认身份）"
     )
+
+
+class RelationalCharacterMatch(BaseModel):
+    """关系型指代角色与具名角色的自动同指判定。"""
+
+    relational_name: str = Field(description="关系型称谓，必须原样来自关系型角色列表")
+    canonical_name: str = Field(description="对应的具名角色主名，必须原样来自具名角色列表")
+    confirmed: bool = Field(
+        default=False,
+        description="仅当提供的文本中有明确、无歧义的证据证明二者为同一人时才设为 true；不确定必须为 false",
+    )
+    evidence_quote: str = Field(
+        default="",
+        description="支持同指判定的原文逐字引用（confirmed=true 时必填）",
+    )
+    reason: str = Field(default="", description="一句话判定依据")
+
+
+class RelationalCharacterResolution(BaseModel):
+    """关系型指代角色归并结果。"""
+
+    matches: list[RelationalCharacterMatch] = Field(default_factory=list)
 
 
 _APPEARANCE_SCHEMA_TOKENS = (
@@ -272,12 +313,14 @@ APPEARANCE_GENERATION_PROMPT = """# 你是专业的影视服装造型师
 DEFAULT_IDENTITY_PROMPT = """# 你是影视角色主线形态分析师
 
 ## 任务
-为本集每个出场角色确定一个**现实主线默认身份**。
+为本集**每一个**出场角色确定一个**默认身份**。
 
 ## 什么是"默认身份"
 - 本集中该角色在**非回忆、非闪回、非梦境**的现实场景中，最常出现的稳定视觉形态
 - 一个角色只有一个默认身份
 - 如果角色在本集只有一种形态，那它就是默认身份
+- 如果角色在本集仅出现在回忆、闪回、梦境或叙述提及中（没有现实场景），也必须输出一个默认身份（优先复用已有主线身份，或取其本集主要视觉形态）
+- **必须覆盖本集全部出场角色，禁止跳过任何出场角色或返回空列表**
 
 ## 规则
 - 优先复用已有身份名称，不要新建近义词
@@ -427,6 +470,202 @@ class IdentityPlanner:
     def _identity_model_settings() -> dict:
         return get_newapi_structured_output_model_settings()
 
+    @staticmethod
+    def _normalize_gender_token(value: str) -> str:
+        lowered = str(value or "").strip().lower()
+        if lowered in {"男", "male", "m"}:
+            return "male"
+        if lowered in {"女", "female", "f"}:
+            return "female"
+        return ""
+
+    @staticmethod
+    def _collect_relational_snippets(
+        episode_texts: list[tuple[int, str]],
+        terms: list[str],
+        *,
+        window_chars: int = 240,
+        max_windows_per_term: int = 4,
+    ) -> list[str]:
+        snippets: list[str] = []
+        seen_spans: set[tuple[int, int, int]] = set()
+        for term in terms:
+            if not term:
+                continue
+            collected = 0
+            for ep_num, text in episode_texts:
+                if not text:
+                    continue
+                start_idx = 0
+                while collected < max_windows_per_term:
+                    pos = text.find(term, start_idx)
+                    if pos < 0:
+                        break
+                    win_start = max(0, pos - window_chars)
+                    win_end = min(len(text), pos + len(term) + window_chars)
+                    span_key = (ep_num, win_start // 80, win_end // 80)
+                    if span_key not in seen_spans:
+                        seen_spans.add(span_key)
+                        snippet = " ".join(text[win_start:win_end].split())
+                        snippets.append(f"[EP{ep_num:03d}] …{snippet}…")
+                        collected += 1
+                    start_idx = pos + len(term)
+                if collected >= max_windows_per_term:
+                    break
+        return snippets
+
+    async def _load_all_episode_texts_for_reconcile(
+        self,
+        current_episode: "NovelEpisode",
+        current_text: str,
+    ) -> list[tuple[int, str]]:
+        texts: list[tuple[int, str]] = [(current_episode.number, current_text)]
+        get_episodes = getattr(self.cognee_store, "get_all_episodes", None)
+        if not callable(get_episodes):
+            return texts
+        try:
+            episodes = list(get_episodes() or [])
+        except Exception:
+            return texts
+        for ep in sorted(episodes, key=lambda item: getattr(item, "number", 0)):
+            ep_num = getattr(ep, "number", None)
+            if ep_num is None or ep_num == current_episode.number:
+                continue
+            try:
+                ep_text = await load_episode_planning_content(self.cognee_store, ep)
+            except Exception:
+                continue
+            if ep_text and ep_text.strip():
+                texts.append((ep_num, ep_text))
+        return texts
+
+    async def _reconcile_relational_characters(
+        self,
+        episode: "NovelEpisode",
+        content_text: str,
+        on_log: Optional[Callable] = None,
+    ) -> None:
+        """Automatically merge relational placeholder characters when text proves identity."""
+        merge_fn = getattr(self.cognee_store, "merge_character", None)
+        if not callable(merge_fn):
+            return
+
+        from novelvideo.structured_extraction import is_relational_descriptor
+
+        all_chars = self.cognee_store.get_all_characters()
+        relational_chars = [c for c in all_chars if is_relational_descriptor(c.name)]
+        named_chars = [c for c in all_chars if not is_relational_descriptor(c.name)]
+        if not relational_chars or not named_chars:
+            return
+
+        episode_texts = await self._load_all_episode_texts_for_reconcile(
+            episode, content_text
+        )
+        terms = [
+            term
+            for char in relational_chars
+            for term in [char.name, *(getattr(char, "aliases", None) or ())]
+        ]
+        snippets = self._collect_relational_snippets(episode_texts, terms)
+        has_desc_hint = any(
+            getattr(char, "description", "")
+            and any(named.name in char.description for named in named_chars)
+            for char in relational_chars
+        )
+        if not snippets and not has_desc_hint:
+            return
+
+        relational_by_name = {c.name: c for c in relational_chars}
+        named_by_name = {c.name: c for c in named_chars}
+        relational_lines = [
+            f"- {c.name}"
+            + (f"（性别: {c.gender}）" if c.gender else "")
+            + (f"：{c.description[:120]}" if c.description else "")
+            for c in relational_chars
+        ]
+        named_lines = [
+            f"- {c.name}"
+            + (
+                f"（别名: {'、'.join(c.aliases)}）"
+                if getattr(c, "aliases", None)
+                else ""
+            )
+            + (f"（性别: {c.gender}）" if c.gender else "")
+            + (f"：{c.description[:120]}" if c.description else "")
+            for c in named_chars
+        ]
+
+        prompt = (
+            "以下是角色库中尚未消歧的关系型称谓角色，以及已有的具名角色列表。\n"
+            "请结合下文剧集文本片段，判断哪些关系型称谓在原文中有**明确、无歧义**的证据指向某个具名角色（例如「艾莉森的弟弟杰」「杰是艾莉森的弟弟」）。\n"
+            "- 只有文本明确表明是同一人时才设 confirmed=true，并给出逐字原文引用 evidence_quote。\n"
+            "- 如果不确定、可能是不同人、或缺乏原文依据，必须设 confirmed=false。\n\n"
+            "## 关系型称谓角色\n"
+            + "\n".join(relational_lines)
+            + "\n\n## 具名角色列表\n"
+            + "\n".join(named_lines)
+            + "\n\n## 相关原文片段\n"
+            + ("\n".join(snippets[:16]) if snippets else "（无）")
+        )
+
+        try:
+            agent = Agent(
+                self._identity_model("IDENTITY_PLANNER_CAST_MODEL"),
+                model_settings=self._identity_model_settings(),
+                output_type=RelationalCharacterResolution,
+                retries={"output": model_gateway_output_retries(1)},
+            )
+            result = (await agent.run(prompt)).output
+        except Exception as exc:
+            if on_log:
+                on_log(f"[EP{episode.number:03d}] 关系角色自动消歧跳过（非致命）: {exc}")
+            return
+
+        compact_corpus = "".join(
+            re.sub(r"\s+", "", text) for _, text in episode_texts
+        )
+        compact_descriptions = re.sub(
+            r"\s+",
+            "",
+            "\n".join(
+                str(getattr(c, "description", "") or "")
+                for c in (*relational_chars, *named_chars)
+            ),
+        )
+
+        for match in result.matches:
+            if not match.confirmed:
+                continue
+            rel_name = str(match.relational_name or "").strip()
+            canon_name = str(match.canonical_name or "").strip()
+            rel_char = relational_by_name.get(rel_name)
+            canon_char = named_by_name.get(canon_name)
+            if rel_char is None or canon_char is None:
+                continue
+
+            quote = str(match.evidence_quote or "").strip()
+            compact_quote = re.sub(r"\s+", "", quote)
+            if not compact_quote or (
+                compact_quote not in compact_corpus
+                and compact_quote not in compact_descriptions
+            ):
+                continue
+
+            rel_gender = self._normalize_gender_token(getattr(rel_char, "gender", ""))
+            canon_gender = self._normalize_gender_token(
+                getattr(canon_char, "gender", "")
+            )
+            if rel_gender and canon_gender and rel_gender != canon_gender:
+                continue
+
+            await merge_fn(rel_char.name, canon_char.name)
+            relational_by_name.pop(rel_name, None)
+            if on_log:
+                on_log(
+                    f"[EP{episode.number:03d}] 自动合并同指角色: "
+                    f"{rel_char.name} -> {canon_char.name}（依据: {quote}）"
+                )
+
     async def plan_single_episode(
         self,
         episode: "NovelEpisode",
@@ -442,6 +681,8 @@ class IdentityPlanner:
         if not content_text or not content_text.strip():
             return 0, 0
         output_language = detect_asset_language(content_text)
+
+        await self._reconcile_relational_characters(episode, content_text, on_log)
 
         # 预筛出场角色（只调一次，后续复用）
         all_chars = self.cognee_store.get_all_characters()
@@ -787,6 +1028,56 @@ class IdentityPlanner:
             seen.add(resolved)
         return normalized
 
+    def _resolve_default_cast_name(
+        self,
+        raw_character_name: object,
+        visual_state: str,
+        canonical_cast_names: list[str],
+        cast_set: set[str],
+    ) -> str:
+        """Resolve Pass A character_name to a canonical cast name when deterministic."""
+        raw_name = str(raw_character_name or "").strip()
+        if not raw_name:
+            return ""
+        resolved = (self.cognee_store.resolve_name(raw_name) or raw_name).strip()
+        if not cast_set or resolved in cast_set:
+            return resolved
+
+        lowered_map: dict[str, str] = {}
+        for cast_name in canonical_cast_names:
+            lowered_map.setdefault(cast_name.casefold(), cast_name)
+            char = self.cognee_store.get_character(cast_name)
+            if char is None:
+                continue
+            for alias in getattr(char, "aliases", None) or ():
+                alias_str = str(alias or "").strip()
+                if alias_str:
+                    lowered_map.setdefault(alias_str.casefold(), cast_name)
+
+        matched = lowered_map.get(raw_name.casefold()) or lowered_map.get(
+            resolved.casefold()
+        )
+        if matched:
+            return matched
+
+        if "_" in raw_name:
+            prefix, suffix = raw_name.split("_", 1)
+            prefix_match = lowered_map.get(prefix.strip().casefold())
+            if prefix_match:
+                char = self.cognee_store.get_character(prefix_match)
+                existing_ids = {
+                    str(getattr(ident, "identity_id", "") or "").strip()
+                    for ident in (getattr(char, "identities", None) or ())
+                }
+                if (
+                    raw_name in existing_ids
+                    or not visual_state
+                    or suffix.strip().casefold() == visual_state.casefold()
+                ):
+                    return prefix_match
+
+        return resolved
+
     def _validate_default_requirements(
         self,
         defaults: list[DefaultIdentityRequirement],
@@ -797,19 +1088,28 @@ class IdentityPlanner:
         canonical_cast_names = self._normalize_cast_names(cast_names)
         cast_set = set(canonical_cast_names)
         seen_char_to_item: dict[str, DefaultIdentityRequirement] = {}
+        ignored_names: list[str] = []
+        empty_state_names: list[str] = []
 
         for item in defaults:
-            char_name = (
-                self.cognee_store.resolve_name(item.character_name)
-                or item.character_name
-            ).strip()
+            raw_visual_state = str(item.visual_state or "").strip()
+            char_name = self._resolve_default_cast_name(
+                item.character_name,
+                raw_visual_state,
+                canonical_cast_names,
+                cast_set,
+            )
             visual_state = self._normalize_visual_state_for_char(
                 char_name,
-                str(item.visual_state or "").strip(),
+                raw_visual_state,
             )
-            if not char_name or not visual_state:
+            if not char_name:
+                continue
+            if not visual_state:
+                empty_state_names.append(char_name)
                 continue
             if cast_set and char_name not in cast_set:
+                ignored_names.append(str(item.character_name or "").strip() or char_name)
                 continue
             existing_item = seen_char_to_item.get(char_name)
             if existing_item and existing_item.visual_state != visual_state:
@@ -844,7 +1144,21 @@ class IdentityPlanner:
             if char_name not in seen_char_to_item
         ]
         if missing_chars:
-            raise ValueError("Pass A 默认身份覆盖不完整: " + ", ".join(missing_chars))
+            hints: list[str] = []
+            if ignored_names:
+                hints.append(
+                    "以下名称不在出场角色列表或别名中: "
+                    + ", ".join(dict.fromkeys(ignored_names))
+                )
+            if empty_state_names:
+                hints.append(
+                    "以下角色缺少 visual_state: "
+                    + ", ".join(dict.fromkeys(empty_state_names))
+                )
+            hint_suffix = f"（{'; '.join(hints)}）" if hints else ""
+            raise ValueError(
+                "Pass A 默认身份覆盖不完整: " + ", ".join(missing_chars) + hint_suffix
+            )
         return list(seen_char_to_item.values())
 
     def _normalize_other_requirements(
@@ -919,19 +1233,23 @@ class IdentityPlanner:
         if content_text is None:
             content_text = await self.cognee_store.load_episode_content(episode.number)
         if not content_text:
-            return EpisodeDefaultIdentities()
+            return EpisodeDefaultIdentities(defaults=[])
         if cast_names is None:
             cast_names = [c.name for c in self.cognee_store.get_all_characters()]
 
-        identity_info = self._build_character_info(cast_names)
+        canonical_cast = self._normalize_cast_names(cast_names)
+        if not canonical_cast:
+            return EpisodeDefaultIdentities(defaults=[])
+
+        identity_info = self._build_character_info(canonical_cast)
         graph_section = ""
         if graph_context and graph_context.strip():
             graph_section = f"\n## 图谱上下文\n{graph_context[:3000]}\n"
 
-        task = f"""分析第 {episode.number} 集《{episode.title}》中每个角色的**现实主线默认身份**。
+        task = f"""分析第 {episode.number} 集《{episode.title}》中每个角色的**默认身份**。
 
-## 出场角色
-{", ".join(cast_names)}
+## 出场角色（必须全部覆盖，共 {len(canonical_cast)} 人）
+{", ".join(canonical_cast)}
 
 ## 已有身份列表（优先复用）
 {identity_info}
@@ -940,14 +1258,21 @@ class IdentityPlanner:
 {content_text}
 
 ---
-请为每个出场角色确定一个默认身份（现实主线中最常出现的稳定形态）。
+请为上面「出场角色」列出的**每一个**角色确定一个默认身份（现实主线中最常出现的稳定形态；若某角色本集仅出现在回忆/闪回/梦境或提及中，则优先复用其已有主线身份或取其本集主要视觉形态）。
 - 已有身份能覆盖的，使用相同的 visual_state 名称（复用）
-- character_name 使用角色主名称
-- 每个角色只输出一个默认身份
+- character_name 必须一字不差地使用上面「出场角色」列表中的主名称
+- 每个角色只输出一个默认身份，不可遗漏任何角色，也不可返回空列表
 - 同时输出 age_group
   - 如果 visual_state 明确是年龄阶段，请填写对应 age_group
   - 如果只是同龄造型分支，可留空
 """
+        validation_state: dict[str, Any] = {
+            "validate_defaults": lambda defaults: self._validate_default_requirements(
+                defaults,
+                canonical_cast,
+                on_log=None,
+            )
+        }
         try:
             language_instruction = asset_language_instruction(
                 detect_asset_language(content_text)
@@ -960,11 +1285,13 @@ class IdentityPlanner:
                 system_prompt=f"{DEFAULT_IDENTITY_PROMPT}\n{language_instruction}",
                 model_settings=self._identity_model_settings(),
                 output_type=EpisodeDefaultIdentities,
+                retries={"output": model_gateway_output_retries(2)},
+                validation_context=validation_state,
             )
             result = await agent.run(task)
             result.output.defaults = self._validate_default_requirements(
                 result.output.defaults,
-                cast_names,
+                canonical_cast,
                 on_log=on_log,
             )
             if on_log:
@@ -975,9 +1302,20 @@ class IdentityPlanner:
                     )
             return result.output
         except Exception as e:
+            detail = validation_state.get("last_error") or str(e)
+            raw_defaults = validation_state.get("last_raw_defaults")
             if on_log:
-                on_log(f"[EP{episode.number:03d}] Pass A 默认身份分析失败: {e}")
-            raise RuntimeError(f"Pass A 默认身份分析失败: {e}") from e
+                if raw_defaults is not None:
+                    on_log(
+                        f"[EP{episode.number:03d}] Pass A 原始输出({len(raw_defaults)}): "
+                        + (
+                            ", ".join(f"{name}:{state}" for name, state in raw_defaults)
+                            if raw_defaults
+                            else "（空列表）"
+                        )
+                    )
+                on_log(f"[EP{episode.number:03d}] Pass A 默认身份分析失败: {detail}")
+            raise RuntimeError(f"Pass A 默认身份分析失败: {detail}") from e
 
     async def _analyze_special_identities(
         self,

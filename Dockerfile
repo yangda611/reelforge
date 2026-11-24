@@ -141,10 +141,12 @@ RUN test -f src/novelvideo/assets/login_bgm.mp3 \
 # 模型权重不烤进镜像:运行时自动下载到可写卷(Apple 研究许可,绝不再分发)。
 # 注:slim base 为 CPU;GPU 加速需 CUDA base + nvidia runtime。
 ARG INSTALL_WORLD=0
-# The SDK declares its stock runtime as a dependency. Remove that unused
+# The SDK declares its stock runtime as a dependency. Exclude that unused
 # binary so an operator cannot bypass CODEX_BIN and re-enable metadata logs.
-# uv.lock contains the pinned Codex Python SDK as a Git source. Keep git in
-# this build layer only; it is not needed by the running application.
+# Skip uv's git clone of openai/codex.git (Debian git's GnuTLS backend often
+# fails mid-transfer on that monorepo behind proxies) and install sdk/python
+# from the exact uv.lock-pinned commit archive via deploy/install_codex_sdk.py.
+# Keep git in this build layer for INSTALL_WORLD=1 git dependencies only.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends git; \
@@ -152,11 +154,14 @@ RUN set -eux; \
         apt-get install -y --no-install-recommends nodejs npm; \
         npm install -g @playcanvas/splat-transform; \
         uv sync --frozen --no-dev --extra world \
-          --no-install-package openai-codex-cli-bin; \
+          --no-install-package openai-codex-cli-bin \
+          --no-install-package openai-codex; \
     else \
         uv sync --frozen --no-dev \
-          --no-install-package openai-codex-cli-bin; \
+          --no-install-package openai-codex-cli-bin \
+          --no-install-package openai-codex; \
     fi; \
+    python3 deploy/install_codex_sdk.py --lock-file uv.lock --python /app/.venv/bin/python; \
     /app/.venv/bin/python -m novelvideo.ladybug_json_extension; \
     mkdir -p /data; \
     apt-get purge -y git; \

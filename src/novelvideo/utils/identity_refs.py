@@ -111,8 +111,19 @@ def remap_id_list(raw_json: str | None, old_name: str, new_name: str) -> str | N
         return None
     if not isinstance(values, list):
         return None
-    remapped = [remap_identity_id(item, old_name, new_name) for item in values]
-    if remapped == values:
+    remapped: list[Any] = []
+    changed = False
+    seen: set[str] = set()
+    for item in values:
+        mapped = remap_identity_id(item, old_name, new_name)
+        if mapped != item:
+            changed = True
+        if isinstance(mapped, str):
+            if mapped in seen:
+                continue
+            seen.add(mapped)
+        remapped.append(mapped)
+    if not changed and remapped == values:
         return None
     return json.dumps(remapped, ensure_ascii=False)
 
@@ -126,12 +137,15 @@ def remap_default_map(raw_json: str | None, old_name: str, new_name: str) -> str
         return None
     if not isinstance(mapping, dict):
         return None
-    remapped = {
-        (new_name if str(key) == old_name else str(key)): remap_identity_id(
-            value, old_name, new_name
-        )
-        for key, value in mapping.items()
-    }
+    remapped: dict[str, Any] = {}
+    for key, value in mapping.items():
+        key_str = str(key)
+        if key_str == old_name:
+            if new_name in mapping:
+                continue
+            remapped[new_name] = remap_identity_id(value, old_name, new_name)
+        else:
+            remapped[key_str] = remap_identity_id(value, old_name, new_name)
     if remapped == mapping:
         return None
     return json.dumps(remapped, ensure_ascii=False)

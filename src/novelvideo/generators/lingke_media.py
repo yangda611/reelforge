@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
+from novelvideo.seedance2_i2v.models import infer_reference_media_kind
+
 LINGKE_PROVIDER_NAMES = frozenset({"lingke", "ai778"})
 LINGKE_HOSTS = frozenset({"api.lk888.ai", "api.lingkeai.ai"})
 
@@ -261,8 +263,26 @@ def _assign_lingke_video_media_params(
     ref_file: str,
     ref_link: str,
 ) -> None:
-    all_images = _dedupe_urls([first_frame, *ref_images, last_frame])
-    keyframe_images = _dedupe_urls([first_frame, last_frame])
+    misplaced_audios = [
+        url for url in ref_images if infer_reference_media_kind(url) == "audio"
+    ]
+    misplaced_images = [
+        url for url in ref_audios if infer_reference_media_kind(url) == "image"
+    ]
+    clean_ref_images = [
+        url for url in ref_images if infer_reference_media_kind(url) != "audio"
+    ]
+    clean_ref_audios = [
+        url for url in ref_audios if infer_reference_media_kind(url) != "image"
+    ]
+    ref_images = _dedupe_urls([*clean_ref_images, *misplaced_images])
+    ref_audios = _dedupe_urls([*clean_ref_audios, *misplaced_audios])
+    safe_first = (
+        "" if infer_reference_media_kind(first_frame) == "audio" else first_frame
+    )
+    safe_last = "" if infer_reference_media_kind(last_frame) == "audio" else last_frame
+    all_images = _dedupe_urls([safe_first, *ref_images, safe_last])
+    keyframe_images = _dedupe_urls([safe_first, safe_last])
 
     if model_lower in _LINGKE_VIDEO_DUAL_MODE_MODELS:
         use_ref = normalized_mode in {

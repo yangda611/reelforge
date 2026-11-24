@@ -787,3 +787,185 @@ async def test_menu_writes_go_through_the_column_patch(tmp_path):
 
     assert store.sqlite_store.patched == [(1, {"scene_menu": []})]
     assert store.updated == []
+
+
+@pytest.mark.asyncio
+async def test_compile_episode_scenes_builds_missing_base_scene_when_reconcile_omits_it(
+    monkeypatch,
+):
+    import novelvideo.agents.asset_compiler as asset_compiler
+
+    async def fake_enrich(**kwargs):
+        return NovelScene(
+            name=kwargs["scene_name"],
+            aliases=list(kwargs.get("aliases") or []),
+            scene_type=kwargs["scene_type"],
+            environment_prompt=ENRICHED_ENVIRONMENT_PROMPT,
+            description="雨夜路边",
+        )
+
+    async def fake_derived(self, scene_name, block):
+        return []
+
+    async def fake_reconcile(self, source_text, episode, log):
+        return []
+
+    async def fake_load_scene_blocks(self, episode):
+        return [_block(location="路边", time_of_day="夜")]
+
+    monkeypatch.setattr(asset_compiler, "enrich_scene_environment_from_context", fake_enrich)
+    monkeypatch.setattr(asset_compiler.AssetCompiler, "_analyze_derived_scenes", fake_derived)
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler, "_load_scene_blocks", fake_load_scene_blocks
+    )
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler,
+        "_normalize_scene_block_headers",
+        lambda self, blocks, log: _return_async(blocks),
+    )
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler,
+        "_reconcile_base_scenes_from_text",
+        fake_reconcile,
+    )
+
+    store = _FakeCogneeStore()
+    compiler = asset_compiler.AssetCompiler(store)
+    logs: list[str] = []
+
+    scene_menu, new_count = await compiler.compile_episode_scenes(
+        SimpleNamespace(number=2, title="第二集", beat_source_text="2-1 路边 夜 外"),
+        logs.append,
+    )
+
+    assert [item.scene_id for item in scene_menu] == ["路边"]
+    assert new_count == 1
+    assert [scene.name for scene in store.sqlite_store.added] == ["路边"]
+    assert any("兜底补建基础场景: 路边" in message for message in logs)
+
+
+@pytest.mark.asyncio
+async def test_base_scene_reconcile_records_alias_for_reuse_decision():
+    import novelvideo.agents.asset_compiler as asset_compiler
+
+    existing = NovelScene(
+        name="林家大厅",
+        aliases=[],
+        scene_type="interior",
+        environment_prompt=ENRICHED_ENVIRONMENT_PROMPT,
+    )
+    store = _FakeCogneeStore([existing])
+    compiler = asset_compiler.AssetCompiler(store)
+
+    created = await compiler._apply_base_scene_reconcile_output(
+        asset_compiler.EpisodeBaseSceneReconcileOutput(
+            scenes=[
+                asset_compiler.BaseSceneReconcileDecision(
+                    action="reuse",
+                    scene_name="一楼会客厅",
+                    matched_existing_name="林家大厅",
+                    aliases=["前厅"],
+                )
+            ]
+        ),
+        "2-1 一楼会客厅 夜 内",
+        SimpleNamespace(number=2),
+        lambda _message: None,
+    )
+
+    assert created == []
+    assert existing.aliases == ["一楼会客厅", "前厅"]
+    assert store.sqlite_store.updated == [
+        ("林家大厅", {"aliases": ["一楼会客厅", "前厅"]})
+    ]
+    matched = await compiler._find_matching_scene("一楼会客厅")
+    assert matched is not None
+    assert matched.name == "林家大厅"
+
+
+@pytest.mark.asyncio
+async def test_base_scene_reconcile_accepts_whitespace_normalized_evidence(monkeypatch):
+    import novelvideo.agents.asset_compiler as asset_compiler
+
+    async def fake_enrich(**kwargs):
+        return NovelScene(
+            name=kwargs["scene_name"],
+            scene_type=kwargs["scene_type"],
+            environment_prompt=ENRICHED_ENVIRONMENT_PROMPT,
+        )
+
+    monkeypatch.setattr(asset_compiler, "enrich_scene_environment_from_context", fake_enrich)
+    store = _FakeCogneeStore()
+    compiler = asset_compiler.AssetCompiler(store)
+
+    created = await compiler._apply_base_scene_reconcile_output(
+        asset_compiler.EpisodeBaseSceneReconcileOutput(
+            scenes=[
+                asset_compiler.BaseSceneReconcileDecision(
+                    action="create",
+                    scene_name="天台",
+                    scene_type="exterior",
+                    evidence_lines=["林晚 站在 天台 边缘"],
+                )
+            ]
+        ),
+        "2-1 天台 夜 外\n林晚站在天台边缘。",
+        SimpleNamespace(number=2),
+        lambda _message: None,
+    )
+
+    assert created == ["天台"]
+    assert sorted(store.sqlite_store.scenes) == ["天台"]
+
+
+@pytest.mark.asyncio
+async def test_compile_episode_scenes_falls_back_to_semantic_when_headers_are_generic(
+    monkeypatch,
+):
+    import novelvideo.agents.asset_compiler as asset_compiler
+
+    async def fake_load_scene_blocks(self, episode):
+        return [_block(location="室内", time_of_day="夜")]
+
+    async def fake_reconcile(self, source_text, episode, log):
+        return []
+
+    async def fake_extract(self, source_text, episode, log):
+        return [
+            NovelScene(
+                name="急诊病房",
+                scene_type="interior",
+                environment_prompt=ENRICHED_ENVIRONMENT_PROMPT,
+                description="医院急诊病房",
+            )
+        ]
+
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler, "_load_scene_blocks", fake_load_scene_blocks
+    )
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler,
+        "_normalize_scene_block_headers",
+        lambda self, blocks, log: _return_async(blocks),
+    )
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler,
+        "_reconcile_base_scenes_from_text",
+        fake_reconcile,
+    )
+    monkeypatch.setattr(
+        asset_compiler.AssetCompiler,
+        "_extract_narrated_episode_scenes",
+        fake_extract,
+    )
+
+    store = _FakeCogneeStore(raw_content="2-1 室内 夜 内\n林晚在急诊病房醒来。")
+    compiler = asset_compiler.AssetCompiler(store)
+
+    scene_menu, new_count = await compiler.compile_episode_scenes(
+        SimpleNamespace(number=2, title="第二集", beat_source_text="2-1 室内 夜 内\n林晚在急诊病房醒来。"),
+        lambda _message: None,
+    )
+
+    assert [item.scene_id for item in scene_menu] == ["急诊病房"]
+    assert new_count == 1

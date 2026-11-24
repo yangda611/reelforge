@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import logging
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -1656,6 +1658,62 @@ def audit_s9_plan_pacing(
     return issues
 
 
+async def _drain_agent_event_stream(_ctx: Any, event_stream: Any) -> None:
+    """Drain streaming model events so SSE chunks continuously reset gateway read timeouts."""
+    async for _ in event_stream:
+        pass
+
+
+def _agent_run_supports_event_stream_handler(agent: Any) -> bool:
+    """Return True when ``agent.run`` accepts ``event_stream_handler``."""
+    run_fn = getattr(agent, "run", None)
+    if not callable(run_fn):
+        return False
+    try:
+        sig = inspect.signature(run_fn)
+    except (TypeError, ValueError):
+        return False
+    return "event_stream_handler" in sig.parameters or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+
+
+async def _run_s9_agent_streaming(
+    agent: Any,
+    prompt: Any,
+    *,
+    message_history: Any = None,
+) -> Any:
+    """Run a PydanticAI agent via streaming transport while preserving output retries.
+
+    Passing ``event_stream_handler`` makes ``Agent.run()`` invoke
+    ``model.request_stream()`` instead of buffering the entire completion in a
+    single non-streaming HTTP response (which triggers Cloudflare's 120s 524
+    Proxy Read Timeout on long Stage 1/Stage 2 generations), while keeping
+    PydanticAI's structured-output validation retries intact.
+    """
+    run_kwargs: dict[str, Any] = {}
+    if message_history is not None:
+        run_kwargs["message_history"] = message_history
+    if _agent_run_supports_event_stream_handler(agent):
+        run_kwargs["event_stream_handler"] = _drain_agent_event_stream
+        return await agent.run(prompt, **run_kwargs)
+    if callable(getattr(agent, "run_stream", None)):
+        async with agent.run_stream(prompt, **run_kwargs) as stream_result:
+            output = await stream_result.get_output()
+            response = getattr(stream_result, "response", None)
+            all_messages_fn = getattr(stream_result, "all_messages", None)
+            all_messages = all_messages_fn() if callable(all_messages_fn) else None
+            return SimpleNamespace(
+                output=output,
+                response=response,
+                all_messages=(
+                    (lambda msgs=all_messages: msgs) if all_messages is not None else None
+                ),
+            )
+    return await agent.run(prompt, **run_kwargs)
+
+
 async def run_s9_stage1_plan(
     *,
     source_text: str,
@@ -1712,7 +1770,7 @@ async def run_s9_stage1_plan(
         retries=3,
         name="YD Stage1 Storyboard Planner",
     )
-    result = await agent.run(task_prompt)
+    result = await _run_s9_agent_streaming(agent, task_prompt)
     plan = result.output
 
     issues = audit_s9_plan_pacing(plan, max_segment_seconds=cap)
@@ -1737,7 +1795,7 @@ async def run_s9_stage1_plan(
             f"5. 单段时长 <= {cap} 秒（整数秒），不为了凑满 {cap} 秒硬塞或拉长镜头。"
         )
         try:
-            revised = await agent.run(revision_prompt)
+            revised = await _run_s9_agent_streaming(agent, revision_prompt)
             if revised.output and revised.output.segments:
                 revised_issues = audit_s9_plan_pacing(revised.output, max_segment_seconds=cap)
                 if len(revised_issues) <= len(issues):
@@ -1810,7 +1868,7 @@ async def run_s9_stage2_segment_prompt(
     )
 
     async def _run_with_continuation(initial_prompt: str) -> tuple[str, list[str]]:
-        result = await agent.run(initial_prompt)
+        result = await _run_s9_agent_streaming(agent, initial_prompt)
         rendered = _strip_code_fences(result.output)
         finish_reason = getattr(getattr(result, "response", None), "finish_reason", None)
         issues = _audit_s9_stage2_completeness(
@@ -1838,7 +1896,11 @@ async def run_s9_stage2_segment_prompt(
                 "请紧接着上一条输出最后一个字之后无缝续写剩余内容，补全到最后一个分镜及收束状态，"
                 "禁止重复前面已经输出过的文字，禁止添加解释或代码块标记。"
             )
-            cont_result = await agent.run(cont_prompt, message_history=history)
+            cont_result = await _run_s9_agent_streaming(
+                agent,
+                cont_prompt,
+                message_history=history,
+            )
             cont_text = _strip_code_fences(cont_result.output)
             if not cont_text:
                 break

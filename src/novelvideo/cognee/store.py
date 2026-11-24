@@ -1589,6 +1589,11 @@ class CogneeStore:
         await self.sqlite_store.rename_character(old_name, new_name)
         self._sync_sqlite_caches()
 
+    async def merge_character(self, source_name: str, target_name: str) -> None:
+        """合并重复角色。"""
+        await self.sqlite_store.merge_character(source_name, target_name)
+        self._sync_sqlite_caches()
+
     async def delete_character(self, name: str) -> None:
         """删除角色。"""
         await self.sqlite_store.delete_character(name)

@@ -222,3 +222,221 @@ async def test_single_video_generic_backend_without_references_still_works(
 
     assert response["ok"] is True
     assert calls[0]["payload"]["config"].get("references") in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_single_video_custom_prompt_panel_multimodal_does_not_require_first_frame(
+    monkeypatch, tmp_path
+):
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    ref_img = tmp_path / "ref-role.png"
+    ref_img.write_bytes(b"img")
+
+    calls = []
+    config_payload = {
+        "mode": "multimodal_reference",
+        "duration": 11,
+        "resolution": "720p",
+        "ratio": "16:9",
+        "generate_audio": True,
+        "prompt_source": "s9_script",
+        "prompt_style": "s9_segment",
+        "s9_include_first_frame": False,
+        "final_prompt": "@图片1 中的角色推门走入室内。",
+        "reference_image_paths": [str(ref_img)],
+        "reference_audio_paths": [],
+    }
+    store = _FakeStore(
+        [
+            {
+                "beat_number": 2,
+                "video_mode": "first_frame",
+                "video_prompt": "",
+                "seedance2_config_json": json.dumps(config_payload, ensure_ascii=False),
+            }
+        ]
+    )
+
+    async def fake_audio_duration(*_args, **_kwargs):
+        return 0.0
+
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+    monkeypatch.setattr(generation, "_api_audio_duration_seconds", fake_audio_duration)
+    monkeypatch.setattr(
+        "novelvideo.seedance2_i2v.assets.build_seedance2_project_assets",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "novelvideo.video_duration.video_duration_bounds_for_backend",
+        lambda _backend: (4, 30),
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=3,
+        beat_num=2,
+        body=SingleVideoRequest(
+            video_backend="newapi_seedance2.5-mref-720p",
+            mode="multimodal_reference",
+            resolution="720p",
+            duration=11,
+            ratio="16:9",
+            seedance2_config_json=json.dumps(config_payload, ensure_ascii=False),
+        ),
+        user={"username": "alice"},
+    )
+
+    assert response["ok"] is True, response
+    assert len(calls) == 1
+    dispatched = calls[0]["payload"]["config"]
+    assert dispatched["frame_path"] is None
+    assert dispatched["gen_mode"] == "all_reference"
+    assert dispatched["prompt"] == "图片1 中的角色推门走入室内。"
+    assert [(item["type"], item["path"]) for item in dispatched["references"]] == [
+        ("image", str(ref_img)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_video_custom_prompt_panel_clears_existing_frame_in_all_reference(
+    monkeypatch, tmp_path
+):
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    frame = tmp_path / "frames" / "ep003" / "beat_02.png"
+    frame.parent.mkdir(parents=True)
+    frame.write_bytes(b"frame")
+
+    calls = []
+    config_payload = {
+        "mode": "multimodal_reference",
+        "duration": 8,
+        "resolution": "720p",
+        "ratio": "16:9",
+        "s9_include_first_frame": False,
+        "final_prompt": "@图片1 角色开口说话。",
+    }
+    store = _FakeStore(
+        [
+            {
+                "beat_number": 2,
+                "video_mode": "first_frame",
+                "video_prompt": "legacy prompt",
+                "seedance2_config_json": json.dumps(config_payload, ensure_ascii=False),
+            }
+        ]
+    )
+
+    async def fake_audio_duration(*_args, **_kwargs):
+        return 0.0
+
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+    monkeypatch.setattr(generation, "_api_audio_duration_seconds", fake_audio_duration)
+    monkeypatch.setattr(
+        "novelvideo.seedance2_i2v.assets.build_seedance2_project_assets",
+        lambda **_kwargs: [],
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=3,
+        beat_num=2,
+        body=SingleVideoRequest(
+            video_backend="newapi_seedance2.5-mref-720p",
+            seedance2_config_json=json.dumps(config_payload, ensure_ascii=False),
+        ),
+        user={"username": "alice"},
+    )
+
+    assert response["ok"] is True, response
+    dispatched = calls[0]["payload"]["config"]
+    assert dispatched["frame_path"] is None
+    assert dispatched["gen_mode"] == "all_reference"
+
+
+@pytest.mark.asyncio
+async def test_single_video_custom_prompt_panel_requires_first_frame_when_s9_include_first_frame_enabled(
+    monkeypatch, tmp_path
+):
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    calls = []
+    config_payload = {
+        "mode": "multimodal_reference",
+        "duration": 8,
+        "resolution": "720p",
+        "ratio": "16:9",
+        "s9_include_first_frame": True,
+        "final_prompt": "@图片1 角色开口说话。",
+    }
+    store = _FakeStore(
+        [
+            {
+                "beat_number": 2,
+                "video_mode": "first_frame",
+                "seedance2_config_json": json.dumps(config_payload, ensure_ascii=False),
+            }
+        ]
+    )
+
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=3,
+        beat_num=2,
+        body=SingleVideoRequest(
+            video_backend="newapi_seedance2.5-mref-720p",
+            seedance2_config_json=json.dumps(config_payload, ensure_ascii=False),
+        ),
+        user={"username": "alice"},
+    )
+
+    assert response == {"ok": False, "error": "Beat 2 首帧不存在，请先生成预览"}
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_single_video_seedance1x_still_requires_first_frame(monkeypatch, tmp_path):
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    calls = []
+    store = _FakeStore([_make_beat(tmp_path, image_paths=[], audio_paths=[])])
+
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=3,
+        beat_num=2,
+        body=SingleVideoRequest(video_backend="newapi_seedance-1.0-pro-fast"),
+        user={"username": "alice"},
+    )
+
+    assert response == {"ok": False, "error": "Beat 2 首帧不存在，请先生成预览"}
+    assert calls == []

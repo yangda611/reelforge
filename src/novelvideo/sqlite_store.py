@@ -1038,6 +1038,77 @@ class SQLiteStore:
         await self.load_graph_state()
         console.print(f"[green]已重命名角色: {old_name} → {new_name}[/green]")
 
+    async def merge_character(self, source_name: str, target_name: str) -> None:
+        """将重复角色 ``source_name`` 并入 ``target_name``，原名与别名转为后者别名。"""
+        source = self.get_character(source_name)
+        if not source:
+            raise ValueError(f"角色 {source_name} 不存在")
+        target = self.get_character(target_name)
+        if not target:
+            raise ValueError(f"角色 {target_name} 不存在")
+        if source.name == target.name:
+            return
+
+        from novelvideo.utils.identity_resolver import compute_char_tag
+
+        merged_aliases: list[str] = []
+        seen_aliases: set[str] = set()
+        for alias in [*target.aliases, source.name, *source.aliases]:
+            cleaned = str(alias or "").strip()
+            if not cleaned or cleaned == target.name or cleaned in seen_aliases:
+                continue
+            seen_aliases.add(cleaned)
+            merged_aliases.append(cleaned)
+        target.aliases = merged_aliases
+
+        for field_name in (
+            "role",
+            "gender",
+            "age_group",
+            "body_type",
+            "fish_voice_id",
+            "description",
+            "face_prompt",
+            "appearance_details",
+        ):
+            if not getattr(target, field_name, "") and getattr(source, field_name, ""):
+                setattr(target, field_name, getattr(source, field_name))
+
+        target_identities = list(target.identities or [])
+        existing_identity_names = {
+            ident.identity_name for ident in target_identities if ident.identity_name
+        }
+        for ident in source.identities or []:
+            if ident.identity_name in existing_identity_names:
+                continue
+            new_identity_id = f"{target.name}_{ident.identity_name}"
+            migrated = ident.model_copy(
+                update={
+                    "character_name": target.name,
+                    "identity_id": new_identity_id,
+                    "character_tag": compute_char_tag(
+                        target.name, identity_id=new_identity_id
+                    ),
+                }
+            )
+            target_identities.append(migrated)
+            existing_identity_names.add(ident.identity_name)
+        target.identities = target_identities
+
+        db = await self._ensure_db()
+        await self.add_character(target)
+        await db.execute("DELETE FROM characters WHERE name = ?", (source.name,))
+        await db.commit()
+        await self._cascade_character_rename(source.name, target.name)
+
+        old_dir = Path(self.project_dir) / "assets" / "characters" / source.name
+        new_dir = Path(self.project_dir) / "assets" / "characters" / target.name
+        if old_dir.exists() and not new_dir.exists():
+            old_dir.replace(new_dir)
+
+        await self.load_graph_state()
+        console.print(f"[green]已合并角色: {source.name} → {target.name}[/green]")
+
     async def delete_character(self, name: str) -> None:
         char = self.get_character(name)
         if not char:

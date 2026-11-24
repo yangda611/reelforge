@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import urllib.parse
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -144,18 +145,91 @@ def _is_s9_preserved_duration(source: Any) -> bool:
     return duration >= 4 and (prompt_source == "s9_script" or prompt_style == "s9_segment")
 
 
+_AUDIO_EXTENSIONS = frozenset(
+    {
+        ".mp3",
+        ".wav",
+        ".wave",
+        ".m4a",
+        ".aac",
+        ".ogg",
+        ".oga",
+        ".flac",
+        ".opus",
+        ".wma",
+        ".amr",
+        ".weba",
+    }
+)
+_VIDEO_EXTENSIONS = frozenset(
+    {
+        ".mp4",
+        ".mov",
+        ".m4v",
+        ".avi",
+        ".mkv",
+        ".webm",
+        ".flv",
+        ".wmv",
+        ".mpeg",
+        ".mpg",
+        ".3gp",
+    }
+)
+_IMAGE_EXTENSIONS = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".heic",
+        ".heif",
+        ".avif",
+    }
+)
+
+
+def infer_reference_media_kind(value: object, *, fallback: str = "") -> str:
+    """Infer ``'image'``, ``'audio'``, or ``'video'`` from a path, URL, or data URI."""
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    if text[:5].lower() == "data:":
+        mime_type = text[5:].split(";", 1)[0].split(",", 1)[0].strip().lower()
+        kind = mime_type.partition("/")[0]
+        return kind if kind in {"image", "audio", "video"} else fallback
+
+    parsed = urllib.parse.urlsplit(text)
+    if parsed.scheme.lower() in {"http", "https", "file"}:
+        clean_path = urllib.parse.unquote(parsed.path)
+    else:
+        # Preserve Windows drive paths like C:\dir\file.mp3 while stripping query/fragment.
+        clean_path = text.split("?", 1)[0].split("#", 1)[0]
+
+    suffix = Path(clean_path).suffix.lower()
+    if suffix in _AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in _VIDEO_EXTENSIONS:
+        return "video"
+    if suffix in _IMAGE_EXTENSIONS:
+        return "image"
+
+    guessed = (mimetypes.guess_type(clean_path)[0] or "").partition("/")[0].lower()
+    return guessed if guessed in {"image", "audio", "video"} else fallback
+
+
 def _separate_reference_paths(config: Seedance2VideoConfig) -> Seedance2VideoConfig:
     images = config.reference_image_paths
     audios = config.reference_audio_paths
     misplaced_audio = {
-        path
-        for path in images
-        if (mimetypes.guess_type(Path(path))[0] or "").startswith("audio/")
+        path for path in images if infer_reference_media_kind(path) == "audio"
     }
     misplaced_images = {
-        path
-        for path in audios
-        if (mimetypes.guess_type(Path(path))[0] or "").startswith("image/")
+        path for path in audios if infer_reference_media_kind(path) == "image"
     }
     if misplaced_audio or misplaced_images:
         # Append recovered references after the destination's existing entries.

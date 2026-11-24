@@ -41,6 +41,7 @@ from novelvideo.generators.lingke_media import (
     lingke_api_path,
     lingke_task_outcome,
 )
+from novelvideo.seedance2_i2v.models import infer_reference_media_kind
 from novelvideo.authz_retry import retry_authz_read
 from novelvideo.i18n_message import lmsg
 from novelvideo.ports import (
@@ -111,6 +112,87 @@ _VIDEO_SUBMIT_MEDIA_FIELDS = (
     "reference_videos",
     "reference_audios",
 )
+
+
+def _normalize_reference_media_type(ref_type: object, path: object) -> str:
+    raw_type = str(ref_type or "image").strip().lower()
+    if raw_type in {"image", "audio", "video"} and str(path or "").strip():
+        return infer_reference_media_kind(path, fallback=raw_type)
+    return raw_type
+
+
+def _enforce_separate_media_fields(payload: dict[str, object]) -> None:
+    """Guarantee audio and image references never leak into each other's wire fields."""
+    metadata = payload.get("metadata")
+    meta_dict = metadata if isinstance(metadata, dict) else None
+
+    def _clean_list(source: object) -> list[str]:
+        if not isinstance(source, list):
+            return []
+        return [
+            str(item).strip()
+            for item in source
+            if isinstance(item, str) and str(item).strip()
+        ]
+
+    def _dedupe(items: list[str]) -> list[str]:
+        return list(dict.fromkeys(items))
+
+    def _separate_pair(
+        container: dict[str, object],
+        image_key: str,
+        audio_key: str,
+        *,
+        extra_image_keys: tuple[str, ...] = (),
+    ) -> None:
+        raw_images = _clean_list(container.get(image_key))
+        raw_audios = _clean_list(container.get(audio_key))
+        moved_audios: list[str] = []
+        moved_images: list[str] = []
+        kept_images: list[str] = []
+        kept_audios: list[str] = []
+
+        for key in extra_image_keys:
+            val = container.get(key)
+            if isinstance(val, str) and val.strip():
+                if infer_reference_media_kind(val) == "audio":
+                    moved_audios.append(val.strip())
+                    container.pop(key, None)
+
+        for item in raw_images:
+            if infer_reference_media_kind(item) == "audio":
+                moved_audios.append(item)
+            else:
+                kept_images.append(item)
+
+        for item in raw_audios:
+            if infer_reference_media_kind(item) == "image":
+                moved_images.append(item)
+            else:
+                kept_audios.append(item)
+
+        if moved_audios or moved_images:
+            final_images = _dedupe([*kept_images, *moved_images])
+            final_audios = _dedupe([*kept_audios, *moved_audios])
+            if final_images:
+                container[image_key] = final_images
+            else:
+                container.pop(image_key, None)
+            if final_audios:
+                container[audio_key] = final_audios
+            else:
+                container.pop(audio_key, None)
+
+    _separate_pair(payload, "images", "audios", extra_image_keys=("image",))
+    if meta_dict is not None:
+        _separate_pair(
+            meta_dict,
+            "reference_images",
+            "reference_audios",
+            extra_image_keys=("image_url", "first_frame_image", "last_frame_image"),
+        )
+        if not meta_dict:
+            payload.pop("metadata", None)
 
 
 def _video_submit_media_summary(payload: dict) -> dict[str, object]:
@@ -1634,7 +1716,9 @@ class HuimengVideoGenerator(VideoGeneratorBase):
             path = str(getattr(ref, "path", "") or "").strip()
             if not path:
                 continue
-            ref_type = str(getattr(ref, "type", "") or "image").strip().lower()
+            ref_type = _normalize_reference_media_type(
+                getattr(ref, "type", ""), path
+            )
             role = str(getattr(ref, "role", "") or "").strip()
             label = f"{role or ref_type}参考"
             data_url = self._to_upload_url(
@@ -2406,7 +2490,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         last_frame_path: str | None,
         references: object,
         log: Callable[[str], None],
-        correct_reference_image_types: bool = False,
+        correct_reference_image_types: bool = True,
     ) -> None:
         """Populate the stable DramaClaw-to-RelayClaw video media protocol."""
 
@@ -2459,16 +2543,17 @@ class NewApiVideoGenerator(VideoGeneratorBase):
 
         raw_items: list[tuple[str, str, str]] = []
         if normalized_mode == "all_reference" and image_path:
-            metadata["image_url"] = await self._relay_frame_input(image_path)
+            image_kind = infer_reference_media_kind(image_path, fallback="image")
+            if image_kind == "image":
+                metadata["image_url"] = await self._relay_frame_input(image_path)
+            else:
+                raw_items.append((image_kind, image_path, ""))
         for ref in references if isinstance(references, list) else []:
             media_type = str(getattr(ref, "type", "") or "image").strip().lower()
             path = str(getattr(ref, "path", "") or "").strip()
             role = str(getattr(ref, "role", "") or "").strip()
-            if correct_reference_image_types and media_type == "image" and path:
-                media_path = urllib.parse.urlsplit(path).path
-                kind = (mimetypes.guess_type(media_path)[0] or "").partition("/")[0]
-                if kind in {"audio", "video"}:
-                    media_type = kind
+            if correct_reference_image_types and path:
+                media_type = _normalize_reference_media_type(media_type, path)
             if path and media_type in {"image", "video", "audio", "file", "link"}:
                 raw_items.append((media_type, path, role))
 
@@ -2804,10 +2889,12 @@ class NewApiVideoGenerator(VideoGeneratorBase):
     ) -> dict[str, list[str]]:
         reference_urls: dict[str, list[str]] = {}
         for ref in references or []:
-            ref_type = str(getattr(ref, "type", "") or "image").strip().lower()
             path = str(getattr(ref, "path", "") or "").strip()
             if not path:
                 continue
+            ref_type = _normalize_reference_media_type(
+                getattr(ref, "type", ""), path
+            )
             if ref_type == "image":
                 key = "reference_images"
                 default_ext = "png"
@@ -3447,10 +3534,14 @@ class NewApiVideoGenerator(VideoGeneratorBase):
             "" if organization_request else self.direct_provider,
             request_base_url,
         )
+        request_host = (urllib.parse.urlsplit(request_base_url).hostname or "").lower()
         zeroshell_yk_target = (
             not organization_request
             and not lingke_target
-            and urllib.parse.urlsplit(request_base_url).hostname == "zeroshell.top"
+            and (
+                request_host == "zeroshell.top"
+                or request_host.endswith(".zeroshell.top")
+            )
             and str(payload["model"]).lower() == "yk-sd2.5-2"
         )
         video_route = "/video/generations"
@@ -3566,7 +3657,6 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             last_frame_path=last_frame_path,
                             references=kwargs.get("references"),
                             log=log,
-                            correct_reference_image_types=zeroshell_yk_target,
                         )
                     except (ValueError, FileNotFoundError) as exc:
                         return await fail_before_submit(str(exc))
@@ -3605,12 +3695,12 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     reference_image_paths: list[str] = []
                     video_reference_paths: list[str] = []
                     for ref in kwargs.get("references") or []:
-                        ref_type = (
-                            str(getattr(ref, "type", "") or "image").strip().lower()
-                        )
                         path = str(getattr(ref, "path", "") or "").strip()
                         if not path:
                             continue
+                        ref_type = _normalize_reference_media_type(
+                            getattr(ref, "type", ""), path
+                        )
                         if ref_type == "video":
                             video_reference_paths.append(path)
                             continue
@@ -3706,11 +3796,13 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     first_frame_path = image_path
                     reference_image_paths: list[str] = []
                     for ref in kwargs.get("references") or []:
-                        ref_type = (
-                            str(getattr(ref, "type", "") or "image").strip().lower()
-                        )
                         path = str(getattr(ref, "path", "") or "").strip()
-                        if not path or ref_type != "image":
+                        if not path:
+                            continue
+                        ref_type = _normalize_reference_media_type(
+                            getattr(ref, "type", ""), path
+                        )
+                        if ref_type != "image":
                             continue
                         role = str(getattr(ref, "role", "") or "").strip()
                         if not first_frame_path and "首帧" in role:
@@ -3868,7 +3960,6 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             last_frame_path=last_frame_path,
                             references=kwargs.get("references"),
                             log=log,
-                            correct_reference_image_types=zeroshell_yk_target,
                         )
                     except Exception as exc:
                         return await fail_before_submit(
@@ -3922,6 +4013,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                     payload, media_type="video"
                 )
                 payload = enforce_newapi_video_duration_contract(payload)
+                _enforce_separate_media_fields(payload)
                 if lingke_target:
                     payload = build_lingke_video_payload(
                         payload,
@@ -3936,7 +4028,8 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                         or ([payload["image"]] if payload.get("image") else []),
                         "videos": payload.get("videos")
                         or native_metadata.get("reference_videos"),
-                        "audios": payload.get("audios"),
+                        "audios": payload.get("audios")
+                        or native_metadata.get("reference_audios"),
                     }
                     payload = {
                         "model": payload["model"],
