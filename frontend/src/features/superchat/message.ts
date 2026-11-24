@@ -34,6 +34,7 @@ const HIDDEN_TOOL_STATUS_NAMES = new Set<string>([
   "freezone_layout_nodes",
   "freezone_move_nodes",
   "freezone_open_mainline_projection",
+  "freezone_organize_canvas",
   "freezone_run_node_action",
   "freezone_select_nodes",
   "freezone_summarize_canvas",

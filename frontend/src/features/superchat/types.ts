@@ -282,6 +282,7 @@ export type ServerFrame =
     }
   | {
       type: "canvas.context.request";
+      scope?: ChatScope;
       turn_id?: string;
       bridge_key?: string;
       project_id?: string | null;

@@ -7,6 +7,7 @@ import {
   reportCanvasCommandToolResult,
 } from "@/features/freezone/canvasCommandToolResult";
 import { reportCanvasContextToolResult } from "@/features/freezone/canvasContextToolResult";
+import { rejectUnhydratedCanvasContext } from "@/features/freezone/FreezoneShell";
 import { api } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
@@ -14,6 +15,48 @@ vi.mock("@/lib/api", () => ({
     post: vi.fn(() => Promise.resolve({ ok: true })),
   },
 }));
+
+describe("canvas context hydration guard", () => {
+  const ready = {
+    status: "ready" as const,
+    hydratedCanvasId: "canvas-a",
+    hydratedProject: "project-a",
+    projectId: "project-a",
+    canvasId: "canvas-a",
+    bridgeKey: "bridge-a",
+    turnId: "turn-a",
+    anchorTextPrefix: null,
+    agentId: "agent-a",
+    label: "Canvas context",
+  };
+
+  it.each([
+    { status: "loading" as const, hydratedCanvasId: null, hydratedProject: null },
+    { status: "loading" as const },
+    { status: "error" as const },
+    { status: "conflict" as const },
+    { hydratedCanvasId: "old-canvas" },
+    { hydratedProject: "old-project" },
+  ])("reports a failed result without context for %o", (overrides) => {
+    vi.mocked(api.post).mockClear();
+    expect(rejectUnhydratedCanvasContext({ ...ready, ...overrides })).toBe(true);
+    expect(api.post).toHaveBeenCalledOnce();
+    expect(api.post).toHaveBeenCalledWith("api/v1/chat/canvas-context-tool-result", {
+      json: expect.objectContaining({
+        bridge_key: "bridge-a", project_id: "project-a", canvas_id: "canvas-a",
+        tool_call_status: "failed", canvas_context_status: "failed", ok: false,
+        responses: [], errors: [expect.stringContaining("画布尚未加载完成")],
+      }),
+      timeout: 30_000,
+    });
+  });
+
+  it.each(["ready", "saving"] as const)("allows the current hydrated canvas while %s", (status) => {
+    vi.mocked(api.post).mockClear();
+    expect(rejectUnhydratedCanvasContext({ ...ready, status })).toBe(false);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+});
 
 describe("Freezone canvas tool result reporting", () => {
   it.each([false, true])("reports unverified historical results without encouraging a retry (known failure=%s)", (failed) => {

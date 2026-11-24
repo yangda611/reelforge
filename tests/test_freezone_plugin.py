@@ -85,6 +85,40 @@ def _load_plugin_module():
     return module
 
 
+def test_director_council_tool_uses_bound_canvas_without_forwarding_scope_overrides(monkeypatch):
+    plugin = _load_plugin_module()
+    monkeypatch.setenv("DRAMACLAW_PROJECT_ID", "p")
+    monkeypatch.setenv("DRAMACLAW_CANVAS_ID", "c")
+    monkeypatch.setattr(plugin, "_available", lambda: True)
+    requests = []
+
+    def request(method, path, *, body, **kwargs):
+        requests.append((method, path, body))
+        if body["action"] == "compile":
+            payload = {
+                "ok": True, "status": "ready", "revision": "v002", "preview_id": body["preview_id"],
+                "prompts": [{"kind": "video", "target": 1, "text": "Walk in."}], "review": [],
+            }
+        else:
+            payload = {"ok": True, "status": "needs_confirmation", "confirmation": ["pace"]}
+        return plugin._decode_response(200, json.dumps(payload))
+
+    monkeypatch.setattr(plugin, "_request", request)
+    _, schema, handle = next(item for item in plugin.TOOLS if item[0] == "freezone_plan_director_council")
+    payload = {"action": "preview", "request": "Plan the next shot"}
+    result = handle(payload)
+    Draft202012Validator(schema["output_schema"]).validate(result)
+    assert result["status"] == "needs_confirmation"
+    assert requests == [("POST", "/projects/p/freezone/canvases/c/director-council", payload)]
+    denied = handle({**payload, "canvas_id": "wrong"})
+    assert denied["status"] == "scope_mismatch"
+    assert len(requests) == 1
+    compiled = handle({"action": "compile", "preview_id": "a" * 32, "prompts_authorized": True})
+    Draft202012Validator(schema["output_schema"]).validate(compiled)
+    assert compiled["status"] == "ready"
+    assert compiled["prompt_revision"] == "v002"
+
+
 def test_node_create_schema_forwards_selected_model(monkeypatch):
     plugin = _load_plugin_module()
     requests = []
@@ -1289,6 +1323,89 @@ def test_handwritten_workflow_batch_cannot_bypass_dynamic_plan():
     assert result["status"] == "wrong_tool_dynamic_workflow"
     assert result["next_action"] == "correct_same_workflow_plan"
     assert "do not ask the user" in result["agent_instruction"].lower()
+
+
+def test_standalone_batch_of_one_node_kind_is_not_a_handwritten_workflow():
+    """Creating N nodes of one kind is canvas authoring, not a workflow.
+
+    Regression: "extract every scene and prop, create image nodes with prompts,
+    do not generate" produced 19 imageGenNode creates with no edges and was
+    rejected as a hand-written workflow, so none of the requested nodes could be
+    written. Nested prompts also mentioned 产品 (product), which the old text
+    heuristic treated as a workflow hint.
+    """
+    plugin = _load_plugin_module()
+    commands = [
+        {
+            "type": "create_node",
+            "client_id": f"prop_{index}",
+            "node_type": "imageGenNode",
+            "position": {"x": 0, "y": index * 100},
+            "data": {
+                "displayName": f"道具图 | 物品 {index}",
+                "prompt": "电影写实产品静物摄影",
+            },
+        }
+        for index in range(19)
+    ]
+
+    assert plugin._looks_like_handwritten_workflow_batch(commands) is False
+    # Presentation commands alone never make a batch a workflow.
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [*commands, {"type": "select_nodes", "node_ids": ["prop_0"]}]
+    )
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [*commands, {"type": "layout_nodes", "mode": "grid"}]
+    )
+    # Wiring only the nodes this batch creates is still one authoring batch.
+    assert not plugin._looks_like_handwritten_workflow_batch(
+        [
+            *commands,
+            {
+                "type": "create_edge",
+                "source": "prop_0",
+                "target": "prop_1",
+                "link_type": "media_input_for",
+            },
+        ]
+    )
+
+
+def test_batch_mixing_kinds_or_wiring_existing_nodes_is_still_a_workflow():
+    plugin = _load_plugin_module()
+    image_creates = [
+        {
+            "type": "create_node",
+            "client_id": f"c{index}",
+            "node_type": "imageGenNode",
+            "data": {"prompt": "p"},
+        }
+        for index in range(3)
+    ]
+    video_creates = [
+        {
+            "type": "create_node",
+            "client_id": f"v{index}",
+            "node_type": "videoNode",
+            "data": {"prompt": "p"},
+        }
+        for index in range(2)
+    ]
+
+    # Mixed production stages hand-authored as commands.
+    assert plugin._looks_like_handwritten_workflow_batch(image_creates + video_creates)
+    # A new node consumed by a node this batch does not create.
+    assert plugin._looks_like_handwritten_workflow_batch(
+        [
+            *image_creates,
+            {
+                "type": "create_edge",
+                "source": "c0",
+                "target": "existing-video-node",
+                "link_type": "media_input_for",
+            },
+        ]
+    )
 
 
 def test_clarification_cannot_offer_workflow_plan_bypass(monkeypatch):
@@ -9843,7 +9960,7 @@ def test_canvas_command_tools_expose_discriminated_minimal_schema():
     assert set(emit["properties"]) == {"project_id", "canvas_id", "commands"}
 
     variants = emit["properties"]["commands"]["items"]["oneOf"]
-    assert len(variants) == 18
+    assert len(variants) == 22
     by_type = {}
     for variant in variants:
         by_type.setdefault(variant["properties"]["type"]["enum"][0], []).append(variant)
@@ -9872,10 +9989,149 @@ def test_canvas_command_tools_expose_discriminated_minimal_schema():
         {"type", "pairs"},
     ]
     assert [set(item["properties"]) for item in by_type["move_nodes"]] == [
-        {"type", "positions"},
+        {"type", "positions", "deltas"},
         {"type", "deltas"},
+        {"type", "node_ids", "dx", "dy"},
+        {"type", "node_ids", "position"},
+        {"type", "node_ids", "x", "y"},
     ]
     assert "direction" in by_type["run_workflow"][0]["properties"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ({"type": "move_nodes", "node_ids": ["node-a"], "position": {"x": -11000, "y": 200}},
+         {"type": "move_nodes", "positions": {"node-a": {"x": -11000, "y": 200}}}),
+        ({"type": "move_nodes", "node_ids": ["node-a"], "x": -11000, "y": 200},
+         {"type": "move_nodes", "positions": {"node-a": {"x": -11000, "y": 200}}}),
+        ({"type": "move_nodes", "node_ids": ["node-a", "node-b"], "dy": 150},
+         {"type": "move_nodes", "deltas": {"node-a": {"x": 0, "y": 150}, "node-b": {"x": 0, "y": 150}}}),
+    ],
+)
+def test_move_command_aliases_share_validation_and_emit_normalization(monkeypatch, command, expected):
+    plugin = _load_plugin_module()
+    original = copy.deepcopy(command)
+    schemas = {name: schema for name, schema, _handler in plugin.TOOLS}
+    Draft202012Validator(schemas["freezone_emit_canvas_command"]["parameters"]).validate(
+        {"commands": [command]}
+    )
+    validated = []
+    emitted = []
+    monkeypatch.setattr(plugin, "_request_canvas_context_from_frontend", lambda **kwargs: validated.append(kwargs) or {"ok": True})
+    monkeypatch.setattr(plugin, "_resolve_canvas_scope_for_write", lambda *_: ("p", "c", None))
+    monkeypatch.setattr(plugin, "_revision_conflict_write_error", lambda *_: None)
+    monkeypatch.setattr(plugin, "_resolve_canvas_generation_recommendations", lambda *_: None)
+    monkeypatch.setattr(plugin, "_external_generation_parameter_preflight", lambda *_: None)
+    monkeypatch.setattr(plugin, "_mcp_direct_canvas_apply_enabled", lambda: False)
+    monkeypatch.setattr(plugin, "_external_mcp_agent_enabled", lambda: False)
+    monkeypatch.setattr(plugin, "_dispatch_frontend_canvas_commands", lambda **kwargs: emitted.append(kwargs) or {"ok": True})
+
+    plugin._handle_validate_commands({"project_id": "p", "canvas_id": "c", "commands": [copy.deepcopy(command)]})
+    plugin._handle_emit_canvas_command({"project_id": "p", "canvas_id": "c", "commands": [copy.deepcopy(command)]})
+
+    assert validated[0]["requests"][0]["payload"]["commands"] == [expected]
+    assert emitted[0]["commands"] == [expected]
+    assert command == original
+
+
+@pytest.mark.parametrize(("command", "expected"), [
+    ({"type": "move_nodes", "positions": {"node-a": {"x": 300, "y": 120}}, "deltas": {"node-b": {"x": 10, "y": -10}}},
+     {"type": "move_nodes", "positions": {"node-a": {"x": 300, "y": 120}}, "deltas": {"node-b": {"x": 10, "y": -10}}}),
+    ({"type": "move_nodes", "positions": [{"node_id": "node-a", "position": {"x": 300, "y": 120}}]},
+     {"type": "move_nodes", "positions": {"node-a": {"x": 300, "y": 120}}}),
+    ({"type": "move_nodes", "node_id": "node-a", "position": {"x": 300, "y": 120}},
+     {"type": "move_nodes", "positions": {"node-a": {"x": 300, "y": 120}}}),
+    ({"type": "move_nodes", "moves": [{"node_id": "node-a", "x": 300, "y": 120}, {"node_id": "node-b", "dx": 10}]},
+     {"type": "move_nodes", "positions": {"node-a": {"x": 300, "y": 120}}, "deltas": {"node-b": {"x": 10, "y": 0}}}),
+])
+def test_move_normalization_preserves_existing_frontend_shapes_without_mutation(command, expected):
+    plugin = _load_plugin_module()
+    original = copy.deepcopy(command)
+    assert plugin._validate_write_commands_shape("p", "c", [command]) is None
+    assert plugin._normalize_move_commands([command]) == [expected]
+    assert command == original
+
+
+@pytest.mark.parametrize("command", [
+    {"type": "move_nodes"},
+    {"type": "move_nodes", "positions": {}},
+    {"type": "move_nodes", "positions": {"node-a": {"x": True, "y": 0}}},
+    {"type": "move_nodes", "positions": {"node-a": {"x": float("inf"), "y": 0}}},
+    {"type": "move_nodes", "positions": {"node-a": {"x": 10 ** 400, "y": 0}}},
+    {"type": "move_nodes", "positions": {"node-a": {"x": "100", "y": 0}}},
+    {"type": "move_nodes", "positions": {"node-a": {"x": 0}}},
+    {"type": "move_nodes", "node_ids": ["node-a", "node-b"], "position": {"x": 0, "y": 0}},
+    {"type": "move_nodes", "node_ids": ["node-a"], "x": 0},
+    {"type": "move_nodes", "node_ids": ["node-a"], "dx": False},
+    {"type": "move_nodes", "node_ids": ["node-a"], "dy": float("nan")},
+    {"type": "move_nodes", "positions": {"node-a": {"x": 0, "y": 0}, "node-b": {"x": "100", "y": 0}}},
+])
+def test_invalid_move_commands_fail_before_frontend_dispatch(monkeypatch, command):
+    plugin = _load_plugin_module()
+    dispatched = []
+    monkeypatch.setattr(plugin, "_request_canvas_context_from_frontend", lambda **kwargs: dispatched.append(kwargs))
+    monkeypatch.setattr(plugin, "_resolve_canvas_scope_for_write", lambda *_: ("p", "c", None))
+    monkeypatch.setattr(plugin, "_revision_conflict_write_error", lambda *_: None)
+    monkeypatch.setattr(plugin, "_dispatch_frontend_canvas_commands", lambda **kwargs: dispatched.append(kwargs))
+
+    for handler in (plugin._handle_validate_commands, plugin._handle_emit_canvas_command):
+        result = handler({"project_id": "p", "canvas_id": "c", "commands": [copy.deepcopy(command)]})
+        assert result["status"] == "invalid_command_schema"
+        assert "commands[0]" in result["error"]
+        assert "positions" in result["error"]
+        assert "dx" in result["error"]
+    assert dispatched == []
+
+
+@pytest.mark.parametrize("fields", [
+    {"mode": "dagre"},
+    {"mode": "tree"},
+    {"mode": 123},
+    {"mode": " grid "},
+    {"algorithm": "grid"},
+    {"mode": "grid", "algorithm": "dagre"},
+    {"mode": "grid", "node_ids": "node-a"},
+    {"mode": "grid", "node_ids": [""]},
+    {"mode": "grid", "node_ids": ["  "]},
+    {"mode": "grid", "node_ids": [123]},
+    {"mode": "grid", "node_ids": None},
+])
+def test_invalid_layout_commands_fail_before_frontend_dispatch(monkeypatch, fields):
+    plugin = _load_plugin_module()
+    dispatched = []
+    monkeypatch.setattr(plugin, "_request_canvas_context_from_frontend", lambda **kwargs: dispatched.append(kwargs))
+    monkeypatch.setattr(plugin, "_resolve_canvas_scope_for_write", lambda *_: ("p", "c", None))
+    monkeypatch.setattr(plugin, "_revision_conflict_write_error", lambda *_: None)
+    monkeypatch.setattr(plugin, "_dispatch_frontend_canvas_commands", lambda **kwargs: dispatched.append(kwargs))
+    original = copy.deepcopy(fields)
+    for handler in (plugin._handle_validate_commands, plugin._handle_emit_canvas_command):
+        result = handler({"project_id": "p", "canvas_id": "c", "commands": [{"type": "layout_nodes", **fields}]})
+        assert result["status"] == "invalid_command_schema"
+        assert "commands[0]" in result["error"]
+        assert '"mode":"auto"' in result["error"]
+    result = plugin._handle_layout_nodes({"project_id": "p", "canvas_id": "c", **fields})
+    assert result["status"] == "invalid_command_schema"
+    assert '"mode":"auto"' in result["error"]
+    assert fields == original
+    assert dispatched == []
+
+
+@pytest.mark.parametrize("mode", ["auto", "dag", "horizontal", "vertical", "grid"])
+@pytest.mark.parametrize("node_fields", [{}, {"node_ids": []}, {"node_ids": ["node-a", "node-b"]}])
+def test_valid_layout_commands_preserve_shape(monkeypatch, mode, node_fields):
+    plugin = _load_plugin_module()
+    command = {"type": "layout_nodes", "mode": mode, **node_fields}
+    original = copy.deepcopy(command)
+    validated = []
+    emitted = []
+    monkeypatch.setattr(plugin, "_request_canvas_context_from_frontend", lambda **kwargs: validated.append(kwargs) or {"ok": True})
+    monkeypatch.setattr(plugin, "_single_write_command", lambda args, item: emitted.append(item) or {"ok": True})
+    plugin._handle_validate_commands({"project_id": "p", "canvas_id": "c", "commands": [command]})
+    plugin._handle_layout_nodes({"project_id": "p", "canvas_id": "c", "mode": mode, **node_fields})
+    assert validated[0]["requests"][0]["payload"]["commands"] == [original]
+    assert emitted == [original]
+    assert command == original
 
 
 def test_media_result_guidance_requires_add_next_and_run_in_one_batch():
@@ -10138,6 +10394,52 @@ def test_canvas_command_schema_accepts_minimal_variants_and_rejects_union_shell(
         validator.validate({"commands": [union_shell]})
 
 
+@pytest.mark.parametrize("handler_name", ["_handle_validate_commands", "_handle_emit_canvas_command"])
+@pytest.mark.parametrize("command_type", ["create_node", "add_next_node"])
+@pytest.mark.parametrize("title", [None, "Canonical title"])
+def test_text_annotation_schema_and_execution_accept_display_name(
+    monkeypatch, handler_name, command_type, title
+):
+    plugin = _load_plugin_module()
+    captured = []
+    data = {"displayName": "Displayed title", "content": "Annotation content"}
+    if title is not None:
+        data["title"] = title
+    command = {"type": command_type, "node_type": "textAnnotationNode", "data": data}
+    if command_type == "add_next_node":
+        command["source_node_id"] = "source-a"
+    args = {"project_id": "project-a", "canvas_id": "canvas-a", "commands": [command]}
+    original = copy.deepcopy(args)
+    tool_name = (
+        "freezone_validate_canvas_commands"
+        if handler_name == "_handle_validate_commands"
+        else "freezone_emit_canvas_command"
+    )
+    schema = next(schema for name, schema, _ in plugin.TOOLS if name == tool_name)
+    Draft202012Validator(schema["parameters"]).validate(args)
+    monkeypatch.setattr(
+        plugin, "_resolve_canvas_scope_for_write", lambda *_: ("project-a", "canvas-a", None)
+    )
+    monkeypatch.setattr(plugin, "_revision_conflict_write_error", lambda *_: None)
+
+    def capture(**kwargs):
+        captured.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(plugin, "_request_canvas_context_from_frontend", capture)
+    monkeypatch.setattr(plugin, "_dispatch_frontend_canvas_commands", capture)
+    result = getattr(plugin, handler_name)(args)
+    assert result["ok"] is True
+    forwarded = captured[0]
+    commands = (
+        forwarded["requests"][0]["payload"]["commands"]
+        if handler_name == "_handle_validate_commands"
+        else forwarded["commands"]
+    )
+    assert commands[0]["data"] == {**data, "title": title or "Displayed title"}
+    assert args == original
+
+
 def test_freezone_mcp_default_create_node_uses_frontend_bridge(monkeypatch):
     plugin = _load_plugin_module()
     pending_commands = []
@@ -10196,7 +10498,7 @@ def test_freezone_mcp_default_create_node_uses_frontend_bridge(monkeypatch):
     assert envelope["external_mcp_command"] is True
     assert envelope["turn_id"] == "turn-create-node"
     assert envelope["commands"][0]["type"] == "create_node"
-    assert str(pending_commands[0]["bridge_dir"]) == "/tmp/dramaclaw-test-bridge"
+    assert Path(pending_commands[0]["bridge_dir"]) == Path("/tmp/dramaclaw-test-bridge")
 
 
 def test_freezone_hermes_bridge_does_not_auto_apply_mcp_marker(monkeypatch):

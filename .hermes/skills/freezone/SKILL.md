@@ -23,12 +23,25 @@ compatibility: Requires Freezone/虾画 chat surface with frontend-injected curr
 
 ## 意图判断
 
+- **默认导演组**：仅当用户做单场设计、咨询分镜方向、或明确要求"六部门 / 导演组 / YD / 预览分镜与提示词"且未要求直接整批落画布搭建时，调用 `freezone_plan_director_council`（见 `references/director-council.md`）。
+- **剧本全链路拆解落画布（高频核心路径）**：当用户给出剧本/剧情并要求「提取人物/道具/场景建节点写提示词」「拆 ≤30s Clip」「衍生视频提示词节点」「把所需资产连线到对应 Clip」「分组整理排版」时，**不要再额外浪费轮次 `skill_view`**：
+  - 若仅创建文本提示词卡或整理重排已有节点，直接调 `freezone_emit_canvas_command` / `freezone_organize_canvas` / `freezone_layout_nodes(mode="auto")`。
+  - 若同时包含 `imageGenNode` 与 `videoNode`，**严禁调 `freezone_emit_canvas_command`**（会被 `wrong_tool_dynamic_workflow` 拦截）：
+    * 若用户未指定自定义 Skill，走 `text-to-image-video`；若用户指定/选中了专用或导入 Skill（如 `imported-*`），必须原样使用该 Skill 的 `skill.version`（如 `"1.0.0"`，绝不改写为 `"1"`）、补齐其 `input_contract.required`（如 `narrative_goal`、`emotional_goal`），并仅使用其 `available_recipes[*].id`（不得跨 Skill 混用 `operation_id`）。
+    * 连线严格对齐：`text->media` 用 `"prompt_for"`（严禁用 `"context_for"`），`image/video->image/video` 用 `"media_input_for"`（严禁用 `"composition_input_for"`），`compose` 用 `"composition_input_for"`。
+    * `freezone_prepare_workflow_plan_draft` 传 `run_after_create=false`、**省略 `generation_answers` 与 `expected_node_count`**、写 `"inputs": {..., "video_generation_mode": "allReference"}`、节点用 `node_type` 与 `data.workflowCatalog.recipeId`、Clip `durationSec<=30`、`groups` 每组 `>=2` 个 `node_ids`；在 `auto_execute` 下紧接调用 `freezone_confirm_workflow_draft`。
+    * **大画布分批扩展（≥20 新节点 / 50+ 总节点）**：单批控制在 **`<=18` 节点、`<=35` 边**，提示词 60–120 字紧凑写法；超过 20 节点拆成 2 个连续批次（各自取独立 `operation_id` 并确认落画布，前缀区分不重名），最后调 `freezone_organize_canvas` 统一按类分组、清退空组并消除重叠。细节首次不确定时查阅 `references/screenplay-breakdown-guide.md`。
+- **轻量操作与专用流程**：查素材、挪节点、只改现有文本或提示词的用字、运行现有工作流，按各自原流程处理。用户选定的专用工作流、互动剧情结构和剪辑工作区的时间线操作使用对应工具。
+
 - **解释/咨询类**：用户问"怎么 / 如何 / 什么是 / 介绍 / 说明 / 教我 / how to / what is / explain / show me how"时，只用自然语言回答；不要创建、修改、连接、布局、运行节点。
 - **画布操作类**：用户明确要求在画布上创建、生成、搭建、添加、连接、修改、删除、布局、选择、打开工具、运行、应用或执行时，进入画布命令模式。
 - **开放性创意/没思路类**：用户说"想做...没思路""帮我想想""给点建议""有什么方向""怎么策划"时，先用自然语言提问、给方向或给 2-3 个可选方案；不要直接创建工作流、节点、连线或分组。只有用户继续明确说"就按这个做""落到画布""搭出来""创建这些节点""生成工作流"时，才进入画布命令模式。
 - **创意咨询**：可以自然语言回答；如果用户希望"落到画布"，使用画布工具创建可继续工作的材料。
 - **选择式澄清/互动类**：当用户希望助手通过提问推进对话，或当前任务需要用户补充/选择几个关键信息后才能继续时，优先调用 `freezone_request_user_clarification` 展示问题卡片。适用场景包括：帮用户理清想法、做偏好选择、做小测验/问答互动、确认方向、收集必要条件。问题应贴近用户表达方式，让用户能凭直觉选择或补充；不要询问内部实现细节、工具参数、节点类型、link_type、schema、模型参数等。若只是普通闲聊、简单知识问答、单个自然追问，或用户已经给出明确指令，则直接自然语言回复，不要强行发卡片。
-- **全局画布请求**：用户说"看看画布""整理当前画布"时，优先使用当前注入的画布上下文；不足时再读取。
+- **全局画布请求**：用户说"看看画布""整理当前画布""整理所有节点"时，优先调用一次 `freezone_get_canvas_ontology`（已包含全量节点 `node_id`、`node_type`、`label`、`parent_id`、`size` 和 `text_preview`）理解全局，不要逐个节点调用 `freezone_get_node_detail`。
+- **画布视觉**：出现 `[CANVAS_VISUAL_OVERVIEW]` 且本轮收到图片输入时，第一张是按真实节点位置、尺寸和图片预览生成的画布概览；图上编号与同段的真实 `node_id` 对应。它保留当前重叠，不是新节点，也不是浏览器逐像素截图。结合图片与结构判断，不要再笼统声称“我只能看坐标”。标记为不可用的预览不能当作已看见；没有收到图片输入或出现不可用标记时如实说明。
+- **整理已有画布**：优先保留现有节点和真实依赖，禁止为整理而删除节点、非空组或批量清空画布，也不要复制节点再删原节点。只需消除重叠、按拓扑排整齐时，直接调用 `freezone_layout_nodes(mode="auto")`，前端会按真实节点尺寸和组边界自动完成拓扑无重叠布局，**不要**手算大量节点坐标去填 `move_nodes.positions`。任何删除/清空命令都必须由用户在确认卡中显式确认；不得自动执行。布局前的概览不能作为布局后的验收证据，须核对执行回执；没有成功回执不宣称整理完成。
+- **语义分类与工作流顺序**：当用户要求把整张画布按内容分类整理时，先调用一次 `freezone_get_canvas_ontology` 读取全部节点信息，然后**优先用一次 `freezone_organize_canvas` 完成归组、清理旧空组和无重叠自动排版**（`categories=[{"label": ..., "node_ids": [...]}]`、`prune_empty_groups=true`、`layout_mode="auto"`；支持单节点成组，不会因某类只有一个节点而失败）。默认组顺序为「人物/角色 → 场景 → 分镜/镜头 → 后续生产流程」。组内前端会自动按真实制作依赖顺序无重叠排列。无法有把握归类的内容保持独立，不猜测或伪造连线。
 - **剪辑工作区内的剪辑请求**：`[FREEZONE_COMPOSE_WORKSPACE]` 存在且用户要剪、挪、删、分割、淡入淡出、调音量/变速、加素材或导出成片时，先 `freezone_studio_get_film`，再 `freezone_studio_edit_film` / `freezone_studio_import_media` / `freezone_studio_export_film`；禁止改该节点的 `draftTimeline`、禁止用画布命令或新工作流重建这条时间线。详见 `references/studio-editing-guide.md`。
 - **运行已有工作流**：复用已有节点、内容和连线，优先运行已有工作流；不要重新规划一套重复节点，除非用户明确要求新增、重写或替换。
 - **继续/恢复未完成工作流**：直接调用 `freezone_run_workflow` 交给确定性 DAG Runner；不要逐个读取节点、逐个触发动作，也不要自行轮询任务。一次运行返回失败后，根据返回的错误类别暂停并说明下一步，不要在同一请求或后续自动恢复中反复修改节点。
@@ -108,16 +121,25 @@ compatibility: Requires Freezone/虾画 chat surface with frontend-injected curr
 ## 画布写入原则（精简版）
 
 - 画布操作类请求的**第一输出必须是 Freezone 写入工具调用**。在写入工具调用前，禁止输出任何面向用户的文字，包括“好的”“我会…”“正在…”“已…”等确认、说明、摘要或状态。
-- `freezone_*` 工具不在工具列表里，统一用 `tool_call(name="<工具名>", arguments={...})` 调用，JSON 里先写 `name` 再写 `arguments`（`arguments` 很大时后写的 `name` 容易被漏掉），`arguments` 必须传 JSON 对象（不要传转义后的 JSON 字符串）。`tool_call` 不依赖 `tool_search`/`tool_describe`——工具名和参数已在本文件、Workflow Skill 文档或工具返回的 `agent_instruction` 里给出时，直接调用，不要再跑发现流程。
+- `freezone_*` 工具不在工具列表里，统一用 `tool_call(name="<工具名>", arguments={...})` 调用，JSON 里先写 `name` 再写 `arguments`（`arguments` 很大时后写的 `name` 容易被漏掉），`arguments` 必须传 JSON 对象（不要传转义后的 JSON 字符串）。**以下高频工具参数已在此直接给出，严禁对其先跑 `tool_search`、`tool_describe` 或 `freezone_get_node_create_schema` 探测，直接 `tool_call`：**
+  - `freezone_get_canvas_ontology`：`{"canvas_id": "<canvas_id>"}`（一次读取全量节点 `node_id` / `node_type` / `label` / `parent_id` / `size` / `text_preview` 与全部连线）
+  - `freezone_get_node_detail`：`{"canvas_id": "<canvas_id>", "node_id": "<id>"}`
+  - `freezone_organize_canvas`：`{"canvas_id": "<canvas_id>", "categories": [{"label": "人物资产", "node_ids": ["..."]}], "ungroup_node_ids": [], "layout_mode": "auto", "prune_empty_groups": true}`
+  - `freezone_layout_nodes`：`{"canvas_id": "<canvas_id>", "mode": "auto", "node_ids": []}`
+  - `freezone_group_nodes`：`{"canvas_id": "<canvas_id>", "node_ids": ["id1", "id2"], "label": "组名", "client_id": "grp_1"}`
+  - `freezone_validate_canvas_commands` / `freezone_emit_canvas_command`：`{"canvas_id": "<canvas_id>", "commands": [...]}`（命令项类型：`create_node` 带 `client_id` / `node_type` / `data`、`update_node_data`、`create_edge` 含 `source` / `target` / `link_type`、`delete_edges`、`group_nodes`、`layout_nodes`、`organize_canvas`、`delete_nodes`、`clear_canvas`）
+  - `freezone_delete_nodes`：`{"canvas_id": "<canvas_id>", "node_ids": ["..."]}` 或 `{"canvas_id": "<canvas_id>", "scope": "canvas"}`
 - 画布写入必须有依据。创建节点或编辑图结构前，先基于当前画布 summary/ontology。
 - 涉及命令结构、节点 data 或连线时，按需查询 command catalog、node create schema 和 link type catalog。
 - 用户要求创建、添加、删除、更新、连接、移动、布局、选择、打开、运行、应用或执行任何画布对象时，**必须先调用 Freezone 写入工具**。没有写入工具成功结果，就不能说画布已变化。
 - 单个明确操作可以用对应单步写入工具，也可以用 `freezone_emit_canvas_command`；工具选择可以灵活，但“必须调用写入工具并等待结果”不可省略。
 - **多节点/连线/分组/布局请求必须用一次批量命令提交**（普通非工作流编辑使用 `freezone_emit_canvas_command`；动态工作流使用草稿准备、修改和确认工具），不要连续调用多个单步工具。
+- 删除保护：删除组会级联删除全部后代节点；虾导前端会阻止通过普通 AI 命令删除非空组。若要重分类，先用原节点 ID 创建新组让成员移出旧组，再删除空旧组。`delete_nodes` 和 `clear_canvas` 属于破坏性操作，必须等待用户显式确认卡片，不可因 `auto_execute` 设置而自动确认；用户没有明确提出删除时，绝不自行删除。
 - 同一个批量命令里，如果后续命令会引用本轮新建节点（连线、分组、布局、选择、移动、运行等），创建该节点时必须显式声明 `client_id`，后续只引用这个 `client_id`。禁止用 `node_0`、`node_1`、`new_node`、`auto:*` 或任何未声明占位符表示“第几个刚创建的节点”。
 - 主题性批量工作默认组织成一个工作组：例如同一个短片方案、广告创意、分镜包、工作流、素材准备包、同一目标的一组规划/生成/合成节点。批量命令里显式加入 `group_nodes`，用清晰业务 label 命名。单独加一个节点、零散修改、删除、移动、选择、运行，或只是临时补一个不成套的节点时，不要为了“批量”而强行建组。
 - 延续已有主题时，优先复用该主题组：如果当前引用节点属于某个组，且用户是在继续这个主题补节点，优先从组内合适节点 `add_next_node` 生成真实下游；这类新增节点会自然落在同组语境里。若新增内容只是相关材料而非真实下游，创建在组附近并保持同一主题布局，不要为了把节点塞进组而伪造输入连线。
 - 多步骤、批量修改或包含连线的命令，写入前必须先 `validate`。
+- 整理画布布局优先使用 `freezone_layout_nodes(mode="auto")` 或 `freezone_organize_canvas(categories=[...], layout_mode="auto")` 由前端按真实节点宽高确定性排版；仅在用户明确要求精确移动少数节点时使用 `move_nodes.positions`（格式 `{"节点ID":{"x":300,"y":120}}`）。不要用 `move_nodes` 手算整张画布几十个节点的坐标。
 - 校验返回 `Allowed link_type values: none` 时，不要枚举重试；改用分组或保留未连接。
 - 复杂批量命令字段不明确时才读取完整命令指南；参数明确的单步工具不要加载指南。
 

@@ -66,14 +66,9 @@ After it's up, open **`http://localhost:8080`** in your browser (the app UI); th
 The frontend also needs Node.js and pnpm; use the pnpm version declared in
 `frontend/package.json`. Python alone only provides the API, not the Vite dev server.
 
-The Agent uses Codex. `scripts/start-ce.sh` downloads the public **credential-safe
-ReelForge Codex 0.164.0** build matching your host: macOS Apple Silicon/Intel or
-Linux x64/ARM64. No private repository access is needed. The first download is about
-250–310 MB and requires curl plus `shasum` (macOS) or `sha256sum` (Linux).
-The launcher checks the pinned SHA256 before execution, checks the version, and reuses
-the verified cache under `runtime/codex/bin/` on subsequent starts. Custom storage roots
-(`NOVELVIDEO_RUNTIME_DIR` / `NOVELVIDEO_DATA_ROOT`) are respected.
-Windows native startup is not supported by this launcher; use WSL2 or Docker.
+The Agent defaults to the ReelForge Hermes fork. `scripts/start-ce.sh` verifies
+or installs it in a separate environment. Use Docker on Windows and for a
+Linux setup without a configured Hermes sandbox.
 
 ### 2. Install dependencies and start
 
@@ -88,17 +83,17 @@ scripts/start-ce.sh
 
 Open `http://localhost:5173` for the Vite development UI; the API is at
 `http://localhost:8780`. The launcher installs dependencies and starts both services;
-Ctrl+C stops them. Keep `DRAMACLAW_CHAT_BACKEND=codex` in `.env`; an older setting
-selecting another backend produces an actionable error rather than a silent fallback.
+Ctrl+C stops them. An existing `DRAMACLAW_CHAT_BACKEND=codex` is an explicit
+override; change it to `hermes` to migrate. The launcher never installs or
+starts both runtimes.
 
-To manage the API and frontend separately, prepare the same runtime before starting
-the API (the standalone setup command reads exported variables, not `.env`):
+To launch the API separately with the default native runtime:
 
 ```bash
-uv sync --group dev
-CODEX_BIN="$(bash scripts/setup-codex.sh)" &&
-  CODEX_BIN="$CODEX_BIN" DRAMACLAW_CHAT_BACKEND=codex \
-    uv run --no-sync novelvideo api --host 127.0.0.1 --port 8780
+uv sync --group dev --no-install-package openai-codex-cli-bin
+bash scripts/setup-hermes.sh
+HERMES_CLI_PATH="$PWD/.cache/hermes-venv/bin/hermes" \
+  DRAMACLAW_CHAT_BACKEND=hermes uv run --no-sync novelvideo api --host 127.0.0.1 --port 8780
 ```
 
 In a second terminal, from the repository root:
@@ -107,16 +102,10 @@ In a second terminal, from the repository root:
 cd frontend && pnpm install && pnpm dev --host 127.0.0.1 --port 5173
 ```
 
-To skip downloading, set `CODEX_BIN=/absolute/path/to/codex-reelforge` in `.env`
-for the launcher, or export it before the standalone setup command. An explicit binary
-is operator-managed: the script checks that it runs, but cannot prove it contains the
-credential-safety patches. Do not use the stock Codex CLI. A download/checksum failure
-stops startup before either service is launched and never falls back to another backend.
+The supplied Compose files use the Hermes fork bundled in the API image.
+Sandbox rules are unchanged. For an explicit rollback, set `DRAMACLAW_CHAT_BACKEND=codex`;
+the native launcher will then provision the patched Codex build instead.
 
-Docker builds at v2.1.1 already include credential-safe Codex 0.164.0. Both source and
-release Compose select Codex by default; keep `DRAMACLAW_CHAT_BACKEND=codex` if setting
-it explicitly. `CODEX_BIN` in the native instructions above is a host-side path, not a
-container path.
 CE defaults to `ST_EDITION=ce`, no-login single local user, and in-process inline task execution
 (no Ray/Redis/Celery).
 

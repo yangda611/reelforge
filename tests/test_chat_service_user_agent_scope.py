@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -245,6 +246,7 @@ async def test_hermes_thread_serializes_concurrent_prompt_streams(
     async def fake_stream_turn(
         prompt: str,
         *,
+        images=(),  # noqa: ARG001
         current_project=None,  # noqa: ARG001
         trajectory_id=None,  # noqa: ARG001
         project_id=None,  # noqa: ARG001
@@ -261,7 +263,7 @@ async def test_hermes_thread_serializes_concurrent_prompt_streams(
 
     monkeypatch.setattr(thread, "_stream_turn", fake_stream_turn)
     first_task = asyncio.create_task(collect("first"))
-    await first_entered.wait()
+    await asyncio.wait_for(first_entered.wait(), timeout=2)
     second_task = asyncio.create_task(collect("second"))
     await asyncio.sleep(0)
 
@@ -4289,6 +4291,7 @@ def test_freezone_existing_execution_uses_focused_mcp_tools():
         "freezone_get_node_detail",
         "freezone_get_workflow",
         "freezone_observe_workflow_run",
+        "freezone_read_native_skill_file",
         "freezone_request_user_clarification",
         "freezone_run_node_action",
         "freezone_run_workflow",
@@ -4788,6 +4791,7 @@ def test_codex_mcp_config_renders_enabled_tools():
         '"freezone_get_canvas_ontology",'
         '"freezone_get_node_action_catalog","freezone_get_node_detail",'
         '"freezone_get_workflow","freezone_observe_workflow_run",'
+        '"freezone_read_native_skill_file",'
         '"freezone_request_user_clarification","freezone_run_node_action",'
         '"freezone_run_workflow","freezone_update_node_data"]'
     ) in overrides
@@ -5311,24 +5315,32 @@ def test_explicit_codex_does_not_fallback_when_unavailable(monkeypatch):
         chat_service._chat_backend()
 
 
-def test_chat_backend_defaults_to_codex_app_server(monkeypatch):
+def test_invalid_chat_backend_does_not_start_another_runtime(monkeypatch):
+    monkeypatch.setenv("DRAMACLAW_CHAT_BACKEND", "herems")
+    monkeypatch.setenv("SUPERTALE_CHAT_BACKEND", "codex")
+    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
+
+    with pytest.raises(RuntimeError, match="DRAMACLAW_CHAT_BACKEND"):
+        chat_service.get_chat_backend_name()
+
+
+def test_chat_backend_defaults_to_hermes_when_both_are_available(monkeypatch):
     monkeypatch.delenv("DRAMACLAW_CHAT_BACKEND", raising=False)
     monkeypatch.delenv("SUPERTALE_CHAT_BACKEND", raising=False)
     monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
     monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
-    monkeypatch.setattr(chat_service, "is_claude_backend_available", lambda: True)
 
-    assert chat_service._chat_backend() == "codex"
+    assert chat_service._chat_backend() == "hermes"
 
 
-def test_default_codex_does_not_fallback_when_unavailable(monkeypatch):
+def test_default_hermes_does_not_fallback_when_unavailable(monkeypatch):
     monkeypatch.delenv("DRAMACLAW_CHAT_BACKEND", raising=False)
     monkeypatch.delenv("SUPERTALE_CHAT_BACKEND", raising=False)
-    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: False)
-    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: True)
-    monkeypatch.setattr(chat_service, "is_claude_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_codex_backend_available", lambda: True)
+    monkeypatch.setattr(chat_service, "is_hermes_backend_available", lambda: False)
 
-    with pytest.raises(RuntimeError, match="Codex is unavailable"):
+    with pytest.raises(RuntimeError, match="hermes is unavailable"):
         chat_service._chat_backend()
 
 
@@ -5691,6 +5703,27 @@ def test_chat_run_lock_uses_named_agent_locks_dir(monkeypatch, tmp_path):
     assert lock_path.name.endswith(".lock")
 
 
+@pytest.mark.parametrize("alive", [False, True])
+def test_chat_run_lock_pid_probe_uses_windows_query(monkeypatch, alive):
+    calls = []
+
+    def query(pid):
+        calls.append(pid)
+        return alive
+
+    def signal_forbidden(*_args):
+        pytest.fail("A Windows liveness query must not signal the process")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(chat_service.os, "name", "nt")
+        patch.setattr(chat_service.os, "kill", signal_forbidden)
+        patch.setitem(sys.modules, "novelvideo.chat.codex_app_server_windows",
+                      SimpleNamespace(pid_alive=query))
+        result = chat_service._pid_is_alive(12345)
+    assert result is alive
+    assert calls == [12345]
+
+
 def test_chat_run_lock_file_expires_after_two_minutes(monkeypatch, tmp_path):
     monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
     assert chat_service._CHAT_RUN_LOCK_TTL_SECONDS == 2 * 60
@@ -6039,6 +6072,29 @@ def test_prompt_does_not_inject_mainline_continuation_into_freezone(
     )
 
     assert "[DRAMACLAW_CONTINUATION]" not in prompt
+
+
+@pytest.mark.parametrize("include_freezone_assistant_instructions", [True, False])
+def test_freezone_carries_the_default_directing_policy_on_each_turn(
+    include_freezone_assistant_instructions,
+):
+    policy_start = "[FREEZONE_DIRECTOR_ROUTING]"
+    policy_end = "[/FREEZONE_DIRECTOR_ROUTING]"
+    task = "把选中的剧本拆成分镜，先给我预览。"
+    prompt = chat_service._prompt_with_user_context(
+        "admin",
+        "project-a",
+        task,
+        tool_mode="freezone_canvas",
+        include_freezone_assistant_instructions=include_freezone_assistant_instructions,
+    )
+    assert prompt.count(policy_start) == 1
+    policy = prompt.split(policy_start, 1)[1].split(policy_end, 1)[0]
+    assert "freezone_plan_director_council" in policy
+    assert prompt.rstrip().endswith(task)
+
+    mainline = chat_service._prompt_with_user_context("admin", "project-a", task)
+    assert policy_start not in mainline
 
 
 def test_freezone_prompt_allows_creative_ideation_canvas_framework_without_mainline_generation(

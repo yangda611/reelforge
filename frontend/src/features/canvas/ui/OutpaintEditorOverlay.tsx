@@ -135,10 +135,8 @@ export const OutpaintEditorOverlay = memo(
         ),
       [selectedModel],
     );
-    const qualityOptions = useMemo(
-      () => resolveModelQualityOptions(selectedModel),
-      [selectedModel],
-    );
+    const qualityOptions = resolveModelQualityOptions(selectedModel);
+    const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
     const effectiveImageSize = pickAllowedOption(imageSize, sizeOptions);
     const effectiveAspectRatio = (aspectOptions.some((o) => o.value === aspectRatio)
       ? aspectRatio
@@ -150,9 +148,7 @@ export const OutpaintEditorOverlay = memo(
         surface: 'canvas',
         params: buildImageFeatureBillingParams(selectedModel, {
           size: effectiveImageSize,
-          ...(qualityOptions.length > 0
-            ? { quality: pickAllowedOption('medium', qualityOptions) }
-            : {}),
+          ...(quality ? { quality } : {}),
           operation: 'outpaint',
           pricing_quantity: Math.min(Math.max(numImages, 1), 4),
         }),
@@ -233,7 +229,8 @@ export const OutpaintEditorOverlay = memo(
 
     // 针对已建好的节点提交单图扩图（num_images=1）→ 轮询 → 回填。
     const runOutpaintGeneration = useCallback(
-      async (project: string, nodeId: string, apiModel: string) => {
+      async (project: string, nodeId: string) => {
+        if (!selectedModel) return;
         try {
           const ref = await submitFreezoneOutpaint(project, {
             sourceUrl: imageSource.split('?')[0],
@@ -245,7 +242,9 @@ export const OutpaintEditorOverlay = memo(
             // 后端还会按目录 schema 判非法。而且 deps 里本来就只有 effectiveImageSize，
             // 这里读 imageSize 连闭包都是旧的。
             imageSize: effectiveImageSize,
-            model: apiModel,
+            model: selectedModel.apiModel,
+            catalogId: selectedModel.catalogId,
+            quality,
           });
           updateNodeData(nodeId, generationTaskDescriptor(ref));
           const completed = await awaitTaskCompletion(ref.task_key, project, { taskType: ref.task_type });
@@ -278,12 +277,12 @@ export const OutpaintEditorOverlay = memo(
           });
         }
       },
-      [effectiveAspectRatio, effectiveImageSize, imageSource, t, updateNodeData],
+      [effectiveAspectRatio, effectiveImageSize, imageSource, quality, selectedModel, t, updateNodeData],
     );
 
     const handleSubmit = useCallback(async () => {
       // 按钮已经禁用，这里再挡一道：没有可用模型就绝不该发出请求。
-      if (isSubmitting || catalogIsEmpty) return;
+      if (isSubmitting || !selectedModel) return;
       const project = readUrl().project;
       if (!project) {
         console.error('[outpaint] no project in URL — cannot submit');
@@ -299,7 +298,6 @@ export const OutpaintEditorOverlay = memo(
         EXPORT_RESULT_NODE_DEFAULT_WIDTH,
         EXPORT_RESULT_NODE_LAYOUT_HEIGHT,
       );
-      const apiModel = selectedModel?.apiModel ?? modelId;
 
       setIsSubmitting(true);
       try {
@@ -314,16 +312,14 @@ export const OutpaintEditorOverlay = memo(
         );
         selectNodeExclusively(nodeIds[0]);
         onClose();
-        nodeIds.forEach((id) => void runOutpaintGeneration(project, id, apiModel));
+        nodeIds.forEach((id) => void runOutpaintGeneration(project, id));
       } finally {
         setIsSubmitting(false);
       }
     }, [
-      catalogIsEmpty,
       createOutpaintNode,
       findNodePosition,
       isSubmitting,
-      modelId,
       node,
       numImages,
       onClose,

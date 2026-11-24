@@ -11,7 +11,7 @@ import {
 } from "@/api/canvas";
 import { getProjectTaskLimits } from "@/api/tasks";
 import { ApiError } from "@/api/client";
-import { CANVAS_NODE_TYPES } from "@/features/canvas/domain/canvasNodes";
+import { CANVAS_NODE_TYPES, type CanvasNode } from "@/features/canvas/domain/canvasNodes";
 import { canvasEventBus } from "@/features/canvas/application/canvasServices";
 import { subscribeNodeAction } from "@/features/canvas/application/nodeActionResult";
 import { buildCanvasOntologyContext } from "@/features/canvas/ontology/canvasOntology";
@@ -1746,6 +1746,55 @@ describe("canvas chat commands", () => {
     );
   });
 
+  it("reorganizes existing groups before deleting empty source groups", () => {
+    const store = useCanvasStore.getState();
+    const personA = store.addNode(CANVAS_NODE_TYPES.textAnnotation, { x: 0, y: 0 }, { content: "人物甲" });
+    const sceneA = store.addNode(CANVAS_NODE_TYPES.textAnnotation, { x: 300, y: 0 }, { content: "场景甲" });
+    const personB = store.addNode(CANVAS_NODE_TYPES.textAnnotation, { x: 0, y: 300 }, { content: "人物乙" });
+    const sceneB = store.addNode(CANVAS_NODE_TYPES.textAnnotation, { x: 300, y: 300 }, { content: "场景乙" });
+    const oldGroupA = store.groupNodes([personA, sceneA], { label: "旧组甲" });
+    const oldGroupB = store.groupNodes([personB, sceneB], { label: "旧组乙" });
+    if (!oldGroupA || !oldGroupB) throw new Error("expected source groups");
+
+    const invalid = applyCanvasChatCommands(extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "delete_nodes", node_ids: [oldGroupA] },
+        { type: "group_nodes", node_ids: [personA, personB], label: "人物" },
+      ],
+    }]));
+
+    expect(invalid.errors.join(" ")).toContain("cannot delete non-empty group");
+    expect(invalid.errors.join(" ")).toContain(`node not found: ${personA}`);
+    expect(useCanvasStore.getState().nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining([oldGroupA, personA, sceneA, oldGroupB, personB, sceneB]),
+    );
+
+    const result = applyCanvasChatCommands(extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [
+        { type: "group_nodes", node_ids: [personA, personB], label: "人物" },
+        { type: "group_nodes", node_ids: [sceneA, sceneB], label: "场景" },
+        { type: "delete_nodes", node_ids: [oldGroupA, oldGroupB] },
+      ],
+    }]));
+
+    const finalState = useCanvasStore.getState();
+    expect(result.errors).toEqual([]);
+    expect(finalState.nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining([personA, sceneA, personB, sceneB]),
+    );
+    expect(finalState.nodes.some((node) => node.id === oldGroupA || node.id === oldGroupB)).toBe(false);
+    const groups = finalState.nodes.filter((node) => node.type === CANVAS_NODE_TYPES.group);
+    expect(groups.map((group) => group.data.displayName).sort()).toEqual(["人物", "场景"]);
+    expect(finalState.nodes.find((node) => node.id === personA)?.parentId).toBe(
+      finalState.nodes.find((node) => node.id === personB)?.parentId,
+    );
+    expect(finalState.nodes.find((node) => node.id === sceneA)?.parentId).toBe(
+      finalState.nodes.find((node) => node.id === sceneB)?.parentId,
+    );
+  });
+
   it("auto-groups multiple downstream workflow nodes when the command omits group_nodes", () => {
     const sourceId = useCanvasStore.getState().addNode(
       CANVAS_NODE_TYPES.textAnnotation,
@@ -2769,7 +2818,97 @@ describe("canvas chat commands", () => {
     expect(d).toEqual({ x: 252, y: 216 });
   });
 
-  it("uses the exact legacy Hermes grid geometry for external MCP workflows", () => {
+  it("does not resize or rearrange protected projection contents", () => {
+    const initial = [
+      { id: "protected", type: CANVAS_NODE_TYPES.group, position: { x: 200, y: 300 }, width: 1000, height: 900, data: { projection_key: "mainline" } },
+      ...["a", "b"].map((id, index) => ({ id, parentId: "protected", type: CANVAS_NODE_TYPES.imageEdit, position: { x: 50 + index * 10, y: 100 + index * 20 }, width: 700, height: 800, data: {} })),
+    ] as CanvasNode[];
+    useCanvasStore.getState().setCanvasData(initial, []);
+    const before = useCanvasStore.getState().nodes;
+    const result = applyCanvasChatCommands(extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION, commands: [{ type: "layout_nodes", mode: "grid" }],
+    }]));
+    expect(result.errors).toEqual([]);
+    expect(useCanvasStore.getState().nodes).toEqual(before);
+  });
+
+  it("keeps an unselected parent and sibling fixed for a partial selection across groups", () => {
+    useCanvasStore.getState().setCanvasData([
+      { id: "group", type: CANVAS_NODE_TYPES.group, position: { x: 500, y: 400 }, width: 1600, height: 1200, data: {} },
+      ...["a", "b"].map((id, index) => ({ id, parentId: "group", type: CANVAS_NODE_TYPES.imageEdit, position: { x: 20 + index * 800, y: 34 }, measured: { width: 700, height: 850 }, data: {} })),
+      { id: "outside", type: CANVAS_NODE_TYPES.imageEdit, position: { x: 3000, y: 400 }, measured: { width: 700, height: 850 }, data: {} },
+    ] as CanvasNode[], []);
+    const result = applyCanvasChatCommands(extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION, commands: [{ type: "layout_nodes", node_ids: ["a", "outside"], mode: "grid" }],
+    }]));
+    expect(result.errors).toEqual([]);
+    const nodes = useCanvasStore.getState().nodes;
+    expect(nodes.find((n) => n.id === "group")!.position).toEqual({ x: 500, y: 400 });
+    expect(nodes.find((n) => n.id === "b")!.position).toEqual({ x: 820, y: 34 });
+  });
+
+  it("keeps measured media and their groups separate when arranging the whole canvas", () => {
+    useCanvasStore.getState().setCanvasData([
+      { id: "group", type: CANVAS_NODE_TYPES.group, position: { x: 500, y: 400 }, width: 500, height: 400, measured: { width: 500, height: 400 }, style: { width: 500, height: 400 }, data: { label: "Assets" } },
+      { id: "a", type: CANVAS_NODE_TYPES.imageEdit, parentId: "group", position: { x: 20, y: 34 }, measured: { width: 700, height: 650 }, data: {} },
+      { id: "b", type: CANVAS_NODE_TYPES.imageEdit, parentId: "group", position: { x: 30, y: 40 }, measured: { width: 450, height: 800 }, data: {} },
+      { id: "outside", type: CANVAS_NODE_TYPES.imageEdit, position: { x: 520, y: 420 }, measured: { width: 900, height: 700 }, data: {} },
+    ], []);
+    const envelopes = extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [{ type: "layout_nodes", mode: "grid" }],
+    }]);
+    expect(applyCanvasChatCommands(envelopes).errors).toEqual([]);
+    const nodes = useCanvasStore.getState().nodes;
+    const group = nodes.find((node) => node.id === "group")!;
+    const a = nodes.find((node) => node.id === "a")!;
+    const b = nodes.find((node) => node.id === "b")!;
+    const outside = nodes.find((node) => node.id === "outside")!;
+    expect(a.parentId).toBe("group");
+    expect(b.parentId).toBe("group");
+    expect(b.position.x).toBeGreaterThanOrEqual(a.position.x + 700);
+    expect(Number(group.width)).toBeGreaterThanOrEqual(b.position.x + 450);
+    expect(outside.position.x).toBeGreaterThanOrEqual(group.position.x + Number(group.width));
+    const first = nodes.map((node) => ({ id: node.id, position: node.position }));
+    applyCanvasChatCommands(envelopes);
+    expect(useCanvasStore.getState().nodes.map((node) => ({ id: node.id, position: node.position }))).toEqual(first);
+  });
+
+  it.each(["horizontal", "vertical", "grid"] as const)("fits nested measured groups in %s mode without changing parent relationships", (mode) => {
+    const group = (id: string, parentId?: string) => ({
+      id, type: CANVAS_NODE_TYPES.group, position: { x: 100, y: 100 },
+      width: 300, height: 300, measured: { width: 300, height: 300 },
+      style: { width: 300, height: 300 }, data: { label: id },
+      ...(parentId ? { parentId } : {}),
+    });
+    useCanvasStore.getState().setCanvasData([
+      group("outer"), group("inner", "outer"),
+      ...["a", "b"].map((id) => ({ id, parentId: "inner", type: CANVAS_NODE_TYPES.imageEdit,
+        position: { x: 20, y: 34 }, measured: { width: 700, height: 850 }, data: {} })),
+      { id: "sibling", parentId: "outer", type: CANVAS_NODE_TYPES.imageEdit,
+        position: { x: 20, y: 34 }, measured: { width: 400, height: 900 }, data: {} },
+      group("outside"),
+    ] as CanvasNode[], []);
+    const envelopes = extractCanvasChatCommandEnvelopes([{
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION, commands: [{ type: "layout_nodes", mode }],
+    }]);
+    expect(applyCanvasChatCommands(envelopes).errors).toEqual([]);
+    const nodes = useCanvasStore.getState().nodes;
+    const outer = nodes.find((n) => n.id === "outer")!;
+    const inner = nodes.find((n) => n.id === "inner")!;
+    const sibling = nodes.find((n) => n.id === "sibling")!;
+    expect(inner.parentId).toBe("outer");
+    expect(nodes.find((n) => n.id === "a")!.parentId).toBe("inner");
+    expect(Number(outer.width)).toBeGreaterThanOrEqual(inner.position.x + Number(inner.width));
+    expect(Number(outer.height)).toBeGreaterThanOrEqual(inner.position.y + Number(inner.height));
+    expect(inner.position.x + Number(inner.width) <= sibling.position.x
+      || inner.position.y + Number(inner.height) <= sibling.position.y).toBe(true);
+    const before = nodes.map((n) => ({ id: n.id, position: n.position, width: n.width, height: n.height }));
+    applyCanvasChatCommands(envelopes);
+    expect(useCanvasStore.getState().nodes.map((n) => ({ id: n.id, position: n.position, width: n.width, height: n.height }))).toEqual(before);
+  });
+
+  it("retains legacy Hermes minimum grid steps while fitting the group around its children", () => {
     useCanvasStore.getState().setCanvasData(
       [
         { id: "a", position: { x: 0, y: 0 } },
@@ -2818,7 +2957,7 @@ describe("canvas chat commands", () => {
     expect(positions.get("c")).toEqual({ x: 580, y: 440 });
 
     const group = nodes.find((node) => node.type === CANVAS_NODE_TYPES.group);
-    expect(group?.style?.width).toBe(720);
+    expect(group?.style?.width).toBe(800);
     expect(group?.style?.height).toBe(610);
   });
 
@@ -3659,6 +3798,109 @@ describe("canvas chat commands", () => {
         "node-a": { x: -100, y: 20 },
       },
     });
+  });
+
+  it.each([
+    {
+      type: "move_nodes",
+      node_ids: ["node-a"],
+      position: { x: 240, y: 360 },
+    },
+    {
+      type: "move_nodes",
+      node_ids: ["node-a"],
+      x: 240,
+      y: 360,
+    },
+  ])("normalizes a single-node absolute move payload: %o", (command) => {
+    const envelopes = extractCanvasChatCommandEnvelopes([
+      {
+        schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+        commands: [command],
+      },
+    ]);
+
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0]?.commands[0]).toEqual({
+      type: "move_nodes",
+      positions: { "node-a": { x: 240, y: 360 } },
+      deltas: undefined,
+    });
+  });
+
+  it("does not interpret relative movement fields as absolute coordinates", () => {
+    const envelopes = extractCanvasChatCommandEnvelopes([
+      {
+        schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+        commands: [{ type: "move_nodes", node_ids: ["node-a"], dx: -100, dy: 20 }],
+      },
+    ]);
+
+    expect(envelopes[0]?.commands[0]).toEqual({
+      type: "move_nodes",
+      positions: undefined,
+      deltas: { "node-a": { x: -100, y: 20 } },
+    });
+  });
+
+  it.each([
+    { node_ids: ["node-a", "node-b"], position: { x: 240, y: 360 } },
+    { node_ids: ["node-a", "node-b"], x: 240, y: 360 },
+    { node_ids: ["node-a"], x: Number.NaN, y: 360 },
+    { node_ids: ["node-a"], position: { x: 240, y: Number.POSITIVE_INFINITY } },
+  ])("rejects ambiguous or nonfinite absolute move aliases: %o", (payload) => {
+    expect(extractCanvasChatCommandEnvelopes([
+      {
+        schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+        commands: [{ type: "move_nodes", ...payload }],
+      },
+    ])).toEqual([]);
+  });
+
+  it("applies all 19 moves from the reported layout command shapes", () => {
+    const nodeIds = Array.from({ length: 19 }, (_, index) => useCanvasStore.getState().addNode(
+      CANVAS_NODE_TYPES.textAnnotation,
+      { x: -11228 + index * 100, y: -500 },
+      { title: `Material ${index + 1}` },
+    ));
+    const envelopes = extractCanvasChatCommandEnvelopes([
+      {
+        schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+        commands: nodeIds.map((id, index) => ({
+          type: "move_nodes",
+          node_ids: [id],
+          ...(index % 2
+            ? { position: { x: index * 600, y: 350 } }
+            : { x: index * 600, y: 350 }),
+        })),
+      },
+    ]);
+    const result = applyCanvasChatCommands(envelopes);
+    expect(result.errors).toEqual([]);
+    expect(result.applied).toBe(19);
+    nodeIds.forEach((id, index) => {
+      expect(useCanvasStore.getState().nodes.find((node) => node.id === id)?.position)
+        .toEqual({ x: index * 600, y: 350 });
+    });
+  });
+
+  it("treats any text in a director council result as read-only data", () => {
+    const result = {
+      schema_version: CANVAS_CHAT_COMMANDS_SCHEMA_VERSION,
+      commands: [{ type: "move_nodes", node_ids: ["node-a"], dx: 10, dy: 0 }],
+    };
+    const candidates = canvasCommandCandidateValues({
+      id: "director-council-result",
+      role: "tool",
+      text: "freezone_plan_director_council",
+      timestamp: Date.now(),
+      raw: {
+        type: "tool.result",
+        name: "freezone_plan_director_council",
+        result: `\`\`\`json\n${JSON.stringify(result)}\n\`\`\``,
+      },
+    });
+    expect(candidates).toEqual([]);
   });
 
   it("extracts canvas commands from websocket tool result text wrappers", () => {
@@ -5254,7 +5496,7 @@ describe("canvas chat commands", () => {
       { x: 0, y: 0 },
       {
         displayName: "镜头上下文",
-        content: "主角走进小区。",
+        content: "第一场\n  主角走进小区。\n\n第二场",
       },
     );
     const imageId = store.addNode(
@@ -5328,7 +5570,9 @@ describe("canvas chat commands", () => {
       edgeId ? [edgeId] : [],
     );
     const groupDetail = detailNodes.find((node) => node.node_id === groupId);
+    const textDetail = detailNodes.find((node) => node.node_id === textId);
     const imageDetail = detailNodes.find((node) => node.node_id === imageId);
+    expect(textDetail?.text_content).toBe("第一场\n  主角走进小区。\n\n第二场");
     expect(groupDetail?.action_summary?.downstream_spawn_types).toEqual([]);
     expect(groupDetail?.action_summary?.actions).not.toContainEqual(
       expect.objectContaining({ action: "add_next_node" }),

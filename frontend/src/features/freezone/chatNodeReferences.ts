@@ -753,11 +753,19 @@ export function shouldIncludeCanvasSummary(
   if (options.hasCanvasContent === false) return false;
 
   // i18n-exempt-start -- Chinese tokens are intent-matching protocol values, not UI copy.
+  if (
+    /(?:整理|排版|布局|重排|消除重叠|归类|分类整理)[^。！？!?\n]{0,16}(?:画布|节点|canvas|nodes?)|(?:画布|节点|canvas|nodes?)[^。！？!?\n]{0,16}(?:整理|排版|布局|重排|重叠|归类|分类)|(?:organize|reorganize|tidy|declutter|arrange)\s+(?:all\s+|the\s+)?(?:canvas|nodes)|fix\s+overlapping/i.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+
   const mentionsExistingCanvas =
-    /(?:当前|现有|已有|整个|整张|全部|全局|this|current|existing|whole|entire)[^。！？!?\n]{0,20}(?:画布|流程|工作流|节点|连线|依赖|拓扑|canvas|workflow|flow|nodes?|edges?|topology)/i.test(
+    /(?:当前|现有|已有|整个|整张|全部|所有|全局|this|current|existing|whole|entire|all)[^。！？!?\n]{0,20}(?:画布|流程|工作流|节点|连线|依赖|拓扑|canvas|workflow|flow|nodes?|edges?|topology)/i.test(
       trimmed,
     ) ||
-    /(?:画布|流程|工作流|节点|连线|依赖|拓扑|canvas|workflow|flow|nodes?|edges?|topology)[^。！？!?\n]{0,20}(?:当前|现有|已有|整个|整张|全部|全局|this|current|existing|whole|entire)/i.test(
+    /(?:画布|流程|工作流|节点|连线|依赖|拓扑|canvas|workflow|flow|nodes?|edges?|topology)[^。！？!?\n]{0,20}(?:当前|现有|已有|整个|整张|全部|所有|全局|this|current|existing|whole|entire|all)/i.test(
       trimmed,
     );
   if (!mentionsExistingCanvas) return false;
@@ -1184,22 +1192,43 @@ function buildCanvasCommandCatalog(canvasId: string): Record<string, unknown> {
       typed_tool: "freezone_layout_nodes",
       required: ["type", "mode"],
       optional: ["node_ids"],
-      field_notes: { mode: "horizontal, vertical, or grid." },
+      field_notes: { mode: "auto (recommended topological group-aware layout), dag, horizontal, vertical, or grid." },
       example: {
         type: "layout_nodes",
         node_ids: ["brief_1", "image_1"],
-        mode: "horizontal",
+        mode: "auto",
       },
     },
     {
       type: "group_nodes",
       typed_tool: "freezone_group_nodes",
       required: ["type", "node_ids"],
-      optional: ["label"],
+      optional: ["client_id", "label"],
       example: {
         type: "group_nodes",
+        client_id: "poster_group",
         node_ids: ["brief_1", "image_1"],
         label: "海报生成流程",
+      },
+    },
+    {
+      type: "organize_canvas",
+      typed_tool: "freezone_organize_canvas",
+      required: ["type"],
+      optional: ["categories", "ungroup_node_ids", "prune_empty_groups", "layout_mode"],
+      field_notes: {
+        categories: "Ordered [{label, node_ids}] semantic groups; supports single-node groups cleanly.",
+        prune_empty_groups: "Defaults to true; removes empty ordinary groups after regrouping.",
+        layout_mode: "auto (default), dag, horizontal, vertical, or grid.",
+      },
+      example: {
+        type: "organize_canvas",
+        categories: [
+          { label: "人物设定", node_ids: ["char_1", "char_2"] },
+          { label: "分镜镜头", node_ids: ["shot_1"] },
+        ],
+        prune_empty_groups: true,
+        layout_mode: "auto",
       },
     },
     {
@@ -2244,18 +2273,17 @@ function compactTextPreview(
   return `${normalized.slice(0, limit)}...`;
 }
 
-/** 正文原样返回（只压空白），用于 node_detail 这类显式读取。 */
+/** 正文保留原有格式，用于 node_detail 这类显式读取。 */
 function fullTextForDetail(value: string | null | undefined): {
   text: string | null;
   truncated: boolean;
 } {
   if (!value) return { text: null, truncated: false };
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= NODE_DETAIL_TEXT_LIMIT) {
-    return { text: normalized, truncated: false };
+  if (value.length <= NODE_DETAIL_TEXT_LIMIT) {
+    return { text: value, truncated: false };
   }
   return {
-    text: normalized.slice(0, NODE_DETAIL_TEXT_LIMIT),
+    text: value.slice(0, NODE_DETAIL_TEXT_LIMIT),
     truncated: true,
   };
 }

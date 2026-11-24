@@ -29,7 +29,7 @@ import uuid
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 
 from novelvideo import config
 from novelvideo.chat.hermes_sdk import HermesSdkClient, HermesSdkThread
@@ -48,6 +48,7 @@ from novelvideo.chat.hermes_workspace import (
     effective_gateway_runtime_fingerprint,
     ensure_user_hermes_workspace,
     freezone_python_hook_dir,
+    hermes_workspace_path,
 )
 from novelvideo.freezone.studio import openfilm_studio_enabled
 from novelvideo.ports import get_auth_session_port
@@ -250,6 +251,7 @@ class _ManagedHermesThread:
         self,
         prompt: str,
         *,
+        images: Sequence[str] = (),
         current_project: str | None = None,
         trajectory_id: str | None = None,
         project_id: str | None = None,
@@ -265,12 +267,14 @@ class _ManagedHermesThread:
         # unit test still passed.
         await self._owner._begin_turn(self._slot)
         try:
+            image_kwargs = {"images": images} if images else {}
             async for event in self._slot.thread.stream(
                 prompt,
                 current_project=current_project,
                 trajectory_id=trajectory_id,
                 project_id=project_id,
                 gateway_api_key=gateway_api_key,
+                **image_kwargs,
             ):
                 yield event
         finally:
@@ -385,7 +389,6 @@ class HermesPool:
                     raise HermesDrainingError()
                 slot.authz_generation = authz_generation
                 if slot_key in self._dirty_profiles:
-                    self._dirty_profiles.discard(slot_key)
                     slot = await self._rotate_slot_locked(
                         slot,
                         model=model,
@@ -398,6 +401,7 @@ class HermesPool:
                         reason="profile-dirty",
                         resume_existing_session=False,
                     )
+                    self._dirty_profiles.discard(slot_key)
                 elif bool(getattr(slot.thread, "is_closed", False)):
                     slot = await self._rotate_slot_locked(
                         slot,
@@ -489,6 +493,8 @@ class HermesPool:
         authz_generation = await self._authz_generation(slot.username)
         slot_key = self._slot_key(slot.username, slot.agent_profile)
         async with self._lock:
+            if self._slots.get(slot_key) is not slot or slot.state != "active":
+                raise HermesDrainingError()
             if authz_generation > slot.authz_generation:
                 slot.state = "draining"
                 if slot.active_turns == 0 and await self._close_slot(slot, strict=True):
@@ -504,6 +510,7 @@ class HermesPool:
         async with self._lock:
             if slot.active_turns > 0:
                 slot.active_turns -= 1
+            slot.last_used = time.time()
             if slot.one_shot:
                 slot.state = "draining"
             if slot.state == "draining" and slot.active_turns == 0:
@@ -512,6 +519,47 @@ class HermesPool:
                     slot_key = self._slot_key(slot.username, slot.agent_profile)
                     if self._slots.get(slot_key) is slot:
                         self._slots.pop(slot_key, None)
+
+    async def clear_scope(
+        self,
+        username: str,
+        *,
+        scope_kind: str,
+        project_id: str | None,
+        agent_profile: str,
+        canvas_id: str | None,
+        project_state_dir: Path | None,
+    ) -> None:
+        """Detach an idle conversation without starting a worker or deleting native history."""
+        from novelvideo.chat.session_registry import CHAT_RUN_BUSY_MESSAGE
+
+        scope_key = self._scope_key(scope_kind, project_id, agent_profile, canvas_id)
+        slot_key = self._slot_key(username, agent_profile)
+        home = hermes_workspace_path(
+            username,
+            profile=_workspace_profile_for_agent(agent_profile, "", None),
+            project_state_dir=project_state_dir,
+        )
+        async with self._lock:
+            # Validate the durable index before retiring anything. Closing the
+            # worker first would leave a failed clear half-applied: the session
+            # gone but its index entry still on disk, while the caller is told
+            # the clear failed.
+            self._require_readable_session_index(home)
+            slot = self._slots.get(slot_key)
+            if slot is not None and scope_key == self._scope_key(
+                slot.scope_kind, slot.project_id, slot.agent_profile, slot.canvas_id
+            ):
+                if slot.active_turns:
+                    raise RuntimeError(CHAT_RUN_BUSY_MESSAGE)
+                if not await self._close_slot(slot, remember_session=False, strict=True):
+                    raise RuntimeError("Could not retire the Hermes session")
+                slot.state = "closed"
+                self._slots.pop(slot_key)
+            self._persist_session_id(
+                home, scope_kind, project_id, agent_profile, canvas_id, None, strict=True
+            )
+            self._forget_session(username, scope_kind, project_id, agent_profile, canvas_id)
 
     async def reset_for_user(
         self,
@@ -802,6 +850,23 @@ class HermesPool:
         return str(payload.get(key) or "").strip() or None
 
     @classmethod
+    def _require_readable_session_index(cls, home: Path) -> None:
+        """Fail before mutating anything when the session index cannot be read.
+
+        ``_persist_session_id`` already refuses to overwrite a corrupt index in
+        strict mode, but by then a clear has closed the worker. Checking first
+        keeps a refused clear from retiring a live conversation.
+        """
+        path = home / "dramaclaw_sessions.json"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return
+        payload = json.loads(text)
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid Hermes session index")
+
+    @classmethod
     def _persist_session_id(
         cls,
         home: Path,
@@ -810,10 +875,15 @@ class HermesPool:
         agent_profile: str,
         canvas_id: str | None,
         session_id: str | None,
+        *,
+        strict: bool = False,
     ) -> None:
         from novelvideo.utils.state_index_files import index_file_lock, write_json_atomic
 
         path = home / "dramaclaw_sessions.json"
+        normalized = str(session_id or "").strip()
+        if not normalized and not path.exists():
+            return
         key = json.dumps(
             cls._scope_key(scope_kind, project_id, agent_profile, canvas_id),
             ensure_ascii=False,
@@ -821,16 +891,23 @@ class HermesPool:
         )
         with index_file_lock(path):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            except (OSError, json.JSONDecodeError):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                payload = {}
+            except (OSError, ValueError):
+                if strict:
+                    raise
                 payload = {}
             if not isinstance(payload, dict):
+                if strict:
+                    raise ValueError("Invalid Hermes session index")
                 payload = {}
-            normalized = str(session_id or "").strip()
             if normalized:
                 payload[key] = normalized
+            elif key in payload:
+                del payload[key]
             else:
-                payload.pop(key, None)
+                return
             write_json_atomic(path, payload)
 
     def _forget_session(
@@ -909,6 +986,10 @@ class HermesPool:
         The session identity still follows the caller's scope; only the egress
         identity is inherited, which is exactly why S3 split the two parameters.
         """
+        # Reconnect/prewarm and another tab may request a different scope while
+        # this worker is still streaming. Retire it only after that turn ends.
+        if slot.active_turns:
+            raise HermesDrainingError()
         evidence_metrics.observe(f"worker_rotated:{reason}")
         if resume_existing_session:
             self._remember_session(slot)
@@ -1129,8 +1210,10 @@ class HermesPool:
     async def _evict_lru_if_full(self) -> None:
         if len(self._slots) < self._max_workers:
             return
-        # Evict least-recently-used
-        victim = min(self._slots.values(), key=lambda s: s.last_used)
+        idle_slots = [slot for slot in self._slots.values() if slot.active_turns == 0]
+        if not idle_slots:
+            raise HermesDrainingError()
+        victim = min(idle_slots, key=lambda s: s.last_used)
         _log.info(
             "hermes pool full (%d); evicting LRU user=%s",
             self._max_workers,
@@ -1176,8 +1259,8 @@ class HermesPool:
                     victims = [
                         slot
                         for slot in self._slots.values()
-                        if (slot.state == "draining" and slot.active_turns == 0)
-                        or slot.last_used < cutoff
+                        if slot.active_turns == 0
+                        and (slot.state == "draining" or slot.last_used < cutoff)
                     ]
                     for v in victims:
                         _log.info("hermes worker idle-killed: user=%s", v.username)

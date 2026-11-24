@@ -15,7 +15,7 @@ import logging
 import time
 import uuid
 from dataclasses import replace
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import AliasChoices, BaseModel, Field
@@ -63,9 +63,11 @@ from novelvideo.freezone.canvas_command_bridge import (
 )
 from novelvideo.freezone.canvas_command_watch import bridge_watch_hub
 from novelvideo.freezone.agent_config_store import save_user_agent_config_item
+from novelvideo.freezone.paths import CANVAS_ID_RE
 from novelvideo.freezone.agent_product_operations import AGENT_PRODUCT_PRICE_REFERENCE
 from novelvideo.ports import get_product_surface_access, get_usage_meter
 from novelvideo.ports.local.usage import NoOpUsageMeter
+from novelvideo.shared.runtime_env import is_ce_effective
 from novelvideo.project_context import (
     ProjectContext,
     require_project_home_node,
@@ -177,8 +179,6 @@ async def cancel_chat_turn(
     without stopping the shared home-node runtime.
     """
     username = str(user["username"])
-    backend_name: str | None = None
-    safe_to_recover_home_lock = False
     try:
         backend_name = chat_service.get_chat_backend_name()
     except Exception:
@@ -218,22 +218,28 @@ async def cancel_chat_turn(
             from novelvideo.chat.hermes_pool import pool as hermes_pool
 
             cancelled = await hermes_pool.close_user(username)
-        safe_to_recover_home_lock = backend_name == "hermes" and not bool(cancelled)
     except Exception:
         cancelled = False
-        # Preserve staging's Hermes recovery behavior when close_user itself
-        # fails. Codex interrupt failures leave the active-turn state unknown,
-        # so releasing its lock here could race a turn that is still settling.
-        safe_to_recover_home_lock = backend_name == "hermes"
-    if safe_to_recover_home_lock:
-        try:
-            # No backend turn remains to own the lock. Preserve staging's
-            # explicit recovery path for a stranded Home lock without racing
-            # an interrupt that is still settling in its stream finally block.
-            chat_service.force_release_chat_run_lock(username, "")
-        except Exception:
-            pass
+    # A missing worker does not imply a missing lease owner: /clear and a
+    # turn that is still settling can both hold a lease without a live worker.
     return {"ok": True, "data": {"cancelled": cancelled}}
+
+
+# The CE API has one worker process. Fence the portions of a WebSocket turn
+# that run outside the service's chat lease, including the first message write.
+_ce_hermes_operations: set[tuple[str, str]] = set()
+
+
+@contextlib.contextmanager
+def _ce_hermes_conversation_guard(username: str, scope: ChatScope) -> Iterator[None]:
+    key = (username, _chat_run_lock_project_for_scope(scope, hermes=True))
+    if key in _ce_hermes_operations:
+        raise RuntimeError(CHAT_RUN_BUSY_MESSAGE)
+    _ce_hermes_operations.add(key)
+    try:
+        yield
+    finally:
+        _ce_hermes_operations.remove(key)
 
 
 class ClearChatRequest(BaseModel):
@@ -245,15 +251,23 @@ async def clear_chat_scope(
     body: ClearChatRequest,
     user: dict = Depends(get_api_user),
 ) -> dict[str, Any]:
-    """Clear one conversation and start a fresh Codex context for that scope."""
+    """Clear one transcript and detach its agent session without deleting project data."""
     try:
         scope = ChatScope.from_payload(body.scope)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if scope.kind not in {"home", "project", "freezone"}:
         raise HTTPException(400, "unsupported chat scope for clear")
-    if chat_service.get_chat_backend_name() != "codex":
-        raise HTTPException(409, "清空上下文当前仅支持 Codex Agent")
+    backend = chat_service.get_chat_backend_name()
+    if backend == "hermes":
+        if not is_ce_effective():
+            raise HTTPException(409, "Hermes 清空上下文仅支持单机社区版")
+        if user.get("credential_kind") == "agent_session":
+            raise HTTPException(403, "agent sessions cannot clear chat history")
+        if scope.canvas_id and not CANVAS_ID_RE.fullmatch(scope.canvas_id):
+            raise HTTPException(400, "invalid canvas id")
+    elif backend != "codex":
+        raise HTTPException(409, "当前 Agent 不支持清空上下文")
 
     username = str(user["username"])
     project_ctx = (
@@ -263,45 +277,69 @@ async def clear_chat_scope(
         if scope.kind in {"project", "freezone"} and scope.id
         else None
     )
+    hermes = backend == "hermes"
+    if hermes and project_ctx is not None:
+        require_project_home_node(project_ctx, operation="clear chat")
+        if scope.id != project_ctx.project_id:
+            raise HTTPException(400, "project scope mismatch")
     project = str(scope.id or "")
-    lock_project = _chat_run_lock_project_for_scope(scope)
-    try:
-        lock_id = chat_service._acquire_chat_run_lock(username, lock_project)
-    except RuntimeError as exc:
-        raise HTTPException(
-            409, "当前对话仍在进行，请等待完成或先停止后再清空"
-        ) from exc
+    lock_project = _chat_run_lock_project_for_scope(scope, hermes=hermes)
+    with contextlib.ExitStack() as operations:
+        try:
+            if hermes:
+                operations.enter_context(_ce_hermes_conversation_guard(username, scope))
+            lock_id = chat_service._acquire_chat_run_lock(username, lock_project)
+        except RuntimeError as exc:
+            raise HTTPException(
+                409, "当前对话仍在进行，请等待完成或先停止后再清空"
+            ) from exc
 
-    heartbeat_task = asyncio.create_task(
-        chat_service._chat_run_lock_heartbeat_loop(username, lock_project, lock_id)
-    )
-    try:
-        project_state_dir = project_ctx.state_dir if project_ctx is not None else None
-        execution_context = (
-            AgentExecutionContext.from_project_scope(scope=scope, project=project_ctx)
-            if project_ctx is not None
-            else None
+        heartbeat_task = asyncio.create_task(
+            chat_service._chat_run_lock_heartbeat_loop(username, lock_project, lock_id)
         )
-        archived_threads = await chat_service.archive_codex_scope_thread(
-            username,
-            project,
-            agent_profile=(
-                execution_context.agent_profile if execution_context else "main"
-            ),
-            canvas_id=execution_context.canvas_id if execution_context else None,
-            project_state_dir=project_state_dir,
-        )
-        if not chat_service._heartbeat_chat_run_lock(username, lock_project, lock_id):
-            raise HTTPException(409, "清空操作已失去对话锁，请刷新后重试")
-        storage_scope = _chat_store_scope_for_project_context(scope, project_ctx)
-        if project_ctx is not None and not _is_freezone_scope(scope):
-            storage_scope = replace(storage_scope, state_dir=str(project_state_dir))
-        cleared = await chat_store.clear_messages_async(username, storage_scope)
-    finally:
-        heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await heartbeat_task
-        chat_service._release_chat_run_lock(username, lock_project, lock_id)
+        try:
+            project_state_dir = project_ctx.state_dir if project_ctx is not None else None
+            execution_context = (
+                AgentExecutionContext.from_project_scope(scope=scope, project=project_ctx)
+                if project_ctx is not None
+                else None
+            )
+            profile = execution_context.agent_profile if execution_context else "main"
+            canvas = execution_context.canvas_id if execution_context else None
+            if hermes:
+                from novelvideo.chat.hermes_pool import pool as hermes_pool
+
+                try:
+                    await hermes_pool.clear_scope(
+                        username,
+                        scope_kind="project" if project_ctx is not None else "home",
+                        project_id=project or None,
+                        agent_profile=profile,
+                        canvas_id=canvas,
+                        project_state_dir=project_state_dir,
+                    )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    if _chat_turn_busy_message(exc):
+                        raise HTTPException(409, "当前对话仍在进行，请等待完成或先停止后再清空") from exc
+                    logger.warning("Hermes clear could not detach session: %s", type(exc).__name__)
+                    raise HTTPException(503, "暂时无法清空 Hermes 上下文，请稍后重试") from exc
+                archived_threads = 0
+            else:
+                archived_threads = await chat_service.archive_codex_scope_thread(
+                    username, project, agent_profile=profile, canvas_id=canvas,
+                    project_state_dir=project_state_dir,
+                )
+            if not chat_service._heartbeat_chat_run_lock(username, lock_project, lock_id):
+                raise HTTPException(409, "清空操作已失去对话锁，请刷新后重试")
+            storage_scope = _chat_store_scope_for_project_context(scope, project_ctx)
+            if project_ctx is not None and not _is_freezone_scope(scope):
+                storage_scope = replace(storage_scope, state_dir=str(project_state_dir))
+            cleared = await chat_store.clear_messages_async(username, storage_scope)
+        finally:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+            chat_service._release_chat_run_lock(username, lock_project, lock_id)
     logger.info(
         "chat scope cleared user=%s kind=%s project=%s surface=%s canvas=%s agent=%s "
         "messages=%d archived_threads=%d",
@@ -878,12 +916,13 @@ def _freezone_agent_profile(scope: ChatScope) -> str:
     return f"freezone:{scope.agent_id or 'main'}"
 
 
-def _chat_run_lock_project_for_scope(scope: ChatScope) -> str:
+def _chat_run_lock_project_for_scope(scope: ChatScope, *, hermes: bool = False) -> str:
     if _is_freezone_scope(scope) and scope.id:
         return chat_service._chat_run_lock_project_for_turn(
             str(scope.id),
             tool_mode="freezone_canvas",
             store_scope=scope,
+            default_canvas="default" if hermes else "",
         )
     return str(scope.id) if scope.kind == "project" and scope.id else ""
 
@@ -2396,7 +2435,11 @@ async def _send_scope_changed(
             "scope": scope.to_dict(),
             "history": await _history(username, scope, project_ctx=project_ctx),
             "busy": chat_service.chat_run_lock_is_active(
-                username, _chat_run_lock_project_for_scope(scope)
+                username,
+                _chat_run_lock_project_for_scope(
+                    scope,
+                    hermes=chat_service.configured_chat_backend() == "hermes",
+                ),
             ),
         },
     ):
@@ -3177,7 +3220,7 @@ def _collect_bridge_events(
             field = "envelope" if kind == "canvas_context" else "event"
             if (
                 not key
-                or key in emitted_bridge_keys
+                or (kind != "canvas_context" and key in emitted_bridge_keys)
                 or not isinstance(pending.get(field), dict)
             ):
                 continue
@@ -3277,6 +3320,7 @@ async def _watch_bridge_events(
                     frame = {
                         "type": "canvas.context.request",
                         "turn_id": turn_id,
+                        "scope": scope.to_dict(),
                         "canvas_id": pending["envelope"].get("canvas_id"),
                         "agent_id": scope.agent_id or "main",
                         "bridge_key": key,
@@ -4607,140 +4651,145 @@ async def chat_ws(websocket: WebSocket) -> None:
                 await _close_ws_unauthorized(websocket)
                 return
 
-            try:
-                await _require_ai_assistant_access(user=user, scope=scope)
-                if scope.kind in {"project", "freezone"}:
-                    await _stream_project_turn(
-                        websocket=websocket,
-                        user=user,
-                        username=username,
-                        scope=scope,
-                        text=text,
-                        attachments=msg.attachments,
-                        turn_id=turn_id,
-                        user_text=user_text,
-                        surface=("freezone" if _is_freezone_scope(scope) else None),
-                        surface_context=(
-                            msg.context if _is_freezone_scope(scope) else None
-                        ),
-                        store_scope=scope if _is_freezone_scope(scope) else None,
-                    )
-                elif scope.kind == "home":
-                    await _stream_home_turn(
-                        websocket=websocket,
-                        user=user,
-                        username=username,
-                        scope=scope,
-                        text=text,
-                        attachments=msg.attachments,
-                        turn_id=turn_id,
-                    )
-                else:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "error",
-                            "turn_id": turn_id,
-                            "message": f"scope not implemented: {scope.kind}",
-                        },
-                    )
-            except Exception as exc:  # noqa: BLE001
-                busy_message = _chat_turn_busy_message(exc)
-                message = busy_message or str(exc)
-                logger.exception(
-                    "chat turn failed username=%s turn_id=%s error_type=%s",
-                    username,
-                    turn_id,
-                    type(exc).__name__,
-                )
-                if busy_message is not None:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "chat.busy",
-                            "turn_id": turn_id,
-                            "scope": scope.to_dict(),
-                            "message": message,
-                        },
-                    )
-                    continue
-                billing_rule_error = find_billing_rule_not_configured_error(exc)
-                if billing_rule_error is not None:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "error",
-                            "turn_id": turn_id,
-                            "message": BILLING_RULE_NOT_CONFIGURED_MESSAGE,
-                            "data": billing_rule_not_configured_payload(
-                                billing_rule_error
+            with contextlib.ExitStack() as operations:
+                try:
+                    if chat_service.configured_chat_backend() == "hermes" and is_ce_effective():
+                        operations.enter_context(
+                            _ce_hermes_conversation_guard(username, scope)
+                        )
+                    await _require_ai_assistant_access(user=user, scope=scope)
+                    if scope.kind in {"project", "freezone"}:
+                        await _stream_project_turn(
+                            websocket=websocket,
+                            user=user,
+                            username=username,
+                            scope=scope,
+                            text=text,
+                            attachments=msg.attachments,
+                            turn_id=turn_id,
+                            user_text=user_text,
+                            surface=("freezone" if _is_freezone_scope(scope) else None),
+                            surface_context=(
+                                msg.context if _is_freezone_scope(scope) else None
                             ),
-                        },
+                            store_scope=scope if _is_freezone_scope(scope) else None,
+                        )
+                    elif scope.kind == "home":
+                        await _stream_home_turn(
+                            websocket=websocket,
+                            user=user,
+                            username=username,
+                            scope=scope,
+                            text=text,
+                            attachments=msg.attachments,
+                            turn_id=turn_id,
+                        )
+                    else:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "error",
+                                "turn_id": turn_id,
+                                "message": f"scope not implemented: {scope.kind}",
+                            },
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    busy_message = _chat_turn_busy_message(exc)
+                    message = busy_message or str(exc)
+                    logger.exception(
+                        "chat turn failed username=%s turn_id=%s error_type=%s",
+                        username,
+                        turn_id,
+                        type(exc).__name__,
                     )
-                    continue
-                insufficient_error = find_insufficient_credits_error(exc)
-                if insufficient_error is not None:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "error",
-                            "turn_id": turn_id,
-                            "message": INSUFFICIENT_CREDITS_MESSAGE,
-                            "data": insufficient_credits_payload(insufficient_error),
-                        },
+                    if busy_message is not None:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "chat.busy",
+                                "turn_id": turn_id,
+                                "scope": scope.to_dict(),
+                                "message": message,
+                            },
+                        )
+                        continue
+                    billing_rule_error = find_billing_rule_not_configured_error(exc)
+                    if billing_rule_error is not None:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "error",
+                                "turn_id": turn_id,
+                                "message": BILLING_RULE_NOT_CONFIGURED_MESSAGE,
+                                "data": billing_rule_not_configured_payload(
+                                    billing_rule_error
+                                ),
+                            },
+                        )
+                        continue
+                    insufficient_error = find_insufficient_credits_error(exc)
+                    if insufficient_error is not None:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "error",
+                                "turn_id": turn_id,
+                                "message": INSUFFICIENT_CREDITS_MESSAGE,
+                                "data": insufficient_credits_payload(insufficient_error),
+                            },
+                        )
+                        continue
+                    billing_error = find_billing_error(exc)
+                    if billing_error is not None:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "error",
+                                "turn_id": turn_id,
+                                "message": billing_error.user_message,
+                                "data": billing_error_payload(billing_error),
+                            },
+                        )
+                        continue
+                    logger.error(
+                        "sending chat error username=%s turn_id=%s scope=%s backend=%s message=%s",
+                        username,
+                        turn_id,
+                        scope.to_dict(),
+                        (
+                            chat_service.get_chat_backend_name()
+                            if chat_service.is_chat_backend_available()
+                            else "unavailable"
+                        ),
+                        message,
                     )
-                    continue
-                billing_error = find_billing_error(exc)
-                if billing_error is not None:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "error",
-                            "turn_id": turn_id,
-                            "message": billing_error.user_message,
-                            "data": billing_error_payload(billing_error),
-                        },
+                    user_message = _user_facing_chat_error(exc)
+                    persisted_error = await _persist_chat_turn_error(
+                        user=user,
+                        username=username,
+                        scope=scope,
+                        turn_id=turn_id,
+                        reason=user_message,
                     )
-                    continue
-                logger.error(
-                    "sending chat error username=%s turn_id=%s scope=%s backend=%s message=%s",
-                    username,
-                    turn_id,
-                    scope.to_dict(),
-                    (
-                        chat_service.get_chat_backend_name()
-                        if chat_service.is_chat_backend_available()
-                        else "unavailable"
-                    ),
-                    message,
-                )
-                user_message = _user_facing_chat_error(exc)
-                persisted_error = await _persist_chat_turn_error(
-                    user=user,
-                    username=username,
-                    scope=scope,
-                    turn_id=turn_id,
-                    reason=user_message,
-                )
-                if persisted_error is not None:
-                    await _send_json_best_effort(
-                        websocket,
-                        {
-                            "type": "assistant.message",
-                            "scope": scope.to_dict(),
-                            "turn_id": turn_id,
-                            "message": persisted_error,
-                        },
-                    )
-                error_event: dict[str, Any] = {
-                    "type": "error",
-                    "turn_id": turn_id,
-                    "message": user_message,
-                }
-                error_code = _chat_error_code(exc)
-                if error_code is not None:
-                    error_event["code"] = error_code
-                await _send_json_best_effort(websocket, error_event)
+                    if persisted_error is not None:
+                        await _send_json_best_effort(
+                            websocket,
+                            {
+                                "type": "assistant.message",
+                                "scope": scope.to_dict(),
+                                "turn_id": turn_id,
+                                "message": persisted_error,
+                            },
+                        )
+                    error_event: dict[str, Any] = {
+                        "type": "error",
+                        "turn_id": turn_id,
+                        "message": user_message,
+                    }
+                    error_code = _chat_error_code(exc)
+                    if error_code is not None:
+                        error_event["code"] = error_code
+                    await _send_json_best_effort(websocket, error_event)
     except WebSocketDisconnect:
         logger.info("chat websocket disconnected username=%s", username)
         pass

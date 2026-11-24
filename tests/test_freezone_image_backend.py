@@ -4478,6 +4478,131 @@ def _patch_scene_360_enqueue(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection", [{}, {"model": "newapi_gpt_image2"}, {"catalog_id": "cat-edit"}]
+)
+async def test_scene_360_uses_compatible_catalog_edit_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: dict[str, str],
+) -> None:
+    captured: dict = {}
+    _patch_scene_360_enqueue(monkeypatch, tmp_path, captured)
+    monkeypatch.setattr(
+        freezone_routes,
+        "_ee_media_model_catalog",
+        _fake_media_model_catalog([
+            {
+                "catalogId": "cat-text-only",
+                "providerId": "newapi",
+                "apiModel": "text-only-image-model",
+                "referenceImageMax": 0,
+            },
+            {
+                "catalogId": "cat-4k-only",
+                "providerId": "newapi",
+                "apiModel": "example/4k-only",
+                "referenceImageMax": 2,
+                "resolutionOptions": ["4K"],
+            },
+            {
+                "catalogId": "cat-edit",
+                "providerId": "openrouter",
+                "apiModel": "example/edit-image",
+                "referenceImageMax": 2,
+                "resolutionOptions": ["1K"],
+                "qualityOptions": ["low"],
+            },
+        ]),
+    )
+
+    await freezone_routes.freezone_scene_360(
+        project="proj_freezone",
+        body=freezone_routes.FreezoneScene360Request(
+            reference_url="/api/v1/projects/proj_freezone/media/assets/scenes/小区/master.png",
+            **selection,
+        ),
+        user={"username": "admin"},
+    )
+
+    payload = captured["payload"]
+    assert payload["params"]["provider"] == "openrouter"
+    assert payload["params"]["model"] == "example/edit-image"
+    assert payload["params"]["image_size"] == "1K"
+    assert payload["params"]["quality"] == "low"
+    assert payload["billing"]["pricing_params"] == {"size": "1K", "quality": "low"}
+    assert payload["scene_360_model_authority"] == {
+        "kind": "catalog",
+        "catalog_id": "cat-edit",
+        "provider": "openrouter",
+        "model": "example/edit-image",
+    }
+    assert payload["billing"]["catalog_id"] == "cat-edit"
+    assert payload["billing"]["pricing_model"] == "example/edit-image"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "request_name", "extra", "operation"),
+    [
+        ("template_edit", "TemplateEdit", {"mode": "scene_setting_sheet"}, "scene_setting_sheet"),
+        ("multi_view", "CharacterMultiView", {}, "multi_view"),
+        ("relight", "Relight", {}, "relight"),
+        ("upscale", "Upscale", {}, "upscale"),
+        ("outpaint", "Outpaint", {}, "outpaint"),
+        ("redraw", "Redraw", {}, "redraw"),
+        ("redraw", "Redraw", {"mask_url": "/static/admin/525/freezone/_uploads/mask.png"}, "erase"),
+    ],
+)
+async def test_fixed_image_tools_execute_the_scoped_catalog_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    request_name: str,
+    extra: dict,
+    operation: str,
+) -> None:
+    project_dir, _ = _patch_freezone_project(
+        monkeypatch, tmp_path, username="admin", project="525"
+    )
+    _write_image(project_dir / "assets" / "source.png")
+    _write_image(project_dir / "freezone" / "_uploads" / "mask.png")
+    captured: dict = {}
+    _patch_celery_edit_enqueue(monkeypatch, captured)
+    scope_checks = []
+
+    async def scoped_catalog(media_type, *, requester_user_id):
+        scope_checks.append((media_type, requester_user_id))
+        return [{
+            "catalogId": "tenant-edit",
+            "providerId": "openrouter",
+            # The API model name overlaps a legacy selection for another provider.
+            "apiModel": "huimeng_gpt_image2",
+            "resolutionOptions": ["1K"],
+            "qualityOptions": ["low"],
+        }]
+
+    monkeypatch.setattr(freezone_routes, "_media_model_catalog_is_authoritative", lambda: True)
+    monkeypatch.setattr(freezone_routes, "_scoped_media_model_catalog", scoped_catalog)
+    request_type = getattr(freezone_routes, f"Freezone{request_name}Request")
+    await getattr(freezone_routes, f"freezone_{route}")(
+        project="proj_freezone",
+        body=request_type(source_url="/static/admin/525/assets/source.png", **extra),
+        user={"username": "admin"},
+    )
+
+    assert scope_checks and all(media_type == "image" and user for media_type, user in scope_checks)
+    assert captured["provider"] == "openrouter"
+    assert captured["model"] == "huimeng_gpt_image2"
+    assert captured["image_size"] == "1K"
+    assert captured["quality"] == "low"
+    assert captured["billing"]["catalog_id"] == "tenant-edit"
+    assert captured["billing"]["pricing_model"] == "huimeng_gpt_image2"
+    assert captured["billing"]["pricing_params"] == {"size": "1K", "quality": "low"}
+    assert captured["billing"]["operation"] == operation
+
+
+@pytest.mark.asyncio
 async def test_scene_360_takes_model_and_billing_identity_from_the_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

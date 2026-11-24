@@ -141,10 +141,8 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
       ),
     [selectedModel],
   );
-  const qualityOptions = useMemo(
-    () => resolveModelQualityOptions(selectedModel),
-    [selectedModel],
-  );
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
   const effectiveImageSize = pickAllowedOption(imageSize, sizeOptions);
   const effectiveAspectRatio = pickAllowedOption(
     aspectRatio,
@@ -157,9 +155,7 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
       surface: 'canvas',
       params: buildImageFeatureBillingParams(selectedModel, {
         size: effectiveImageSize,
-        ...(qualityOptions.length > 0
-          ? { quality: pickAllowedOption('medium', qualityOptions) }
-          : {}),
+        ...(quality ? { quality } : {}),
         operation: 'erase',
         pricing_quantity: Math.min(Math.max(numImages, 1), 4),
       }),
@@ -481,23 +477,20 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
       maskUrl: string,
       resultAspectRatio: string,
     ) => {
-      // 失败后「重新生成」按钮据此重跑同一次擦除（走重绘接口）。
-      updateNodeData(nodeId, {
-        freezoneRedrawRequest: {
-          sourceUrl,
-          maskUrl,
-          aspectRatio: resultAspectRatio,
-          imageSize: effectiveImageSize,
-        },
-      });
+      if (!selectedModel) return;
+      // Retry the same request, including its catalog selection.
+      const request = {
+        sourceUrl,
+        maskUrl,
+        aspectRatio: resultAspectRatio as FreezoneRedrawAspectRatio,
+        imageSize: effectiveImageSize,
+        model: selectedModel.apiModel,
+        catalogId: selectedModel.catalogId,
+        quality,
+      };
+      updateNodeData(nodeId, { freezoneRedrawRequest: request });
       try {
-        const ref = await submitFreezoneRedraw(project, {
-          sourceUrl,
-          maskUrl,
-          aspectRatio: resultAspectRatio as FreezoneRedrawAspectRatio,
-          numImages: 1,
-          imageSize: effectiveImageSize,
-        });
+        const ref = await submitFreezoneRedraw(project, { ...request, numImages: 1 });
         updateNodeData(nodeId, generationTaskDescriptor(ref));
         const completed = await awaitTaskCompletion(ref.task_key, project, { taskType: ref.task_type });
         const directUrl = completed.result?.['output_url'] as string | undefined;
@@ -536,11 +529,11 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
         });
       }
     },
-    [effectiveImageSize, t, updateNodeData],
+    [effectiveImageSize, quality, selectedModel, t, updateNodeData],
   );
 
   const handleSubmit = useCallback(async () => {
-    if (submitting) return;
+    if (submitting || !selectedModel) return;
     const project = readUrl().project;
     if (!project) {
       setError(t('canvas.paintTools.noProject'));
@@ -607,6 +600,7 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
     numImages,
     onClose,
     runEraseGeneration,
+    selectedModel,
     submitting,
     updateNodeData,
   ]);
@@ -777,9 +771,9 @@ export const EraseOverlay = memo(({ node, imageSource, onClose }: EraseOverlayPr
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || !imageDims || billingRuleMissing}
+            disabled={submitting || !imageDims || billingRuleMissing || !selectedModel}
             className={`ml-1 shrink-0 ${NODE_GENERATE_BUTTON_BASE_CLASS} ${NODE_GENERATE_BUTTON_ENABLED_CLASS} disabled:cursor-not-allowed disabled:opacity-50`}
-            title={t('canvas.eraseOverlay.submit')}
+            title={t(selectedModel ? 'canvas.eraseOverlay.submit' : 'modelParams.noModelsAvailable')}
           >
             <ArrowUp className="h-4 w-4" />
           </button>

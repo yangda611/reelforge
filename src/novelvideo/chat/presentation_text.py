@@ -15,14 +15,28 @@ _HERMES_REPLAY_HISTORY_MESSAGES = 1
 _HERMES_REPLAY_HISTORY_MAX_CHARS = 64_000
 
 
-def _completion_text_or_existing(event_text: object, existing: str) -> str:
+def _completion_text_or_existing(
+    event_text: object, existing: str, *, disposition: str | None = None
+) -> str:
     """ACP may finish with metadata like ``stop=end_turn`` after text deltas."""
     final_text = str(event_text or "").strip()
     if not final_text or final_text.startswith("stop="):
         return existing
+    if disposition == "timeout":
+        notice = (
+            "虾导等待模型响应超时，本轮未能完成。已收到的执行回执会保留；"
+            "不确定是否执行的操作不会自动重试。请先检查画布当前状态，再决定是否继续。"
+        )
+        if notice in existing:
+            return existing
+        if existing.strip():
+            return f"{existing.rstrip()}\n\n{notice}"
+        if final_text.lower() == "(hermes timed out)":
+            return notice
+        return f"{final_text}\n\n{notice}"
     if final_text.lower() == "(hermes timed out)" and existing.strip():
         return existing
-    if existing.strip() and _is_completion_notice(final_text):
+    if existing.strip() and (disposition == "failed" or _is_completion_notice(final_text)):
         if final_text in existing:
             return existing
         return f"{existing.rstrip()}\n\n{final_text}"

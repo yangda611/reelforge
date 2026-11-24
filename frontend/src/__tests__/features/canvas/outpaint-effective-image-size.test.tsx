@@ -33,6 +33,8 @@ const CATALOG_MODEL = {
   apiModel: "google/gemini-2.5-flash-image-preview",
   label: "Studio Image",
   resolutionOptions: ["1K", "4K"],
+  catalogId: "cat-outpaint",
+  qualityOptions: ["high"],
 };
 
 type ImageCatalogState = {
@@ -147,6 +149,12 @@ describe("扩图面板的分辨率档位", () => {
     const body = submitFreezoneOutpaint.mock.calls[0][1] as Record<string, unknown>;
     // 报价接口收到什么档位，后端就按什么档位扣费；提交必须一模一样。
     expect(body.imageSize).toBe(quoteOptions.params.size);
+    expect(body).toMatchObject({
+      model: "google/gemini-2.5-flash-image-preview",
+      catalogId: "cat-outpaint",
+      quality: "high",
+    });
+    expect(quoteOptions.params).toMatchObject({ catalog_id: "cat-outpaint", quality: "high" });
   });
 
   it("用户显式选中的档位在允许范围内时原样提交", async () => {

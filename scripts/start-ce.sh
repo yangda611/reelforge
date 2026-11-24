@@ -55,6 +55,9 @@ if [ ! -f ".env" ]; then
   fi
 fi
 
+# Match Compose: a nonempty shell override wins over the same .env variable.
+backend_override="${DRAMACLAW_CHAT_BACKEND:-}"
+legacy_backend_override="${SUPERTALE_CHAT_BACKEND:-}"
 if [ -f ".env" ]; then
   set -a
   # shellcheck source=/dev/null
@@ -79,18 +82,23 @@ export NOVELVIDEO_STATE_DIR="${NOVELVIDEO_STATE_DIR:-$NOVELVIDEO_DATA_ROOT/state
 export NOVELVIDEO_OUTPUT_DIR="${NOVELVIDEO_OUTPUT_DIR:-$NOVELVIDEO_DATA_ROOT/output}"
 export NOVELVIDEO_RUNTIME_DIR="${NOVELVIDEO_RUNTIME_DIR:-$NOVELVIDEO_DATA_ROOT/runtime}"
 
-# This launcher provisions Codex only. Do not silently ignore an older .env
-# selecting another backend, or install a second agent into the application venv.
-backend="$(printf '%s' "${DRAMACLAW_CHAT_BACKEND:-${SUPERTALE_CHAT_BACKEND:-codex}}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-if [ "$backend" != codex ]; then
-  echo "This launcher uses Codex. Set DRAMACLAW_CHAT_BACKEND=codex in .env (current: $backend)." >&2
-  exit 2
-fi
-export DRAMACLAW_CHAT_BACKEND=codex
-
-# Resolve before starting either service; assignment must preserve setup errors.
-codex_bin="$(bash "$root_dir/scripts/setup-codex.sh")"
-export CODEX_BIN="$codex_bin"
+backend="${backend_override:-${DRAMACLAW_CHAT_BACKEND:-${legacy_backend_override:-${SUPERTALE_CHAT_BACKEND:-hermes}}}}"
+backend="$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+export DRAMACLAW_CHAT_BACKEND="${backend:-hermes}"
+case "$DRAMACLAW_CHAT_BACKEND" in
+  hermes)
+    export HERMES_CLI_PATH="${HERMES_CLI_PATH:-${HERMES_ENV_DIR:-$root_dir/.cache/hermes-venv}/bin/hermes}"
+    bash "$root_dir/scripts/setup-hermes.sh"
+    ;;
+  codex)
+    codex_bin="$(bash "$root_dir/scripts/setup-codex.sh")"
+    export CODEX_BIN="$codex_bin"
+    ;;
+  *)
+    echo "Set DRAMACLAW_CHAT_BACKEND to hermes or codex in .env (current: $backend)." >&2
+    exit 2
+    ;;
+esac
 
 if [ "${NEWAPI_API_KEY:-}" = "your_newapi_token" ] || [ -z "${NEWAPI_API_KEY:-}" ]; then
   echo "Warning: NEWAPI_API_KEY is not configured. API can start, but AI generation will fail." >&2
@@ -101,7 +109,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 
 echo "Checking/installing dependencies with uv sync --group dev ..."
-uv sync --group dev
+uv sync --group dev --no-install-package openai-codex-cli-bin
 
 if [ ! -d "frontend/node_modules" ]; then
   echo "Installing frontend dependencies with pnpm install ..."
@@ -110,9 +118,7 @@ fi
 
 echo "Starting SuperTale CE API at http://${api_host}:${api_port}/api/v1"
 echo "Health check: http://127.0.0.1:${api_port}/api/v1/config"
-# Dependencies are synchronized explicitly above.  `uv run` otherwise performs
-# an implicit sync in this background process, which can download the 100+ MiB
-# Codex binary while the readiness timeout is already counting down.
+# Keep the dependency selection above and avoid downloading the stock Codex CLI.
 uv run --no-sync novelvideo api --host "$api_host" --port "$api_port" &
 api_pid="$!"
 

@@ -52,6 +52,87 @@ def test_bridge_lock_is_released_when_a_command_raises(tmp_path):
         portalocker.unlock(lock)
 
 
+def test_bridge_operates_without_portalocker(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "src"
+    script = """
+import builtins
+import sys
+original_import = builtins.__import__
+def isolated_import(name, *args, **kwargs):
+    if name == 'portalocker' or name.startswith('portalocker.'):
+        raise ModuleNotFoundError("No module named 'portalocker'", name='portalocker')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = isolated_import
+from novelvideo.freezone.canvas_command_bridge import _key_lock
+with _key_lock('isolated', sys.argv[1]):
+    pass
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        env={**os.environ, "PYTHONPATH": str(source)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_plugin_reads_node_detail_without_portalocker(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import builtins
+import importlib.util
+import sys
+import threading
+import time
+import types
+
+original_import = builtins.__import__
+def isolated_import(name, *args, **kwargs):
+    if name == 'portalocker' or name.startswith('portalocker.'):
+        raise ModuleNotFoundError("No module named 'portalocker'", name='portalocker')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = isolated_import
+registry = types.ModuleType('tools.registry')
+registry.tool_error = lambda value: value
+registry.tool_result = lambda value: value
+sys.modules['tools'] = types.ModuleType('tools')
+sys.modules['tools.registry'] = registry
+spec = importlib.util.spec_from_file_location('test_freezone', sys.argv[1])
+plugin = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plugin)
+assert plugin._CANVAS_COMMAND_BRIDGE_IMPORT_ERROR is None, plugin._CANVAS_COMMAND_BRIDGE_IMPORT_ERROR
+from novelvideo.freezone import canvas_command_bridge as bridge
+
+def respond():
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        pending = bridge.list_pending_bridge_messages(
+            project_id='project', canvas_id='canvas', kinds={'canvas_context'})
+        if pending:
+            assert pending[0]['envelope']['requests'] == [{'type': 'node_detail', 'node_id': 'script'}]
+            bridge.resolve_canvas_context(pending[0]['key'], {'ok': True, 'text': 'script text'})
+            return
+        time.sleep(0.05)
+    raise AssertionError('node detail request was not received')
+
+worker = threading.Thread(target=respond, daemon=True)
+worker.start()
+result = plugin._handle_node_detail({'project_id': 'project', 'canvas_id': 'canvas', 'node_id': 'script'})
+worker.join(10)
+assert result['ok'] is True and result['text'] == 'script text', result
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(root / ".hermes/plugins/freezone/__init__.py")],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(root / "src"),
+            "DRAMACLAW_CANVAS_COMMAND_BRIDGE_DIR": str(tmp_path),
+            "DRAMACLAW_CANVAS_CONTEXT_RESULT_TIMEOUT_SECONDS": "12",
+        },
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_api_imports_without_the_unix_fcntl_module(tmp_path):
     source = Path(__file__).resolve().parents[1] / "src"
     script = """
@@ -354,6 +435,29 @@ def test_legacy_result_conflict_does_not_create_sqlite_pending_row(tmp_path) -> 
         )
         is None
     )
+
+
+def test_canvas_context_remains_pending_during_default_worker_wait(tmp_path) -> None:
+    canvas_command_bridge.put_pending_canvas_context(
+        key="context-wait",
+        project_id="project-a",
+        canvas_id="canvas-a",
+        requests=[{"type": "node_detail", "node_id": "node"}],
+        envelope={"canvas_id": "canvas-a"},
+        bridge_dir=tmp_path,
+    )
+    with sqlite3.connect(canvas_command_bridge._bridge_db_path(tmp_path)) as conn:
+        conn.execute(
+            "UPDATE canvas_command_messages SET created_at = created_at - 50 "
+            "WHERE bridge_key = 'context-wait'"
+        )
+    pending = canvas_command_bridge.list_pending_bridge_messages(
+        project_id="project-a",
+        canvas_id="canvas-a",
+        kinds={"canvas_context"},
+        bridge_dir=tmp_path,
+    )
+    assert [item["key"] for item in pending] == ["context-wait"]
 
 
 def test_sqlite_inbox_survives_worker_and_file_bridge_loss(tmp_path) -> None:

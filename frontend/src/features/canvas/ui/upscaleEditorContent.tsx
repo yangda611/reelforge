@@ -16,16 +16,18 @@ import {
   DEFAULT_UPSCALE_IMAGE_SIZE,
   DEFAULT_UPSCALE_SCALE_FACTOR,
   submitImageUpscale,
-  UPSCALE_IMAGE_SIZES,
   UPSCALE_SCALE_FACTORS,
-  type UpscaleImageSize,
 } from '@/features/canvas/application/imageUpscale';
 import { type CanvasNode } from '@/features/canvas/domain/canvasNodes';
+import {
+  pickAllowedOption,
+  resolveModelQualityOptions,
+  resolveModelSizeOptions,
+} from '@/features/canvas/domain/mediaModelOptions';
 import { useFreezoneImageModels } from '@/features/canvas/hooks/useFreezoneImageModels';
 import {
   DEFAULT_SHARED_MODEL_ID,
   ProviderModelPicker,
-  SHARED_MODELS,
 } from '@/features/canvas/ui/ProviderModelPicker';
 import { useCanvasStore } from '@/stores/canvasStore';
 
@@ -49,17 +51,18 @@ import { useCanvasStore } from '@/stores/canvasStore';
 interface UpscalePersistedFields {
   upscaleSourceUrl?: string;
   upscaleModelId?: string;
-  upscaleImageSize?: UpscaleImageSize;
+  upscaleImageSize?: string;
   upscaleScaleFactor?: FreezoneUpscaleScaleFactor;
 }
 
 export interface UpscaleEditorController {
   modelId: string;
-  imageSize: UpscaleImageSize;
+  imageSize: string;
+  sizeOptions: string[];
   scaleFactor: FreezoneUpscaleScaleFactor;
-  isSubmitting: boolean;
+  submitDisabled: boolean;
   onModelChange: (modelId: string) => void;
-  onImageSizeChange: (size: UpscaleImageSize) => void;
+  onImageSizeChange: (size: string) => void;
   onScaleFactorChange: (factor: FreezoneUpscaleScaleFactor) => void;
   /** 未提供时卡片不渲染「取消」（故事板详情用头部的返回/删除，不需要这一颗）。 */
   onCancel?: () => void;
@@ -83,10 +86,6 @@ export function useUpscaleEditor({ node, onCancel }: UseUpscaleEditorOptions): U
   const sourceUrl = persisted.upscaleSourceUrl ?? '';
   const modelId =
     typeof persisted.upscaleModelId === 'string' ? persisted.upscaleModelId : DEFAULT_SHARED_MODEL_ID;
-  const imageSize: UpscaleImageSize =
-    persisted.upscaleImageSize && (UPSCALE_IMAGE_SIZES as readonly string[]).includes(persisted.upscaleImageSize)
-      ? persisted.upscaleImageSize
-      : DEFAULT_UPSCALE_IMAGE_SIZE;
   const scaleFactor: FreezoneUpscaleScaleFactor =
     persisted.upscaleScaleFactor === 4 || persisted.upscaleScaleFactor === 6
       ? persisted.upscaleScaleFactor
@@ -96,15 +95,18 @@ export function useUpscaleEditor({ node, onCancel }: UseUpscaleEditorOptions): U
   const { models: availableModels } = useFreezoneImageModels();
   const selectedModel =
     availableModels.find((m) => m.id === modelId)
-    ?? availableModels[0]
-    ?? SHARED_MODELS.find((m) => m.id === modelId);
+    ?? availableModels[0];
+  const sizeOptions = resolveModelSizeOptions(selectedModel);
+  const imageSize = pickAllowedOption(persisted.upscaleImageSize ?? DEFAULT_UPSCALE_IMAGE_SIZE, sizeOptions);
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption('medium', qualityOptions) : undefined;
 
   const onModelChange = useCallback(
     (next: string) => updateNodeData(node.id, { upscaleModelId: next }),
     [node.id, updateNodeData],
   );
   const onImageSizeChange = useCallback(
-    (next: UpscaleImageSize) => updateNodeData(node.id, { upscaleImageSize: next }),
+    (next: string) => updateNodeData(node.id, { upscaleImageSize: next }),
     [node.id, updateNodeData],
   );
   const onScaleFactorChange = useCallback(
@@ -113,23 +115,26 @@ export function useUpscaleEditor({ node, onCancel }: UseUpscaleEditorOptions): U
   );
 
   const onSubmit = useCallback(() => {
-    if (isSubmitting) return;
+    if (isSubmitting || !selectedModel) return;
     const completion = submitImageUpscale(node.id, {
       sourceUrl,
       scaleFactor,
       imageSize,
-      model: selectedModel?.apiModel ?? modelId,
+      model: selectedModel.apiModel,
+      ...(selectedModel.catalogId ? { catalogId: selectedModel.catalogId } : {}),
+      ...(quality ? { quality } : {}),
     });
     if (!completion) return;
     setIsSubmitting(true);
     void completion.finally(() => setIsSubmitting(false));
-  }, [imageSize, isSubmitting, modelId, node.id, scaleFactor, selectedModel, sourceUrl]);
+  }, [imageSize, isSubmitting, node.id, quality, scaleFactor, selectedModel, sourceUrl]);
 
   return {
-    modelId,
+    modelId: selectedModel?.id ?? modelId,
     imageSize,
+    sizeOptions,
     scaleFactor,
-    isSubmitting,
+    submitDisabled: isSubmitting || !selectedModel,
     onModelChange,
     onImageSizeChange,
     onScaleFactorChange,
@@ -178,7 +183,7 @@ export function UpscaleEditorPanel({
         </PanelRow>
 
         <PanelRow label={t('upscaleEditor.qualityLabel')}>
-          <QualityPicker value={controller.imageSize} onChange={controller.onImageSizeChange} />
+          <QualityPicker value={controller.imageSize} options={controller.sizeOptions} onChange={controller.onImageSizeChange} />
         </PanelRow>
 
         <PanelRow label={t('upscaleEditor.scaleLabel')}>
@@ -194,7 +199,7 @@ export function UpscaleEditorPanel({
         <button
           type="button"
           onClick={controller.onSubmit}
-          disabled={controller.isSubmitting}
+          disabled={controller.submitDisabled}
           className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-bg-dark transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           title={t('upscaleEditor.submit')}
           aria-label={t('upscaleEditor.submit')}
@@ -217,10 +222,12 @@ function PanelRow({ label, children }: { label: string; children: ReactNode }): 
 
 function QualityPicker({
   value,
+  options,
   onChange,
 }: {
-  value: UpscaleImageSize;
-  onChange: (value: UpscaleImageSize) => void;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
 }): ReactElement {
   const { t } = useTranslation();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -266,7 +273,7 @@ function QualityPicker({
         >
           <div className="mb-1 text-[11px] uppercase tracking-wide text-text-muted">{title}</div>
           <div className="flex gap-1.5">
-            {UPSCALE_IMAGE_SIZES.map((size) => {
+            {options.map((size) => {
               const isActive = value === size;
               return (
                 <button

@@ -436,6 +436,7 @@ interface CanvasState {
       label?: string;
       extraPadding?: number;
       padding?: { side: number; top: number; bottom: number };
+      minNodes?: number;
     }
   ) => string | null;
   /** 把选中节点打成「故事组」并初始化剧情状态。返回组 id。 */
@@ -3843,15 +3844,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   groupNodes: (nodeIds, opts) => {
+    const minNodes = Math.max(1, opts?.minNodes ?? 2);
     const uniqueIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
-    if (uniqueIds.length < 2) {
+    if (uniqueIds.length < minNodes) {
       return null;
     }
 
     const state = get();
     const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
     const existingIds = uniqueIds.filter((nodeId) => nodeMap.has(nodeId));
-    if (existingIds.length < 2) {
+    if (existingIds.length < minNodes) {
       return null;
     }
 
@@ -3868,7 +3870,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return true;
     });
-    if (memberIds.length < 2) {
+    if (memberIds.length < minNodes) {
       return null;
     }
 

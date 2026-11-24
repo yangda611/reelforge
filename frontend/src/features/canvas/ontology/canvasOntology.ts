@@ -1,5 +1,6 @@
 import type { CanvasEdge, CanvasNode, CanvasNodeType } from "@/features/canvas/domain/canvasNodes";
 import { CANVAS_NODE_TYPES, resolveNodeSourceImageUrl } from "@/features/canvas/domain/canvasNodes";
+import { getNodeSize } from "@/features/canvas/application/autoLayout";
 import { nodeMainlineFlags } from "@/features/canvas/domain/mainlineNodeFlags";
 import { coerceSlotTarget, type SlotTarget } from "@/features/canvas/domain/mainlineNodeTypes";
 import { resolveNodeDisplayName } from "@/features/canvas/domain/nodeDisplay";
@@ -33,9 +34,12 @@ export type CanvasOntologyObject = {
   action_id: string | null;
   execution_state: string | null;
   label: string;
+  parent_id: string | null;
   media_type: string | null;
   media_kind: string | null;
   position: { x: number; y: number };
+  size: { width: number; height: number };
+  text_preview: string | null;
   slot_target: SlotTarget | null;
   candidate_origin: unknown;
   pushable: boolean;
@@ -179,6 +183,18 @@ function nodeObjectKind(node: CanvasNode, actionId: string | null, pushable: boo
   return node.type ? "free" : "unknown";
 }
 
+function nodeTextPreview(node: CanvasNode): string | null {
+  const data = objectValue(node.data);
+  for (const key of ["prompt", "content", "text", "description"]) {
+    const raw = stringOrNull(data[key]);
+    if (raw) {
+      const compact = raw.replace(/\s+/g, " ").trim();
+      return compact.length > 120 ? `${compact.slice(0, 120)}...` : compact;
+    }
+  }
+  return null;
+}
+
 export function deriveCanvasOntologyObject(node: CanvasNode): CanvasOntologyObject {
   const data = objectValue(node.data);
   const flags = nodeMainlineFlags(node);
@@ -186,6 +202,7 @@ export function deriveCanvasOntologyObject(node: CanvasNode): CanvasOntologyObje
   const slotTarget = coerceSlotTarget(data.slot_target);
   const pushable = isCommitCandidateData(node.data);
   const semanticSpec = getCanvasNodeSemanticSpec(node.type);
+  const nodeSize = getNodeSize(node);
   return {
     node_id: node.id,
     node_type: node.type ?? null,
@@ -193,9 +210,12 @@ export function deriveCanvasOntologyObject(node: CanvasNode): CanvasOntologyObje
     action_id: actionId,
     execution_state: nodeExecutionState(node),
     label: resolveNodeDisplayName(node.type, node.data),
+    parent_id: stringOrNull(node.parentId),
     media_type: nodeOntologyMediaType(node),
     media_kind: stringOrNull(data.media_kind),
     position: { x: node.position.x, y: node.position.y },
+    size: { width: Math.round(nodeSize.width), height: Math.round(nodeSize.height) },
+    text_preview: nodeTextPreview(node),
     slot_target: slotTarget,
     candidate_origin: data.candidate_origin ?? null,
     pushable,
@@ -244,8 +264,8 @@ export function buildCanvasOntologyContext(
   options: BuildCanvasOntologyContextOptions,
 ): CanvasOntologyContext {
   const selectedNodeIds = options.selectedNodeIds ?? [];
-  const maxObjects = Math.max(1, options.maxObjects ?? 60);
-  const maxLinks = Math.max(0, options.maxLinks ?? 120);
+  const maxObjects = Math.max(1, options.maxObjects ?? 500);
+  const maxLinks = Math.max(0, options.maxLinks ?? 1000);
   const objects = nodes.map(deriveCanvasOntologyObject);
   const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
   const selected = new Set(selectedNodeIds);

@@ -13,13 +13,11 @@ import {
 } from '@/features/canvas/application/imageRotate';
 import { scene360Image } from '@/features/canvas/application/imageScene360';
 import { createUpscaleResultNode } from '@/features/canvas/application/imageUpscale';
+import { resolvePanoramaModelRequest } from '@/features/canvas/domain/fixedFeatureModelRequest';
 import { nodeMainlineFlags } from '@/features/canvas/domain/mainlineNodeFlags';
 import { type CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import { useFreezoneImageModels } from '@/features/canvas/hooks/useFreezoneImageModels';
-import {
-  DEFAULT_SHARED_MODEL_ID,
-  SHARED_MODELS,
-} from '@/features/canvas/ui/ProviderModelPicker';
+import { DEFAULT_SHARED_MODEL_ID } from '@/features/canvas/ui/ProviderModelPicker';
 import { useCanvasStore } from '@/stores/canvasStore';
 
 import { ImageResizeDialog } from '../ImageResizeDialog';
@@ -134,14 +132,8 @@ export function useAssetBoardImageEditActions({
   const [rotateNodeId, setRotateNodeId] = useState<string | null>(null);
 
   const { models: imageModels } = useFreezoneImageModels();
-  // 模型选择优先级同工作流 UpscaleEditorOverlay / OutpaintEditorOverlay：优先取
-  // 默认共享模型（DEFAULT_SHARED_MODEL_ID），可用列表里没有再退到首个可用模型，
-  // 都拿不到才退到硬编码 SHARED_MODELS 兜底。
   const selectedModelId =
-    (imageModels.find((model) => model.id === DEFAULT_SHARED_MODEL_ID)
-      ?? imageModels[0]
-      ?? SHARED_MODELS.find((model) => model.id === DEFAULT_SHARED_MODEL_ID))?.id
-    ?? DEFAULT_SHARED_MODEL_ID;
+    (imageModels.find((model) => model.id === DEFAULT_SHARED_MODEL_ID) ?? imageModels[0])?.id;
 
   // 与工作流 NodeActionToolbar 同源的显隐语义：preset_managed（主线投影锁定）节点
   // 隐藏「原地改写源图」的入口——高清与旋转都是 updateNodeData 回写，会破坏
@@ -157,7 +149,7 @@ export function useAssetBoardImageEditActions({
    * 身上（isGenerating → 详情媒体区的「生成中 X%」）。
    */
   const handleOpenHd = useCallback(() => {
-    if (busyOp) return;
+    if (busyOp || !selectedModelId) return;
     const resultNodeId = createUpscaleResultNode(node.id, {
       displayName: t('assetBoard.upscaleResult'),
       modelId: selectedModelId,
@@ -301,16 +293,19 @@ export function AssetBoardImageOps({
   const [multiAngleOpen, setMultiAngleOpen] = useState(false);
   const [relightOpen, setRelightOpen] = useState(false);
 
+  const { models } = useFreezoneImageModels();
+  const panoramaRequest = useMemo(() => resolvePanoramaModelRequest(models), [models]);
   const handlePanoSubmit = useCallback(() => {
-    if (busyOp) return;
+    if (busyOp || !panoramaRequest) return;
     if (!window.confirm(t('assetBoard.panoramaConfirm'))) return;
     const result = scene360Image(node.id, imageSource, {
       displayName: t('assetBoard.panoramaResult'),
       aspectRatio: '2:1',
+      ...panoramaRequest.submit,
     });
     if (!result) return;
     trackSpawn(node.id, 'pano', result.nodeId, result.completion);
-  }, [busyOp, imageSource, node.id, t]);
+  }, [busyOp, imageSource, node.id, panoramaRequest, t]);
 
   return (
     <>
@@ -318,8 +313,8 @@ export function AssetBoardImageOps({
         icon={Globe2}
         label={t('assetBoard.panorama')}
         busy={busyOp === 'pano'}
-        disabled={busyOp !== null}
-        title={t('assetBoard.panoramaTitle')}
+        disabled={busyOp !== null || !panoramaRequest}
+        title={t(panoramaRequest ? 'assetBoard.panoramaTitle' : 'modelParams.noModelsAvailable')}
         onClick={handlePanoSubmit}
       />
       <DetailToolbarButton

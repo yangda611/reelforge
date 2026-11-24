@@ -123,6 +123,44 @@ def test_standard_ecommerce_image_planner_omits_audio_video_and_compose(monkeypa
     assert "videoComposeNode" not in node_types
 
 
+def test_unconsumed_external_input_is_reported_as_such(monkeypatch):
+    """A declared external input nothing reads must not become a graph error.
+
+    Regression: the standard planner registers each external_inputs alias as a
+    plan node but emits no edge for it unless an item references the alias, so
+    the plan failed later with the opaque "workflow graph contains disconnected
+    nodes: source_script" instead of naming the declaration to fix.
+    """
+    catalog = _load_catalog_module()
+    _install_real_builtin_catalog(monkeypatch, catalog)
+
+    result = catalog.compile_workflow_intent(
+        {
+            "skill_id": "text-to-image",
+            "user_goal": "根据剧本创建生图节点并写入提示词，不生成图片",
+            "external_inputs": [
+                {"id": "source_script", "node_id": "script-node", "media_kind": "image"}
+            ],
+            "planner": {
+                "mode": "standard",
+                "deliverable": "images",
+                "item_count": 2,
+                "units": [
+                    {"title": "场景一", "prompt": "省城楼道空镜"},
+                    {"title": "场景二", "prompt": "山脚早点摊空镜"},
+                ],
+            },
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "invalid_workflow_intent"
+    assert "source_script" in result["error"]
+    assert "disconnected" not in result["error"]
+    assert result["errors"][0]["path"] == "external_inputs"
+    assert "reference_inputs" in result["errors"][0]["hint"]
+
+
 def test_social_content_campaign_builtin_skill_is_loadable(monkeypatch):
     catalog = _load_catalog_module()
     _install_real_builtin_catalog(monkeypatch, catalog)

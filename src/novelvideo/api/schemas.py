@@ -11,11 +11,13 @@ from novelvideo.models import SceneRef
 from novelvideo.director_world.blockout.prompts import MAX_DESCRIPTION_CHARS
 from novelvideo.freezone.asset_copy import MAX_SOURCE_URL_LENGTH, MAX_SOURCES_PER_REQUEST
 from novelvideo.freezone.slots import PushTarget
+from novelvideo.freezone.defaults import (
+    FREEZONE_DEFAULT_IMAGE_MODEL,
+    FREEZONE_DEFAULT_IMAGE_SELECTION as FREEZONE_DEFAULT_IMAGE_SELECTION,
+)
 
 ProjectStatus = Literal["active", "archived", "deleted"]
 ProjectStatusFilter = Literal["all", "active", "archived", "deleted", "visible"]
-FREEZONE_DEFAULT_IMAGE_SELECTION = "newapi_gpt_image2"
-FREEZONE_DEFAULT_IMAGE_MODEL = FREEZONE_DEFAULT_IMAGE_SELECTION
 CANVAS_MAX_NODES = 50_000
 CANVAS_MAX_EDGES = 200_000
 
@@ -688,6 +690,7 @@ class FreezoneCharacterMultiViewRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -860,6 +863,7 @@ class FreezoneUpscaleRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
     camera: Optional[FreezoneImageCameraConfig] = Field(
         default=None,
@@ -906,6 +910,7 @@ class FreezoneOutpaintRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -950,6 +955,7 @@ class FreezoneRedrawRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 
@@ -991,6 +997,7 @@ class FreezoneRelightRequest(BaseModel):
         default=FREEZONE_DEFAULT_IMAGE_MODEL,
         description=f"图片模型名，默认 {FREEZONE_DEFAULT_IMAGE_MODEL}",
     )
+    catalog_id: str = Field(default="", description="媒体模型目录 ID")
     quality: Optional[str] = Field(default="medium", description="图片画质档位，默认 medium")
 
 

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from novelvideo.chat import (
     display_fallback,
@@ -30,6 +34,36 @@ def _thread(tmp_path) -> hermes_sdk.HermesSdkThread:
         username="local",
         session_id="session-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_closing_during_warmup_reaps_late_subprocess(tmp_path, monkeypatch):
+    thread = _thread(tmp_path)
+    spawning = asyncio.Event()
+    publish = asyncio.Event()
+    reaped = asyncio.Event()
+
+    async def spawn(*args, **kwargs):
+        spawning.set()
+        await publish.wait()
+        return SimpleNamespace(
+            stdin=None, stdout=None, stderr=None, returncode=None,
+            terminate=reaped.set, wait=wait,
+        )
+
+    async def wait():
+        assert reaped.is_set()
+        return 0
+
+    monkeypatch.setattr(hermes_sdk, "wrap_command", lambda command, spec: command)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    warming = asyncio.create_task(thread.warm())
+    await asyncio.wait_for(spawning.wait(), 1)
+    closing = asyncio.create_task(thread.close())
+    await asyncio.sleep(0)
+    publish.set()
+    await asyncio.wait_for(asyncio.gather(warming, closing), 1)
+    assert reaped.is_set()
 
 
 def _update(thread, update: dict, names: dict[str, str] | None = None):

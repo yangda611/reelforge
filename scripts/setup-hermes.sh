@@ -17,10 +17,8 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-install}"
 
-# Prefer SSH for the developer installer so GitHub HTTPS rate limits do not
-# block local setup. Docker builds keep their HTTPS default because an image
-# build does not have access to the host SSH agent/keys.
-HERMES_REPO="${HERMES_REPO:-git@github.com:dramaclaw/hermes-agent.git}"
+# Use the same public repo as Docker so a fresh install needs no SSH key.
+HERMES_REPO="${HERMES_REPO:-https://github.com/dramaclaw/hermes-agent.git}"
 HERMES_REF="${HERMES_REF:-brainclaw/evidence-plane}"
 HERMES_SOURCE_DIR="${HERMES_SOURCE_DIR:-$root_dir/.cache/hermes-agent}"
 HERMES_ENV_DIR="${HERMES_ENV_DIR:-$root_dir/.cache/hermes-venv}"
@@ -44,6 +42,15 @@ except Exception:
 PY
 }
 
+freezone_runtime_is_ready() {
+  "$HERMES_PYTHON" "$root_dir/deploy/verify_freezone_runtime.py"
+}
+
+install_freezone_dependencies() {
+  uv pip install --python "$HERMES_PYTHON" -r "$root_dir/deploy/hermes-freezone-requirements.txt"
+  freezone_runtime_is_ready
+}
+
 if [ ! -x "$HERMES_PYTHON" ]; then
   if [ "$mode" = "--check" ] || [ "$mode" = "check" ]; then
     echo "Hermes isolated environment is not installed: $HERMES_ENV_DIR" >&2
@@ -59,6 +66,11 @@ if [ ! -x "$HERMES_PYTHON" ]; then
 fi
 
 if fork_is_installed; then
+  if [ "$mode" = "--check" ] || [ "$mode" = "check" ]; then
+    freezone_runtime_is_ready
+  else
+    install_freezone_dependencies
+  fi
   echo "Hermes fork is installed ($("$HERMES_CLI_PATH" --version 2>/dev/null | head -n 1))."
   exit 0
 fi
@@ -98,5 +110,7 @@ if ! fork_is_installed; then
   echo "survive the ACP router. Check $HERMES_SOURCE_DIR@$installed_sha." >&2
   exit 1
 fi
+
+install_freezone_dependencies
 
 echo "Hermes fork ready: ${installed_sha:0:12} ($("$HERMES_CLI_PATH" --version 2>/dev/null | head -n 1))"

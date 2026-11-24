@@ -15,6 +15,14 @@ import { useCanvasStore } from "@/stores/canvasStore";
 import { enT } from "@/__tests__/helpers/i18n-fixtures";
 
 const localeState = vi.hoisted(() => ({ language: "zh" }));
+const canvasVisionMocks = vi.hoisted(() => ({
+  prepare: vi.fn<(...args: unknown[]) => Promise<{ attachment: ChatAttachment; context: string } | null>>(async () => null),
+}));
+
+vi.mock('@/features/freezone/canvasVision', async importOriginal => {
+  const original = await importOriginal<typeof import('@/features/freezone/canvasVision')>();
+  return { ...original, prepareCanvasVisualOverview: canvasVisionMocks.prepare };
+});
 
 const superChatMocks = vi.hoisted(() => ({
   send: vi.fn(async () => true),
@@ -268,6 +276,7 @@ describe("SuperChatPanel Freezone selection attachment state", () => {
   });
 
   afterEach(() => {
+    canvasVisionMocks.prepare.mockReset().mockResolvedValue(null);
     localeState.language = "zh";
     window.localStorage.removeItem("freezone.canvasCommandExecutionMode");
     vi.useRealTimers();
@@ -281,6 +290,22 @@ describe("SuperChatPanel Freezone selection attachment state", () => {
     apiMocks.post.mockClear();
     useCanvasStore.getState().setCanvasData([], []);
     useCanvasStore.getState().setSelectedNode(null);
+  });
+
+  it('sends a fresh canvas overview as the first real image attachment for layout requests', async () => {
+    const nodes = [{ id: 'photo', type: 'uploadNode', position: { x: 320, y: 120 }, data: {} }] as CanvasNode[];
+    useCanvasStore.getState().setCanvasData(nodes, []);
+    const attachment = { type: 'canvas_visual_overview', url: '/static/overview.jpg', content: '{"source_url":"/static/overview.jpg"}' };
+    canvasVisionMocks.prepare.mockResolvedValueOnce({ attachment, context: '[CANVAS_VISUAL_OVERVIEW] photo' });
+    render(<SuperChatPanel variant="freezone" canvasId="canvas-a" currentCanvasSelection={[]} pendingAttachments={[]} />);
+    setFreezoneComposerText(getFreezoneComposerTextbox(), '帮我整理画布');
+    fireEvent.click(screen.getByLabelText('发送'));
+    await waitFor(() => expect(superChatMocks.send).toHaveBeenCalledTimes(1));
+    expect(canvasVisionMocks.prepare).toHaveBeenCalledWith('project-a', 'canvas-a', expect.arrayContaining([expect.objectContaining({ id: 'photo' })]), []);
+    const [text, attachments, transport] = superChatMocks.send.mock.calls[0] as unknown as [string, ChatAttachment[], string];
+    expect(text).toBe('帮我整理画布');
+    expect(attachments[0]).toEqual(attachment);
+    expect(transport).toContain('[CANVAS_VISUAL_OVERVIEW] photo');
   });
 
   it("localizes selection, execution mode and Skill controls without changing reference data", async () => {
@@ -1632,6 +1657,43 @@ describe("SuperChatPanel Freezone selection attachment state", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
     await waitFor(() => expect(screen.queryByText("待确认的画布操作")).not.toBeInTheDocument());
     expect(await screen.findByText("画布执行")).toBeInTheDocument();
+  });
+
+  it("requires an explicit user confirmation before auto mode applies deletions", async () => {
+    window.localStorage.setItem("freezone.canvasCommandExecutionMode", "auto_execute");
+    render(
+      <SuperChatPanel
+        variant="freezone"
+        canvasId="canvas-a"
+        currentCanvasSelection={[]}
+        currentCanvasOntologyContext={buildCanvasOntologyContext([], [], {
+          canvasId: "canvas-a",
+          selectedNodeIds: [],
+        })}
+        pendingAttachments={[]}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("freezone/canvas-command-approval", {
+        detail: {
+          canvasId: "canvas-a",
+          turnId: "turn-delete",
+          bridgeKey: "bridge-delete",
+          envelopes: [{
+            schema_version: "canvas_chat_commands.v1",
+            commands: [{ type: "delete_nodes", node_ids: ["node-a", "node-b"] }],
+          }],
+          receivedAt: Date.now(),
+        },
+      }));
+    });
+
+    expect(await screen.findByText("待确认的删除操作")).toBeInTheDocument();
+    expect(screen.getByText("该操作会从当前画布删除节点或全部内容。未点击确认前不会执行。"))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认删除" })).toBeInTheDocument();
+    expect(apiMocks.post).not.toHaveBeenCalled();
   });
 
   it("renders canvas command approval once when the same turn has a tool card", async () => {

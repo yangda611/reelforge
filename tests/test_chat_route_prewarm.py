@@ -158,47 +158,30 @@ async def test_codex_cancel_without_turn_identity_fails_closed_and_keeps_lock(
 
 
 @pytest.mark.anyio
-async def test_hermes_cancel_recovers_stranded_home_lock(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_hermes_cancel_keeps_owned_chat_lease(
+    monkeypatch, tmp_path, close_fails
+) -> None:
     from novelvideo.chat import hermes_pool
     from novelvideo.chat import service as chat_service
 
     class IdleHermesPool:
         async def close_user(self, _username):
+            if close_fails:
+                raise RuntimeError("worker registry unavailable")
             return False
 
     monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
     monkeypatch.setattr(hermes_pool, "pool", IdleHermesPool())
-    chat_service._acquire_chat_run_lock("alice", "")
+    lease = chat_service._acquire_chat_run_lock("alice", "")
+    try:
+        result = await chat_route.cancel_chat_turn({"username": "alice"})
 
-    result = await chat_route.cancel_chat_turn({"username": "alice"})
-
-    assert result == {"ok": True, "data": {"cancelled": False}}
-    next_lock = chat_service._acquire_chat_run_lock("alice", "")
-    chat_service._release_chat_run_lock("alice", "", next_lock)
-
-
-@pytest.mark.anyio
-async def test_hermes_cancel_error_recovers_stranded_home_lock(
-    monkeypatch, tmp_path
-) -> None:
-    from novelvideo.chat import hermes_pool
-    from novelvideo.chat import service as chat_service
-
-    class FailingHermesPool:
-        async def close_user(self, _username):
-            raise RuntimeError("worker registry unavailable")
-
-    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
-    monkeypatch.setattr(hermes_pool, "pool", FailingHermesPool())
-    chat_service._acquire_chat_run_lock("alice", "")
-
-    result = await chat_route.cancel_chat_turn({"username": "alice"})
-
-    assert result == {"ok": True, "data": {"cancelled": False}}
-    next_lock = chat_service._acquire_chat_run_lock("alice", "")
-    chat_service._release_chat_run_lock("alice", "", next_lock)
+        assert result == {"ok": True, "data": {"cancelled": False}}
+        assert chat_service._heartbeat_chat_run_lock("alice", "", lease)
+    finally:
+        chat_service._release_chat_run_lock("alice", "", lease)
 
 
 @pytest.mark.anyio
@@ -1183,6 +1166,44 @@ def test_legacy_bridge_filter_uses_raw_message_kind_ttl(tmp_path) -> None:
         key=key,
     )
     assert not pending_path.exists()
+
+
+@pytest.mark.anyio
+async def test_canvas_context_watcher_includes_originating_scope(monkeypatch, tmp_path):
+    class CapturingWebSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+            raise RuntimeError("stop watcher after first send")
+
+    bridge_dir = tmp_path / "bridge"
+    monkeypatch.setattr(
+        chat_route, "_candidate_canvas_bridge_dirs_for_scope", lambda *_args: [bridge_dir]
+    )
+    requests = [{"type": "canvas_ontology"}]
+    envelope = {
+        "schema_version": "canvas_context_request.v1",
+        "canvas_id": "canvas-a",
+        "requests": requests,
+    }
+    canvas_command_bridge.put_pending_canvas_context(
+        key="context-key", project_id="project-a", canvas_id="canvas-a",
+        requests=requests, envelope=envelope, bridge_dir=bridge_dir,
+    )
+    scope = ChatScope(
+        kind="project", id="project-a", surface="freezone",
+        canvas_id="canvas-a", agent_id="agent-1",
+    )
+    websocket = CapturingWebSocket()
+    await chat_route._watch_pending_canvas_context_requests(
+        websocket=websocket, username="admin", scope=scope, turn_id="turn-a",
+        send_lock=None, emitted_bridge_keys=set(), started_at=0,
+    )
+    assert len(websocket.sent) == 1
+    assert websocket.sent[0]["scope"] == scope.to_dict()
+    assert websocket.sent[0]["envelope"] == envelope
 
 
 @pytest.mark.anyio

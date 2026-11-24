@@ -5,6 +5,7 @@ import {
   DEFAULT_NODE_WIDTH,
   type CanvasEdge,
   type CanvasNode,
+  isGroupNode,
 } from '@/features/canvas/domain/canvasNodes';
 
 const DEFAULT_NODE_HEIGHT = 320;
@@ -55,7 +56,43 @@ export function getNodeSize(node: CanvasNode): NodeSize {
     ?? styleHeight
     ?? fallback?.height
     ?? DEFAULT_NODE_HEIGHT;
-  return { width, height };
+  // Group bounds can grow before React Flow refreshes its measurement.
+  return isGroupNode(node)
+    ? {
+      width: Math.max(node.width ?? 0, styleWidth ?? 0) || width,
+      height: Math.max(node.height ?? 0, styleHeight ?? 0) || height,
+    }
+    : { width, height };
+}
+
+/** Arrange siblings in command order within their shared coordinate space. */
+export function computeOrderedLayout(
+  nodes: CanvasNode[],
+  mode: 'horizontal' | 'vertical' | 'grid',
+  options: { gap?: number; origin?: { x: number; y: number }; minColumnStep?: number; minRowStep?: number } = {},
+): Record<string, { x: number; y: number }> {
+  if (nodes.length === 0) return {};
+  const gap = options.gap ?? 48;
+  const origin = options.origin ?? {
+    x: Math.min(...nodes.map((node) => node.position.x)),
+    y: Math.min(...nodes.map((node) => node.position.y)),
+  };
+  const sizes = nodes.map(getNodeSize);
+  const columns = Math.ceil(Math.sqrt(nodes.length));
+  const columnStep = Math.max(options.minColumnStep ?? 0, ...sizes.map((size) => size.width + gap));
+  const rowStep = Math.max(options.minRowStep ?? 0, ...sizes.map((size) => size.height + gap));
+  let cursor = 0;
+  return Object.fromEntries(nodes.map((node, index) => {
+    const position = mode === 'grid'
+      ? { x: origin.x + (index % columns) * columnStep, y: origin.y + Math.floor(index / columns) * rowStep }
+      : mode === 'horizontal'
+        ? { x: origin.x + cursor, y: origin.y }
+        : { x: origin.x, y: origin.y + cursor };
+    cursor += mode === 'horizontal'
+      ? Math.max(options.minColumnStep ?? 0, sizes[index].width + gap)
+      : Math.max(options.minRowStep ?? 0, sizes[index].height + gap);
+    return [node.id, position];
+  }));
 }
 
 function computeComponents(

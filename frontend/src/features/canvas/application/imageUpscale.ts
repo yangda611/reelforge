@@ -114,6 +114,8 @@ export function submitImageUpscale(
     scaleFactor: FreezoneUpscaleScaleFactor;
     imageSize: string;
     model: string;
+    catalogId?: string;
+    quality?: string;
   },
 ): Promise<void> | null {
   if (!opts.sourceUrl) {
@@ -140,6 +142,8 @@ export function submitImageUpscale(
         scaleFactor: opts.scaleFactor,
         imageSize: opts.imageSize,
         model: opts.model,
+        ...(opts.catalogId ? { catalogId: opts.catalogId } : {}),
+        ...(opts.quality ? { quality: opts.quality } : {}),
       });
       useCanvasStore.getState().updateNodeData(nodeId, generationTaskDescriptor(ref));
       const completed = await awaitTaskCompletion(ref.task_key, project);

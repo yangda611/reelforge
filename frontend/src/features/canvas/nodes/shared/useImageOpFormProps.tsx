@@ -9,7 +9,12 @@ import {
   isGridImageOpKey,
   runAssetBoardImageOp,
 } from '@/features/canvas/application/assetBoardImageOps';
-import { imageModelSupportsQuality } from '@/features/canvas/application/gridTemplateAction';
+import { GRID_ACTION_MODE_MAP } from '@/features/canvas/application/gridTemplateAction';
+import { FREEZONE_IMAGE_FEATURES } from '@/features/canvas/application/freezoneImageFeatureBilling';
+import {
+  resolveFixedFeatureModelRequest,
+  resolvePanoramaModelRequest,
+} from '@/features/canvas/domain/fixedFeatureModelRequest';
 import { useFreezoneImageModels } from '@/features/canvas/hooks/useFreezoneImageModels';
 import { AssetBoardImageOpChip } from '@/features/canvas/ui/asset-board/AssetBoardImageOpChip';
 import type { CreditPromotionDisplay } from '@/components/credits/credit-visual';
@@ -50,32 +55,27 @@ export function useImageOpFormProps(
   });
   const opKey = isAssetBoardImageOpKey(opKeyRaw) ? opKeyRaw : null;
 
-  const handleSubmit = useCallback(() => {
-    void runAssetBoardImageOp(nodeId);
-  }, [nodeId]);
   // 在输入框开头退格 = 删掉这枚 chip = 该节点退回普通图片生成。
   const handleChipDelete = useCallback(() => {
     clearAssetBoardImageOp(nodeId);
   }, [nodeId]);
 
-  // 功能节点的算力：宫格按 image_selection 询价（与工具条下拉同一套查询，两处显示
-  // 同一个数）；询价没回来退回功能表里的硬编码 cost。全景没有对应口径，返回 null
-  // → CreditCostPill 自己不渲染。
+  const { models } = useFreezoneImageModels();
   const isGridOp = opKey !== null && isGridImageOpKey(opKey);
-  const { models: imageModels } = useFreezoneImageModels();
-  const selectedModel = imageModels[0];
-  // value 传 null 时 useGenerationCreditCost 自己 enabled:false（image_selection
-  // 属于 requiresValue 那档），非宫格功能不会白发一次询价请求。
+  const modelRequest = isGridOp && models[0]
+    ? resolveFixedFeatureModelRequest(models[0], { mode: GRID_ACTION_MODE_MAP[opKey] })
+    : opKey === 'scene360' ? resolvePanoramaModelRequest(models) : null;
   const creditCost = useGenerationCreditCost(
-    'image_selection',
-    isGridOp ? (selectedModel?.apiModel ?? null) : null,
-    {
-      surface: 'canvas',
-      params: imageModelSupportsQuality(selectedModel?.apiModel)
-        ? { size: '2K', quality: 'medium' }
-        : { size: '2K' },
-    },
+    'feature',
+    modelRequest
+      ? (isGridOp ? FREEZONE_IMAGE_FEATURES.grid : FREEZONE_IMAGE_FEATURES.panorama)
+      : null,
+    { surface: 'canvas', params: modelRequest?.billingParams },
   );
+  const handleSubmit = () => {
+    if (!opKey || !modelRequest || options.isGenerating) return;
+    void runAssetBoardImageOp(nodeId, opKey, modelRequest.submit);
+  };
 
   if (!opKey) {
     return null;
@@ -90,10 +90,8 @@ export function useImageOpFormProps(
     // 功能提交不要求提示词（模板本身就是「基于当前图像生成」，提示词是可选补充），
     // 所以不能沿用共用表单那条 `submitDisabled = isGenerating || !hasEffectivePrompt`。
     onSubmit: handleSubmit,
-    submitDisabled: options.isGenerating,
-    totalCreditCostDisplay: isGridOp
-      ? (creditCost.data?.data.display ?? String(ASSET_BOARD_IMAGE_OP_MAP[opKey].cost))
-      : null,
-    creditPromotion: isGridOp ? (creditCost.data?.data.promotion ?? null) : null,
+    submitDisabled: options.isGenerating || !modelRequest,
+    totalCreditCostDisplay: modelRequest ? (creditCost.data?.data.display ?? null) : null,
+    creditPromotion: modelRequest ? (creditCost.data?.data.promotion ?? null) : null,
   };
 }

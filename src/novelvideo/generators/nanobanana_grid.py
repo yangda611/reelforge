@@ -248,6 +248,13 @@ def _newapi_request_id_from_headers(headers: Any) -> str:
 NEWAPI_IMAGE_HTTP_TIMEOUT_SECONDS = 1800.0
 _LINGKE_IMAGE_POLL_INTERVAL_SECONDS = 5.0
 _LINGKE_IMAGE_MAX_REFERENCES = 10
+#: Result-image GET retry budget. Large bodies (2K/4K PNG, several MB) are
+#: occasionally cut short by a relay/CDN closing the connection mid-body; that
+#: is a transport flake, not a provider rejection, so one more GET is cheap.
+#: These bounds apply to the artifact GET only — never to a generation POST.
+_IMAGE_DOWNLOAD_MAX_ATTEMPTS = 3
+_IMAGE_DOWNLOAD_BACKOFF_SECONDS = 0.5
+_IMAGE_DOWNLOAD_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
 def _newapi_safe_header_summary(headers: Any) -> dict[str, str]:
@@ -433,6 +440,71 @@ class _InlineImagePart:
 
     def __init__(self, data: bytes, mime_type: str = "image/png"):
         self.inline_data = SimpleNamespace(data=data, mime_type=mime_type)
+
+
+def _is_retryable_image_download_error(exc: BaseException) -> bool:
+    """True only for transport-level flakes and retryable status codes.
+
+    ``RemoteProtocolError`` (peer closed the body early) and timeouts qualify;
+    HTTP 4xx and any provider/business rejection does not — retrying those just
+    delays the real error. This gate is what keeps the retry loop from turning
+    a deterministic failure into a slow one.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _IMAGE_DOWNLOAD_RETRYABLE_STATUS
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+async def _download_image_bytes_with_retry(
+    url: str,
+    *,
+    label: str,
+    timeout: float = 60.0,
+) -> bytes:
+    """GET a generated artifact, retrying only transport-level truncation.
+
+    Scope note: this helper must be used for downloading a finished artifact
+    only. The generation POST is the billed call; retrying that would regenerate
+    the image and charge again, so it deliberately stays outside this loop.
+    ``tests/test_transport_retry_disabled.py`` pins that no billed request is
+    re-sent; this GET is a plain CDN read of an already-settled artifact.
+    """
+    import httpx
+
+    last_error: Exception | None = None
+    for attempt in range(1, _IMAGE_DOWNLOAD_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as fetch:
+                response = await fetch.get(url)
+            response.raise_for_status()
+            return response.content
+        except Exception as exc:
+            if not _is_retryable_image_download_error(exc):
+                raise
+            last_error = exc
+            if attempt >= _IMAGE_DOWNLOAD_MAX_ATTEMPTS:
+                break
+            delay = _IMAGE_DOWNLOAD_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "%s image download attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                label,
+                attempt,
+                _IMAGE_DOWNLOAD_MAX_ATTEMPTS,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    logger.warning(
+        "%s image download gave up after %d attempts (%s: %s)",
+        label,
+        _IMAGE_DOWNLOAD_MAX_ATTEMPTS,
+        type(last_error).__name__,
+        last_error,
+    )
+    raise last_error  # type: ignore[misc]
 
 
 def normalize_image_size(size: str, provider: str = "google") -> str:
@@ -2028,13 +2100,10 @@ async def _call_newapi_image_api(
                     image_bytes = base64.b64decode(b64_data)
                 else:
                     logger.info("Lingke image result download start")
-                    async with httpx.AsyncClient(
-                        timeout=60.0,
-                        follow_redirects=True,
-                    ) as fetch:
-                        image_response = await fetch.get(image_url)
-                    image_response.raise_for_status()
-                    image_bytes = image_response.content
+                    image_bytes = await _download_image_bytes_with_retry(
+                        image_url,
+                        label="Lingke",
+                    )
                 await _confirm(
                     reservation_id,
                     provider_request_id=provider_request_id,
@@ -2105,16 +2174,17 @@ async def _call_newapi_image_api(
                 # "newapi 已生成但任务还在 await" hang 点 —— 用单独的短 timeout
                 # (60s),避免落入外层 client 的 600s global timeout 拖很久。
                 # 加 phase log 让 hang 时能定位卡在哪。
+                # 大图(2K/4K)在中转链路上偶发 body 截断(RemoteProtocolError),
+                # 属于传输层抖动,此处只对结果 GET 做有界重试;生成 POST 绝不重试。
                 logger.info("DramaClawAPI image GET url start: %s", image_url[:120])
-                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as fetch:
-                    image_response = await fetch.get(image_url)
-                logger.info(
-                    "DramaClawAPI image GET url done: status=%d bytes=%d",
-                    image_response.status_code,
-                    len(image_response.content),
+                image_bytes = await _download_image_bytes_with_retry(
+                    image_url,
+                    label="DramaClawAPI",
                 )
-                image_response.raise_for_status()
-                image_bytes = image_response.content
+                logger.info(
+                    "DramaClawAPI image GET url done: bytes=%d",
+                    len(image_bytes),
+                )
                 await _confirm(
                     reservation_id,
                     provider_request_id=provider_request_id,

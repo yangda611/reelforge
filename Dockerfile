@@ -196,9 +196,11 @@ RUN set -eux; \
     echo "$HERMES_SHA" > /opt/hermes-agent.sha; \
     rm -rf /opt/hermes-agent/.git; \
     uv pip install --system -e "/opt/hermes-agent[acp]"; \
+    uv pip install --system -r deploy/hermes-freezone-requirements.txt; \
     python3 deploy/patch_hermes_acp_toolsets.py; \
     hermes --version; \
     python3 deploy/verify_hermes_fork.py; \
+    python3 deploy/verify_freezone_runtime.py; \
     apt-get purge -y git; apt-get autoremove -y
 
 ENV PATH="/app/.venv/bin:/usr/local/bin:$PATH"

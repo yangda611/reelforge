@@ -2,11 +2,12 @@ import base64
 import io
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
 
-from novelvideo.chat import hermes_sdk
+from novelvideo.chat import hermes_pool, hermes_sdk
 from novelvideo.chat import service as chat_service
 from novelvideo.chat.turn_images import (
     CODEX_IMAGE_INPUT_ENV,
@@ -20,6 +21,54 @@ def _png(path, size=(64, 32)):
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", size, (200, 30, 30)).save(path, format="PNG")
     return path
+
+
+@pytest.mark.parametrize("retry", [False, True])
+async def test_hermes_sends_images_without_codex_opt_in(monkeypatch, tmp_path, retry):
+    from novelvideo.chat.runtime_port import ChatBackendEvent
+
+    monkeypatch.delenv(CODEX_IMAGE_INPUT_ENV, raising=False)
+    image = _png(tmp_path / "ref.png")
+    calls = []
+
+    class FakeThread:
+        id = "hermes-thread"
+
+        async def stream(self, prompt, **kwargs):
+            calls.append(kwargs)
+            if retry and len(calls) == 1:
+                raise hermes_sdk.HermesSessionUnavailableError("session unavailable")
+            yield ChatBackendEvent(type="complete", text="visible")
+
+    thread = FakeThread()
+    monkeypatch.setattr(
+        chat_service, "authorize_hermes_launch", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(chat_service, "_write_hermes_tool_mode", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        chat_service, "_prompt_with_user_context", lambda *a, **kw: "describe"
+    )
+    monkeypatch.setattr(
+        hermes_pool.pool, "get_for_user", AsyncMock(return_value=thread)
+    )
+    monkeypatch.setattr(
+        hermes_pool.pool, "reset_for_user", AsyncMock(return_value=thread)
+    )
+    monkeypatch.setattr(
+        chat_service, "add_assistant_message", lambda *a, **kw: {"content": "visible"}
+    )
+    await chat_service._stream_assistant_reply_hermes(
+        "admin",
+        "",
+        "describe",
+        AsyncMock(),
+        image_paths=[image],
+    )
+    assert len(calls) == (2 if retry else 1)
+    images = calls[0]["images"]
+    assert len(images) == 1
+    assert images[0].startswith("data:" + "image/jpeg;base64,")
+    assert all(call["images"] == images for call in calls)
 
 
 def _reference(nodes):
@@ -132,8 +181,12 @@ async def test_codex_turn_sends_referenced_images_only_when_enabled(
     async def fake_create_token(*args, **kwargs):  # noqa: ARG001
         return "agent-token"
 
-    monkeypatch.setattr(chat_service, "_create_page_agent_session_token", fake_create_token)
-    monkeypatch.setattr(chat_service, "_build_codex_thread", lambda *a, **kw: FakeThread())
+    monkeypatch.setattr(
+        chat_service, "_create_page_agent_session_token", fake_create_token
+    )
+    monkeypatch.setattr(
+        chat_service, "_build_codex_thread", lambda *a, **kw: FakeThread()
+    )
     monkeypatch.setattr(chat_service, "get_auth_session_port", lambda: FakeAuthPort())
     monkeypatch.setattr(hermes_sdk, "_issue_turn_capability", lambda **kw: None)
 

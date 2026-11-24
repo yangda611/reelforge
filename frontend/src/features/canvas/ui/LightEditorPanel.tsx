@@ -160,6 +160,8 @@ export interface LightEditorSubmitPayload {
   rimLight: boolean;
   smartMode: LightSmartModeDescriptor;
   apiModel: string;
+  catalogId?: string;
+  quality?: string;
   providerId: LightProviderId;
   imageSize: LightImageSize;
 }
@@ -891,10 +893,8 @@ export function LightEditorPanel({
     () => resolveModelSizeOptions(selectedModel),
     [selectedModel],
   );
-  const qualityOptions = useMemo(
-    () => resolveModelQualityOptions(selectedModel),
-    [selectedModel],
-  );
+  const qualityOptions = resolveModelQualityOptions(selectedModel);
+  const quality = qualityOptions.length > 0 ? pickAllowedOption("medium", qualityOptions) : undefined;
   const effectiveImageSize = pickAllowedOption(imageSize, sizeOptions);
   const creditCost = useGenerationCreditCost(
     "feature",
@@ -903,9 +903,7 @@ export function LightEditorPanel({
       surface: "canvas",
       params: buildImageFeatureBillingParams(selectedModel, {
         size: effectiveImageSize,
-        ...(qualityOptions.length > 0
-          ? { quality: pickAllowedOption("medium", qualityOptions) }
-          : {}),
+        ...(quality ? { quality } : {}),
         operation: "relight",
       }),
     },
@@ -1006,6 +1004,8 @@ export function LightEditorPanel({
       rimLight,
       smartMode: smart,
       apiModel: selectedModel.apiModel,
+      ...(selectedModel.catalogId ? { catalogId: selectedModel.catalogId } : {}),
+      ...(quality ? { quality } : {}),
       providerId: selectedModel.providerId,
       imageSize: effectiveImageSize,
     });
@@ -1024,6 +1024,7 @@ export function LightEditorPanel({
     t,
     vector,
     selectedModel,
+    quality,
   ]);
 
   return (

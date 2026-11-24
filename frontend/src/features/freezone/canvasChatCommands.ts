@@ -68,6 +68,7 @@ import { landNodeAgentSceneEdit } from "@/features/previz/agentSceneEdit";
 import { useCanvasStore } from "@/stores/canvasStore";
 import { selectNodeExclusively } from "@/features/canvas/application/nodeSelection";
 import { placeGroupsOutsideStory } from "@/features/canvas/application/storyGroupPlacement";
+import { computeOrderedLayout, getNodeSize, layoutGraph } from "@/features/canvas/application/autoLayout";
 import { deterministicNodeOutputIssue } from "@/features/freezone/workflowQualityGate";
 import {
   bindWorkflowProductOperation,
@@ -153,12 +154,23 @@ export type CanvasChatCommand =
   | {
       type: "layout_nodes";
       node_ids?: string[];
-      mode: "horizontal" | "vertical" | "grid";
+      mode: "auto" | "dag" | "horizontal" | "vertical" | "grid";
     }
   | {
       type: "group_nodes";
       node_ids: string[];
       label?: string;
+      client_id?: string;
+    }
+  | {
+      type: "organize_canvas";
+      categories?: Array<{
+        label: string;
+        node_ids: string[];
+      }>;
+      ungroup_node_ids?: string[];
+      layout_mode?: "auto" | "dag" | "horizontal" | "vertical" | "grid";
+      prune_empty_groups?: boolean;
     }
   | {
       type: "move_nodes";
@@ -1042,7 +1054,15 @@ function parseCommand(value: unknown): CanvasChatCommand | null {
         };
       }
     case "layout_nodes":
-      if (value.mode !== "horizontal" && value.mode !== "vertical" && value.mode !== "grid") return null;
+      if (
+        value.mode !== "auto" &&
+        value.mode !== "dag" &&
+        value.mode !== "horizontal" &&
+        value.mode !== "vertical" &&
+        value.mode !== "grid"
+      ) {
+        return null;
+      }
       return {
         type: "layout_nodes",
         node_ids: Array.isArray(value.node_ids)
@@ -1058,7 +1078,45 @@ function parseCommand(value: unknown): CanvasChatCommand | null {
         label: typeof value.label === "string" && value.label.trim().length > 0
           ? value.label.trim()
           : undefined,
+        client_id: typeof value.client_id === "string" && value.client_id.trim().length > 0
+          ? value.client_id.trim()
+          : undefined,
       };
+    case "organize_canvas": {
+      const rawLayoutMode = value.layout_mode;
+      const layoutMode =
+        rawLayoutMode === "auto" ||
+        rawLayoutMode === "dag" ||
+        rawLayoutMode === "horizontal" ||
+        rawLayoutMode === "vertical" ||
+        rawLayoutMode === "grid"
+          ? rawLayoutMode
+          : undefined;
+      if (rawLayoutMode !== undefined && !layoutMode) return null;
+      const categories = Array.isArray(value.categories)
+        ? value.categories
+            .map((entry) => {
+              if (!isRecord(entry)) return null;
+              const label = typeof entry.label === "string" ? entry.label.trim() : "";
+              const nodeIds = Array.isArray(entry.node_ids)
+                ? entry.node_ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+                : [];
+              if (!label || nodeIds.length === 0) return null;
+              return { label, node_ids: nodeIds };
+            })
+            .filter((entry): entry is { label: string; node_ids: string[] } => Boolean(entry))
+        : undefined;
+      const ungroupNodeIds = Array.isArray(value.ungroup_node_ids)
+        ? value.ungroup_node_ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        : undefined;
+      return {
+        type: "organize_canvas",
+        categories,
+        ungroup_node_ids: ungroupNodeIds,
+        layout_mode: layoutMode,
+        prune_empty_groups: typeof value.prune_empty_groups === "boolean" ? value.prune_empty_groups : true,
+      };
+    }
     case "move_nodes": {
       let positions = cleanNodePositions(value.positions ?? value.nodes ?? value.moves);
       let deltas = cleanNodeDeltas(value.deltas ?? value.delta_positions ?? value.nodes ?? value.moves);
@@ -1070,6 +1128,27 @@ function parseCommand(value: unknown): CanvasChatCommand | null {
         positions = {
           [typeof value.node_id === "string" ? value.node_id : String(value.nodeId)]: value.position,
         };
+      }
+      const singleNodeId = Array.isArray(value.node_ids) && value.node_ids.length === 1 &&
+        typeof value.node_ids[0] === "string" && value.node_ids[0].trim()
+        ? value.node_ids[0]
+        : undefined;
+      if (
+        Object.keys(positions).length === 0 &&
+        Object.keys(deltas).length === 0 &&
+        singleNodeId &&
+        isPosition(value.position)
+      ) {
+        positions = { [singleNodeId]: value.position };
+      }
+      if (
+        Object.keys(positions).length === 0 &&
+        Object.keys(deltas).length === 0 &&
+        singleNodeId &&
+        isFiniteNumber(value.x) &&
+        isFiniteNumber(value.y)
+      ) {
+        positions = { [singleNodeId]: { x: value.x, y: value.y } };
       }
       if (
         Object.keys(deltas).length === 0 &&
@@ -1498,6 +1577,38 @@ function deleteEdges(
   }
 }
 
+function assertNoNonEmptyGroupDeletion(
+  rawIds: string[],
+  clientIdMap: Map<string, string>,
+): void {
+  const nodes = useCanvasStore.getState().nodes;
+  const nodesById = new Map(nodes.map((node) => [node.id, node] as const));
+  for (const rawId of rawIds) {
+    const groupId = resolveNodeId(rawId, clientIdMap);
+    if (nodesById.get(groupId)?.type !== CANVAS_NODE_TYPES.group) continue;
+    const descendants = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const node of nodes) {
+        if (
+          node.parentId &&
+          (node.parentId === groupId || descendants.has(node.parentId)) &&
+          !descendants.has(node.id)
+        ) {
+          descendants.add(node.id);
+          changed = true;
+        }
+      }
+    }
+    if (descendants.size > 0) {
+      throw new Error(
+        `不能通过虾导删除非空节点组 ${groupId}；请先把成员移入新组，再删除空组。`,
+      );
+    }
+  }
+}
+
 function deleteNodesOrEdges(
   rawIds: string[],
   clientIdMap: Map<string, string>,
@@ -1585,9 +1696,18 @@ function projectionKeyFromNode(node: CanvasNode): string | null {
     : null;
 }
 
+type CanvasLayoutMode = "auto" | "dag" | "horizontal" | "vertical" | "grid";
+
+const GROUP_SIDE_PAD = 20;
+const GROUP_TOP_PAD = 34;
+
+function isOrderedLayoutMode(mode: CanvasLayoutMode): mode is "horizontal" | "vertical" | "grid" {
+  return mode === "horizontal" || mode === "vertical" || mode === "grid";
+}
+
 function scheduleMeasuredLayout(
   nodeIds: string[],
-  mode: "horizontal" | "vertical" | "grid",
+  mode: CanvasLayoutMode,
   hermesLegacy = false,
 ): void {
   if (typeof window === "undefined") return;
@@ -1601,96 +1721,479 @@ function scheduleMeasuredLayout(
   });
 }
 
+function nodeDepth(nodesById: ReadonlyMap<string, CanvasNode>, nodeId: string): number {
+  let current = nodesById.get(nodeId);
+  const visited = new Set<string>();
+  while (current?.parentId && !visited.has(current.id)) {
+    visited.add(current.id);
+    current = nodesById.get(current.parentId);
+  }
+  return visited.size;
+}
+
+function resolveRootAncestorId(
+  nodesById: ReadonlyMap<string, CanvasNode>,
+  nodeId: string,
+): string | undefined {
+  let current = nodesById.get(nodeId);
+  const visited = new Set<string>();
+  while (current?.parentId && !visited.has(current.id)) {
+    visited.add(current.id);
+    const parent = nodesById.get(current.parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return current?.id;
+}
+
+function resolveAncestorWithinSet(
+  nodesById: ReadonlyMap<string, CanvasNode>,
+  nodeId: string,
+  unitIds: ReadonlySet<string>,
+): string | undefined {
+  let currentId: string | undefined = nodeId;
+  const visited = new Set<string>();
+  while (currentId && !visited.has(currentId)) {
+    if (unitIds.has(currentId)) return currentId;
+    visited.add(currentId);
+    currentId = nodesById.get(currentId)?.parentId;
+  }
+  return undefined;
+}
+
+function collectLiftedEdgePairs(
+  edges: CanvasEdge[],
+  nodesById: ReadonlyMap<string, CanvasNode>,
+  unitIds: ReadonlySet<string>,
+): Array<[string, string]> {
+  const seen = new Set<string>();
+  const pairs: Array<[string, string]> = [];
+  for (const edge of edges) {
+    const src = resolveAncestorWithinSet(nodesById, edge.source, unitIds);
+    const dst = resolveAncestorWithinSet(nodesById, edge.target, unitIds);
+    if (!src || !dst || src === dst) continue;
+    const key = `${src}->${dst}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push([src, dst]);
+  }
+  return pairs;
+}
+
+function translatePositionsToOrigin(
+  positions: Map<string, { x: number; y: number }>,
+  origin: { x: number; y: number },
+): Record<string, { x: number; y: number }> {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  for (const pos of positions.values()) {
+    minX = Math.min(minX, pos.x);
+    minY = Math.min(minY, pos.y);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return {};
+  const result: Record<string, { x: number; y: number }> = {};
+  for (const [id, pos] of positions) {
+    result[id] = {
+      x: Math.round(pos.x - minX + origin.x),
+      y: Math.round(pos.y - minY + origin.y),
+    };
+  }
+  return result;
+}
+
+function arrangeGroupChildrenAndTighten(
+  groupId: string,
+  childIds: string[],
+  mode: CanvasLayoutMode,
+  hermesLegacy: boolean,
+): void {
+  const state = useCanvasStore.getState();
+  const group = state.nodes.find((node) => node.id === groupId);
+  if (!isGroupNode(group) || isStoryboardGroupNode(group) || isProtectedProjectionGroupNode(group)) return;
+  const allChildren = state.nodes.filter((node) => node.parentId === groupId);
+  const children = childIds
+    .map((id) => state.nodes.find((node) => node.id === id))
+    .filter((node): node is CanvasNode => Boolean(node));
+  const wholeGroup = allChildren.length === children.length;
+
+  if (!isOrderedLayoutMode(mode)) {
+    if (children.length === 1 && wholeGroup) {
+      state.setNodePositions({
+        [children[0].id]: { x: GROUP_SIDE_PAD, y: GROUP_TOP_PAD },
+      });
+    } else if (children.length >= 2) {
+      const nodesById = new Map(state.nodes.map((node) => [node.id, node] as const));
+      const unitIds = new Set(children.map((node) => node.id));
+      const intraEdges = collectLiftedEdgePairs(state.edges, nodesById, unitIds);
+      const graphLayout = layoutGraph(children, intraEdges, { columnGap: 48, rowGap: 36 });
+      const existingMinX = Math.min(...children.map((node) => node.position.x));
+      const existingMinY = Math.min(...children.map((node) => node.position.y));
+      const origin = wholeGroup
+        ? { x: GROUP_SIDE_PAD, y: GROUP_TOP_PAD }
+        : {
+            x: Math.max(GROUP_SIDE_PAD, Math.round(existingMinX)),
+            y: Math.max(GROUP_TOP_PAD, Math.round(existingMinY)),
+          };
+      state.setNodePositions(translatePositionsToOrigin(graphLayout.positions, origin));
+    }
+  } else if (children.length >= 2) {
+    state.setNodePositions(computeOrderedLayout(children, mode, {
+      gap: hermesLegacy ? 48 : 32,
+      ...(!hermesLegacy && wholeGroup ? { origin: { x: GROUP_SIDE_PAD, y: GROUP_TOP_PAD } } : {}),
+      ...(hermesLegacy ? { minColumnStep: 520, minRowStep: mode === "vertical" ? 320 : 360 } : {}),
+    }));
+  } else if (children.length === 1 && wholeGroup) {
+    state.setNodePositions({
+      [children[0].id]: { x: GROUP_SIDE_PAD, y: GROUP_TOP_PAD },
+    });
+  }
+
+  const afterArrange = useCanvasStore.getState();
+  const updatedChildren = afterArrange.nodes.filter((node) => node.parentId === groupId);
+  if (updatedChildren.length === 0) return;
+
+  const minChildX = Math.min(...updatedChildren.map((child) => child.position.x));
+  const minChildY = Math.min(...updatedChildren.map((child) => child.position.y));
+  const shiftX = minChildX < GROUP_SIDE_PAD ? Math.round(GROUP_SIDE_PAD - minChildX) : 0;
+  const shiftY = minChildY < GROUP_TOP_PAD ? Math.round(GROUP_TOP_PAD - minChildY) : 0;
+  if (shiftX !== 0 || shiftY !== 0) {
+    const shifted: Record<string, { x: number; y: number }> = {};
+    for (const child of updatedChildren) {
+      shifted[child.id] = { x: child.position.x + shiftX, y: child.position.y + shiftY };
+    }
+    afterArrange.setNodePositions(shifted);
+  }
+
+  const tightState = useCanvasStore.getState();
+  const tightChildren = tightState.nodes.filter((node) => node.parentId === groupId);
+  let maxRight = 0;
+  let maxBottom = 0;
+  for (const child of tightChildren) {
+    const childSize = getNodeSize(child);
+    maxRight = Math.max(maxRight, child.position.x + childSize.width);
+    maxBottom = Math.max(maxBottom, child.position.y + childSize.height);
+  }
+  const targetSize = !isOrderedLayoutMode(mode)
+    ? {
+        width: Math.max(220, Math.round(maxRight + GROUP_SIDE_PAD)),
+        height: Math.max(140, Math.round(maxBottom + GROUP_SIDE_PAD)),
+      }
+    : (() => {
+        const currentGroup = tightState.nodes.find((node) => node.id === groupId);
+        const curSize = currentGroup ? getNodeSize(currentGroup) : { width: 220, height: 140 };
+        return {
+          width: Math.max(curSize.width, Math.round(maxRight + GROUP_SIDE_PAD)),
+          height: Math.max(curSize.height, Math.round(maxBottom + GROUP_SIDE_PAD)),
+        };
+      })();
+  tightState.updateNodeSize(groupId, targetSize, { recordHistory: false });
+}
+
+function boxesOverlap(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+  pad = 0,
+): boolean {
+  return (
+    a.x < b.x + b.width + pad &&
+    a.x + a.width + pad > b.x &&
+    a.y < b.y + b.height + pad &&
+    a.y + a.height + pad > b.y
+  );
+}
+
 function layoutNodesInternal(
   nodeIds: string[],
-  mode: "horizontal" | "vertical" | "grid",
+  mode: CanvasLayoutMode,
   refineAfterMeasurement = true,
   hermesLegacy = false,
 ): void {
   const store = useCanvasStore.getState();
   const nodesById = new Map(store.nodes.map((node) => [node.id, node] as const));
-  const nodes = nodeIds
+  const nodes = [...new Set(nodeIds)]
     .map((nodeId) => nodesById.get(nodeId))
     .filter((node): node is CanvasNode => Boolean(node));
   if (nodes.length < 2) return;
-  const needsMeasuredRefinement =
-    !hermesLegacy &&
-    refineAfterMeasurement &&
-    nodes.some(
-      (node) =>
-        typeof node.measured?.width !== "number" ||
-        typeof node.measured?.height !== "number",
-    );
+  const needsMeasuredRefinement = refineAfterMeasurement && nodes.some(
+    (node) => typeof node.measured?.width !== "number" || typeof node.measured?.height !== "number",
+  );
+  const siblingBatches = new Map<string, string[]>();
+  const rootIds = new Set<string>();
+  for (const node of nodes) {
+    if (node.parentId) {
+      const batch = siblingBatches.get(node.parentId) ?? [];
+      batch.push(node.id);
+      siblingBatches.set(node.parentId, batch);
+    } else {
+      rootIds.add(node.id);
+    }
+  }
+  // Children use parent-relative coordinates; resize deepest groups before
+  // arranging their ancestors, then move each top-level group as one unit.
+  for (const [groupId, childIds] of [...siblingBatches].sort(
+    ([a], [b]) => nodeDepth(nodesById, b) - nodeDepth(nodesById, a),
+  )) {
+    arrangeGroupChildrenAndTighten(groupId, childIds, mode, hermesLegacy);
+  }
+  const rootsState = useCanvasStore.getState();
+  const orderedRoots = [...rootIds]
+    .map((id) => rootsState.nodes.find((node) => node.id === id))
+    .filter((node): node is CanvasNode => Boolean(node));
+  if (orderedRoots.length >= 2) {
+    if (!isOrderedLayoutMode(mode)) {
+      const rootNodesById = new Map(rootsState.nodes.map((node) => [node.id, node] as const));
+      const rootUnitSet = new Set(orderedRoots.map((node) => node.id));
+      const liftedEdges = collectLiftedEdgePairs(rootsState.edges, rootNodesById, rootUnitSet);
+      const graphLayout = layoutGraph(orderedRoots, liftedEdges, { columnGap: 64, rowGap: 48 });
+      const unselectedRoots = rootsState.nodes.filter(
+        (node) => !node.parentId && !rootUnitSet.has(node.id),
+      );
+      let origin = { x: 80, y: 80 };
+      if (unselectedRoots.length > 0) {
+        const minX = Math.max(40, Math.round(Math.min(...orderedRoots.map((node) => node.position.x))));
+        const minY = Math.max(40, Math.round(Math.min(...orderedRoots.map((node) => node.position.y))));
+        origin = { x: minX, y: minY };
+        const candidateBox = {
+          x: origin.x,
+          y: origin.y,
+          width: graphLayout.width,
+          height: graphLayout.height,
+        };
+        const overlapsUnselected = unselectedRoots.some((node) => {
+          const size = getNodeSize(node);
+          return boxesOverlap(candidateBox, {
+            x: node.position.x,
+            y: node.position.y,
+            width: size.width,
+            height: size.height,
+          }, 48);
+        });
+        if (overlapsUnselected) {
+          const maxRight = Math.max(
+            ...unselectedRoots.map((node) => node.position.x + getNodeSize(node).width),
+          );
+          origin = { x: Math.round(maxRight + 80), y: 80 };
+        }
+      }
+      rootsState.setNodePositions(translatePositionsToOrigin(graphLayout.positions, origin));
+    } else {
+      rootsState.setNodePositions(computeOrderedLayout(orderedRoots, mode, {
+        ...(hermesLegacy ? { minColumnStep: 520, minRowStep: mode === "vertical" ? 320 : 360 } : {}),
+      }));
+    }
+  }
+  if (needsMeasuredRefinement) scheduleMeasuredLayout(nodeIds, mode, hermesLegacy);
+}
 
-  // External MCP workflows use the exact legacy Hermes geometry and preserve
-  // the node_ids command order. Hermes websocket commands keep the existing
-  // adaptive frontend layout path below.
-  if (hermesLegacy) {
-    const minX = Math.min(...nodes.map((node) => node.position.x));
-    const minY = Math.min(...nodes.map((node) => node.position.y));
-    const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
-    store.setNodePositions(Object.fromEntries(nodes.map((node, index) => {
-      if (mode === "vertical") {
-        return [node.id, { x: minX, y: minY + index * 320 }];
+function detachNodesFromOrdinaryGroups(nodeIds: string[]): void {
+  const uniqueIds = new Set(nodeIds.filter((id) => id.trim().length > 0));
+  if (uniqueIds.size === 0) return;
+  useCanvasStore.setState((state) => {
+    const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
+    let changed = false;
+    const nextNodes = state.nodes.map((node) => {
+      if (!uniqueIds.has(node.id) || !node.parentId) return node;
+      let ancestorId: string | undefined = node.parentId;
+      const visited = new Set<string>();
+      while (ancestorId && !visited.has(ancestorId)) {
+        visited.add(ancestorId);
+        const ancestor = nodeMap.get(ancestorId);
+        if (!ancestor) break;
+        if (isProtectedProjectionGroupNode(ancestor) || isStoryboardGroupNode(ancestor)) {
+          return node;
+        }
+        ancestorId = ancestor.parentId;
       }
-      if (mode === "grid") {
-        return [node.id, {
-          x: minX + (index % columns) * 520,
-          y: minY + Math.floor(index / columns) * 360,
-        }];
+      let absX = node.position.x;
+      let absY = node.position.y;
+      let curParentId: string | undefined = node.parentId;
+      const walked = new Set<string>();
+      while (curParentId && !walked.has(curParentId)) {
+        walked.add(curParentId);
+        const parent = nodeMap.get(curParentId);
+        if (!parent) break;
+        absX += parent.position.x;
+        absY += parent.position.y;
+        curParentId = parent.parentId;
       }
-      return [node.id, { x: minX + index * 520, y: minY }];
-    })));
-    return;
+      changed = true;
+      return {
+        ...node,
+        parentId: undefined,
+        extent: undefined,
+        position: { x: Math.round(absX), y: Math.round(absY) },
+      };
+    });
+    return changed ? { nodes: nextNodes } : {};
+  });
+}
+
+function isOrdinaryGroupNode(node: CanvasNode): boolean {
+  return (
+    isGroupNode(node) &&
+    !isProtectedProjectionGroupNode(node) &&
+    !isStoryboardGroupNode(node)
+  );
+}
+
+function hasProtectedAncestor(
+  node: CanvasNode,
+  nodeMap: ReadonlyMap<string, CanvasNode>,
+): boolean {
+  let parentId = node.parentId;
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = nodeMap.get(parentId);
+    if (!parent) break;
+    if (isProtectedProjectionGroupNode(parent) || isStoryboardGroupNode(parent)) return true;
+    parentId = parent.parentId;
+  }
+  return false;
+}
+
+function organizeCanvas(
+  command: Extract<CanvasChatCommand, { type: "organize_canvas" }>,
+  clientIdMap: Map<string, string>,
+): { createdGroupIds: string[]; prunedGroupCount: number } {
+  const mode: CanvasLayoutMode = command.layout_mode ?? "auto";
+  if (command.ungroup_node_ids && command.ungroup_node_ids.length > 0) {
+    detachNodesFromOrdinaryGroups(
+      command.ungroup_node_ids.map((nodeId) => resolveNodeId(nodeId, clientIdMap)),
+    );
   }
 
-  const parentIds = new Set(nodes.map((node) => node.parentId).filter(Boolean));
-  if (parentIds.size === 1) {
-    const groupId = [...parentIds][0] as string;
-    const group = nodesById.get(groupId);
-    const targetIds = new Set(nodes.map((node) => node.id));
-    const groupChildren = store.nodes.filter((node) => node.parentId === groupId);
-    const targetsWholePlainGroup =
-      isGroupNode(group) &&
-      !isProtectedProjectionGroupNode(group) &&
-      !isStoryboardGroupNode(group) &&
-      groupChildren.length === targetIds.size &&
-      groupChildren.every((node) => targetIds.has(node.id));
-    if (targetsWholePlainGroup) {
-      store.arrangeGroupChildren(groupId, mode);
-      if (needsMeasuredRefinement) {
-        scheduleMeasuredLayout(nodeIds, mode, hermesLegacy);
-      }
-      return;
+  const createdGroupIds: string[] = [];
+  const claimedNodeIds = new Set<string>();
+  for (const category of command.categories ?? []) {
+    const state = useCanvasStore.getState();
+    const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
+    const memberIds: string[] = [];
+    for (const rawId of category.node_ids) {
+      const resolvedId = resolveNodeId(rawId, clientIdMap);
+      if (claimedNodeIds.has(resolvedId)) continue;
+      const node = nodeMap.get(resolvedId);
+      if (!node) continue;
+      if (isProtectedProjectionGroupNode(node) || isStoryboardGroupNode(node)) continue;
+      if (hasProtectedAncestor(node, nodeMap)) continue;
+      claimedNodeIds.add(resolvedId);
+      memberIds.push(resolvedId);
+    }
+    if (memberIds.length === 0) continue;
+    const groupId = state.groupNodes(memberIds, {
+      label: category.label,
+      minNodes: 1,
+      extraPadding: 20,
+    });
+    if (groupId) createdGroupIds.push(groupId);
+  }
+
+  let prunedGroupCount = 0;
+  if (command.prune_empty_groups !== false) {
+    while (true) {
+      const state = useCanvasStore.getState();
+      const emptyGroupIds = state.nodes
+        .filter(
+          (node) =>
+            isOrdinaryGroupNode(node) &&
+            !isPresetManagedNode(node) &&
+            !state.nodes.some((candidate) => candidate.parentId === node.id),
+        )
+        .map((node) => node.id);
+      if (emptyGroupIds.length === 0) break;
+      const beforeCount = state.nodes.length;
+      state.deleteNodes(emptyGroupIds);
+      const afterCount = useCanvasStore.getState().nodes.length;
+      const removed = beforeCount - afterCount;
+      if (removed <= 0) break;
+      prunedGroupCount += removed;
     }
   }
 
-  const ordered = nodes;
-  const minX = Math.min(...ordered.map((node) => node.position.x));
-  const minY = Math.min(...ordered.map((node) => node.position.y));
-  const positions: Record<string, { x: number; y: number }> = {};
-  const gap = 48;
-  if (mode === "horizontal") {
-    ordered.forEach((node, index) => {
-      positions[node.id] = { x: minX + index * (DEFAULT_NODE_WIDTH + gap), y: minY };
-    });
-  } else if (mode === "vertical") {
-    ordered.forEach((node, index) => {
-      positions[node.id] = { x: minX, y: minY + index * 360 };
-    });
-  } else {
-    const cols = Math.ceil(Math.sqrt(ordered.length));
-    ordered.forEach((node, index) => {
-      positions[node.id] = {
-        x: minX + (index % cols) * (DEFAULT_NODE_WIDTH + gap),
-        y: minY + Math.floor(index / cols) * 360,
-      };
-    });
+  const groupState = useCanvasStore.getState();
+  const groupNodesById = new Map(groupState.nodes.map((node) => [node.id, node] as const));
+  const ordinaryGroups = groupState.nodes
+    .filter((node) => isOrdinaryGroupNode(node))
+    .sort((a, b) => nodeDepth(groupNodesById, b.id) - nodeDepth(groupNodesById, a.id));
+  for (const group of ordinaryGroups) {
+    const childIds = useCanvasStore.getState().nodes
+      .filter((node) => node.parentId === group.id)
+      .map((node) => node.id);
+    if (childIds.length > 0) {
+      arrangeGroupChildrenAndTighten(group.id, childIds, mode, false);
+    }
   }
-  store.setNodePositions(positions);
-  if (needsMeasuredRefinement) {
-    scheduleMeasuredLayout(nodeIds, mode, hermesLegacy);
+
+  const rootState = useCanvasStore.getState();
+  const protectedRoots = rootState.nodes.filter(
+    (node) => !node.parentId && (isProtectedProjectionGroupNode(node) || isStoryboardGroupNode(node)),
+  );
+  const protectedMaxBottom = protectedRoots.reduce(
+    (maxBottom, node) => Math.max(maxBottom, node.position.y + getNodeSize(node).height),
+    0,
+  );
+  const originX = 80;
+  const originY = protectedRoots.length > 0 ? Math.max(80, Math.round(protectedMaxBottom + 80)) : 80;
+
+  const createdSet = new Set(createdGroupIds);
+  const movableRoots = rootState.nodes.filter(
+    (node) => !node.parentId && !isProtectedProjectionGroupNode(node) && !isStoryboardGroupNode(node),
+  );
+  const createdRootNodes = createdGroupIds
+    .map((id) => movableRoots.find((node) => node.id === id))
+    .filter((node): node is CanvasNode => Boolean(node));
+  const remainingRoots = movableRoots.filter((node) => !createdSet.has(node.id));
+
+  const rootPositions: Record<string, { x: number; y: number }> = {};
+  let nextBlockY = originY;
+  if (createdRootNodes.length > 0) {
+    const SHELF_MAX_WIDTH = 2400;
+    const GROUP_GAP = 64;
+    let cursorX = originX;
+    let cursorY = originY;
+    let rowMaxHeight = 0;
+    for (const group of createdRootNodes) {
+      const size = getNodeSize(group);
+      if (cursorX > originX && cursorX - originX + size.width > SHELF_MAX_WIDTH) {
+        cursorX = originX;
+        cursorY += rowMaxHeight + GROUP_GAP;
+        rowMaxHeight = 0;
+      }
+      rootPositions[group.id] = { x: Math.round(cursorX), y: Math.round(cursorY) };
+      cursorX += size.width + GROUP_GAP;
+      rowMaxHeight = Math.max(rowMaxHeight, size.height);
+    }
+    nextBlockY = Math.round(cursorY + rowMaxHeight + GROUP_GAP);
   }
+
+  if (remainingRoots.length > 0) {
+    if (remainingRoots.length === 1) {
+      rootPositions[remainingRoots[0].id] = { x: originX, y: nextBlockY };
+    } else if (!isOrderedLayoutMode(mode)) {
+      const rootNodesById = new Map(rootState.nodes.map((node) => [node.id, node] as const));
+      const remainingSet = new Set(remainingRoots.map((node) => node.id));
+      const liftedEdges = collectLiftedEdgePairs(rootState.edges, rootNodesById, remainingSet);
+      const graphLayout = layoutGraph(remainingRoots, liftedEdges, { columnGap: 64, rowGap: 48 });
+      Object.assign(
+        rootPositions,
+        translatePositionsToOrigin(graphLayout.positions, { x: originX, y: nextBlockY }),
+      );
+    } else {
+      Object.assign(
+        rootPositions,
+        computeOrderedLayout(remainingRoots, mode, {
+          origin: { x: originX, y: nextBlockY },
+          gap: 48,
+        }),
+      );
+    }
+  }
+
+  if (Object.keys(rootPositions).length > 0) {
+    useCanvasStore.getState().setNodePositions(rootPositions);
+  }
+  placeWorkflowGroups(new Set(movableRoots.map((node) => node.id)));
+  return { createdGroupIds, prunedGroupCount };
 }
 
 function placeWorkflowGroups(groupIds: ReadonlySet<string>): void {
@@ -1706,7 +2209,7 @@ function placeWorkflowGroups(groupIds: ReadonlySet<string>): void {
 
 function layoutNodes(
   nodeIds: string[],
-  mode: "horizontal" | "vertical" | "grid",
+  mode: CanvasLayoutMode,
   refineAfterMeasurement = true,
   hermesLegacy = false,
 ): void {
@@ -1714,13 +2217,8 @@ function layoutNodes(
   const nodesById = new Map(useCanvasStore.getState().nodes.map((node) => [node.id, node]));
   const rootIds = new Set<string>();
   for (const nodeId of nodeIds) {
-    let node = nodesById.get(nodeId);
-    const visited = new Set<string>();
-    while (node?.parentId && !visited.has(node.id)) {
-      visited.add(node.id);
-      node = nodesById.get(node.parentId);
-    }
-    if (node && !node.parentId) rootIds.add(node.id);
+    const rootId = resolveRootAncestorId(nodesById, nodeId);
+    if (rootId) rootIds.add(rootId);
   }
   placeWorkflowGroups(rootIds);
 }
@@ -4046,6 +4544,8 @@ function commandLabel(command: CanvasChatCommand): string {
       return "整理布局";
     case "group_nodes":
       return "创建普通组";
+    case "organize_canvas":
+      return "分类整理画布";
     case "move_nodes":
       return "移动节点";
     case "select_nodes":
@@ -4134,6 +4634,8 @@ function commandPrimaryNodeId(command: CanvasChatCommand): string | undefined {
     case "group_nodes":
     case "select_nodes":
       return command.node_ids?.[0];
+    case "organize_canvas":
+      return command.categories?.[0]?.node_ids?.[0] ?? command.ungroup_node_ids?.[0];
     case "create_edge":
       return command.source;
     case "delete_edges":
@@ -4166,6 +4668,11 @@ function commandNodeRefs(command: CanvasChatCommand): string[] {
     case "group_nodes":
     case "select_nodes":
       return command.node_ids ?? [];
+    case "organize_canvas":
+      return [
+        ...(command.categories ?? []).flatMap((category) => category.node_ids),
+        ...(command.ungroup_node_ids ?? []),
+      ];
     case "delete_edges":
       return (command.pairs ?? []).flatMap((pair) => [pair.source, pair.target]);
     case "create_edge":
@@ -4219,6 +4726,11 @@ export function normalizeCanvasChatCommandEnvelopesForValidation(
       return null;
     };
     const commands = envelope.commands.map((command, index) => {
+      if (command.type === "group_nodes") {
+        for (const ref of commandNodeRefs(command)) knownRefs.add(ref);
+        if (command.client_id) knownRefs.add(command.client_id);
+        return command;
+      }
       if (command.type !== "create_node" && command.type !== "add_next_node") {
         for (const ref of commandNodeRefs(command)) knownRefs.add(ref);
         return command;
@@ -4549,6 +5061,7 @@ function* applyCanvasChatCommandsInternal(
             break;
           }
           case "delete_nodes": {
+            assertNoNonEmptyGroupDeletion(command.node_ids, clientIdMap);
             const previousEdges = useCanvasStore.getState().edges;
             const deletion = deleteNodesOrEdges(
               command.node_ids.map((nodeId) => resolveNodeId(nodeId, clientIdMap)),
@@ -4681,6 +5194,9 @@ function* applyCanvasChatCommandsInternal(
                 : { extraPadding: 20 }),
             });
             if (!groupId) throw new Error("group requires at least two existing nodes");
+            if (command.client_id) {
+              clientIdMap.set(command.client_id, groupId);
+            }
             result.applied += 1;
             result.createdNodeIds.push(groupId);
             result.commandResults.push({
@@ -4690,6 +5206,23 @@ function* applyCanvasChatCommandsInternal(
               label: commandLabel(command),
               nodeId: targetNodeIds[0],
               createdNodeId: groupId,
+            });
+            break;
+          }
+          case "organize_canvas": {
+            if ((command.categories?.length ?? 0) > 0) {
+              envelopeHasExplicitGroupNodes = true;
+            }
+            const organized = organizeCanvas(command, clientIdMap);
+            result.applied += 1;
+            result.createdNodeIds.push(...organized.createdGroupIds);
+            result.commandResults.push({
+              commandIndex: currentCommandIndex,
+              type: command.type,
+              status: "success",
+              label: commandLabel(command),
+              nodeId: commandPrimaryNodeId(command),
+              createdNodeId: organized.createdGroupIds[0],
             });
             break;
           }

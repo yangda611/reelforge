@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Elastic-2.0
 // Copyright (c) 2026 ClaymoreLab
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { submitFreezoneTemplateEdit } from '@/api/ops';
+import { fetchFreezoneImageModels, submitFreezoneScene360, submitFreezoneTemplateEdit } from '@/api/ops';
 import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import { AssetBoardView } from '@/features/canvas/ui/asset-board/AssetBoardView';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -14,9 +14,8 @@ vi.mock('react-i18next', async () => {
   return { useTranslation: () => ({ t: zhT }) };
 });
 
-vi.mock('@/lib/queries/generation-credit-cost', () => ({
-  useGenerationCreditCost: () => ({ data: undefined }),
-}));
+const useGenerationCreditCost = vi.hoisted(() => vi.fn(() => ({ data: undefined })));
+vi.mock('@/lib/queries/generation-credit-cost', () => ({ useGenerationCreditCost }));
 
 vi.mock('@/lib/url-params', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/url-params')>()),
@@ -31,6 +30,9 @@ vi.mock('@/api/ops', async (importOriginal) => ({
       providerId: 'huimeng',
       apiModel: 'test_image_api',
       label: '测试模型',
+      catalogId: 'cat-board',
+      resolutionOptions: ['4K', '1K'],
+      qualityOptions: ['low'],
     },
   ]),
   listFreezoneStyleTemplates: vi.fn(async () => []),
@@ -40,6 +42,11 @@ vi.mock('@/api/ops', async (importOriginal) => ({
     task_key: 'task-1',
     task_type: 'freezone_template_edit',
     job_id: 'job-1',
+  })),
+  submitFreezoneScene360: vi.fn(async () => ({
+    task_key: 'pano-task',
+    task_type: 'freezone_scene_360',
+    job_id: 'pano-job',
   })),
   fetchFreezoneJobResult: vi.fn(async () => ({ url: '/static/out.png' })),
 }));
@@ -116,6 +123,8 @@ async function pickGridOp(label: string) {
 describe('故事板 · 功能 chip（点功能建节点 → 确认后生成）', () => {
   beforeEach(() => {
     vi.mocked(submitFreezoneTemplateEdit).mockClear();
+    vi.mocked(submitFreezoneScene360).mockClear();
+    useGenerationCreditCost.mockClear();
   });
 
   it('点功能只建节点、不提交：新节点是 imageGen、节点名=功能名、记住源图并连边', async () => {
@@ -169,6 +178,11 @@ describe('故事板 · 功能 chip（点功能建节点 → 确认后生成）',
     expect(payload.sourceUrl).toBe('/static/source.png');
     expect(payload.mode).toBe('product_three_view');
     expect(payload.prompt).toBe('产品三视图');
+    expect(payload).toMatchObject({ model: 'test_image_api', catalogId: 'cat-board', imageSize: '4K', quality: 'low' });
+    expect(useGenerationCreditCost).toHaveBeenCalledWith('feature', 'freezone.image_grid', {
+      surface: 'canvas',
+      params: expect.objectContaining({ image_selection: 'test_image_api', catalog_id: 'cat-board', size: '4K', quality: 'low', mode: 'product_three_view' }),
+    });
     // 产物回填到功能节点自己身上，而不是再建一个结果节点。
     await waitFor(() => expect(nodeData(spawnedOpNode().id).imageUrl).toBe('/static/out.png'));
     expect(useCanvasStore.getState().nodes).toHaveLength(2);
@@ -206,6 +220,21 @@ describe('故事板 · 功能 chip（点功能建节点 → 确认后生成）',
     expect(nodeData(spawnedId).displayName).toBe('全景');
   });
 
+  it('quotes and submits the same available panorama model when G2 is absent', async () => {
+    const user = await pickGridOp('剧情推演四宫格');
+    await user.click(opChip());
+    await user.click(screen.getByRole('button', { name: /^全景/ }));
+    fireEvent.click(within(detailPanel()).getByRole('button', { name: '生成' }));
+
+    await waitFor(() => expect(submitFreezoneScene360).toHaveBeenCalledWith('demo-project', expect.objectContaining({
+      model: 'test_image_api', catalogId: 'cat-board', imageSize: '1K', quality: 'low',
+    })));
+    expect(useGenerationCreditCost).toHaveBeenCalledWith('feature', 'freezone.image_panorama', {
+      surface: 'canvas',
+      params: expect.objectContaining({ image_selection: 'test_image_api', catalog_id: 'cat-board', size: '1K', quality: 'low' }),
+    });
+  });
+
   it('在 chip 后面退格就能删掉它 → 退化成普通图片生成节点', async () => {
     await pickGridOp('电影级光影校正');
     const spawnedId = spawnedOpNode().id;
@@ -218,5 +247,15 @@ describe('故事板 · 功能 chip（点功能建节点 → 确认后生成）',
     expect(promptEditor().querySelector('[data-lead-chip]')).toBeNull();
     // 退回常规文生图：空提示词重新禁用提交。
     expect(within(detailPanel()).getByRole('button', { name: '生成' })).toBeDisabled();
+  });
+
+  it('never submits an image function after the catalog confirms no models are configured', async () => {
+    await pickGridOp('多机位九宫格');
+    vi.mocked(fetchFreezoneImageModels).mockResolvedValueOnce([]);
+    await act(async () => { window.dispatchEvent(new Event('media-model-catalog-updated')); });
+    const submit = within(detailPanel()).getByRole('button', { name: '生成' });
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    expect(submitFreezoneTemplateEdit).not.toHaveBeenCalled();
   });
 });

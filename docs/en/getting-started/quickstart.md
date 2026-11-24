@@ -27,9 +27,8 @@ DRAMACLAW_VERSION=2.1.1
 DRAMACLAW_GATEWAY_VERSION=v1.0.0-rc.24-dramaclaw.3
 ```
 
-The release Compose file defaults to the bundled credential-safe Codex 0.164.0 Agent.
-If your shell or `.env` already selects another backend, set `DRAMACLAW_CHAT_BACKEND=codex`.
-This choice does not change your Official/Custom/Hybrid model gateway mode.
+The release Compose file defaults to the bundled ReelForge Hermes fork.
+Change any existing `DRAMACLAW_CHAT_BACKEND=codex` override to `hermes` to migrate.
 
 ```bash
 docker compose -f docker-compose.release.yml config --images
@@ -61,7 +60,7 @@ docker compose up -d --build   # builds api, web (this checkout) and the gateway
 docker compose ps   # api, newapi, and web should all be running
 ```
 
-Source Compose defaults to Codex. Builds use the code in your local checkouts, not the
+Source Compose defaults to Hermes. Builds use the code in your local checkouts, not the
 `DRAMACLAW_VERSION` image tag. Code changes require rebuilding; this is not hot reload:
 
 ```bash

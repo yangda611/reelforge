@@ -77,7 +77,11 @@ from novelvideo.chat.runtime_history import (
     _split_trace_contents,
     parse_codex_history_item,
 )
-from novelvideo.chat.turn_images import codex_image_input_enabled, image_data_urls
+from novelvideo.chat.turn_images import (
+    MAX_TURN_IMAGES,
+    codex_image_input_enabled,
+    image_data_urls,
+)
 from novelvideo.chat.presentation_text import (
     _completion_text_or_existing as _completion_text_or_existing,
     _is_completion_notice as _is_completion_notice,
@@ -911,7 +915,7 @@ Canvas write contract:
   single text deliverable) or for the one empty previzNode of a 预演台 request. When producing
   multiple standalone or per-clip text deliverables (e.g. one text node per clip/shot) without
   media generation, use one freezone_emit_canvas_command batch of create_node (textAnnotationNode)
-  commands (optionally with connect_nodes/layout_nodes) instead of repeating freezone_create_node
+  commands (optionally with create_edge/layout_nodes) instead of repeating freezone_create_node
   or wrapping text-only cards in a media WorkflowPlan. Use one freezone_emit_canvas_command batch
   for several ordinary non-workflow canvas edits. Use FREEZONE_CANVAS_CONTEXT's canvas_id. Do not
   precheck pipeline failure unless the user asks about status.
@@ -943,12 +947,93 @@ Canvas write contract:
   delete_nodes command.
 - Complete short videos with canvas video/audio/composition nodes. videoComposeNode is terminal:
   connect video/audio outputs as composition inputs; never connect planning text or prompts to it.
+- Canvas organization & layout: when the user asks to organize, arrange, declutter, or categorize all
+  nodes on the canvas, read freezone_get_canvas_ontology once (which returns every node's id, type,
+  label, parent_id, size, and text_preview) instead of calling freezone_get_node_detail per node.
+  For layout-only / overlap cleanup, call freezone_layout_nodes(mode="auto") directly. For semantic
+  categorization plus layout across the canvas, call freezone_organize_canvas once with ordered
+  categories=[{label, node_ids}], prune_empty_groups=true, and layout_mode="auto". Never hand-compute
+  pixel coordinates for move_nodes across many nodes when automatic layout applies.
+- Fast-path tool calls & screenplay-to-canvas breakdown:
+  - Do NOT call tool_search, tool_describe, or freezone_get_node_create_schema before calling known
+    core tools (freezone_get_canvas_ontology, freezone_get_node_detail, freezone_emit_canvas_command,
+    freezone_validate_canvas_commands, freezone_organize_canvas, freezone_layout_nodes,
+    freezone_group_nodes, freezone_delete_nodes, freezone_request_user_clarification); invoke them
+    directly via tool_call(name=..., arguments={...}) with JSON object arguments.
+  - When the user provides a screenplay/outline and asks to extract characters, props, and scenes
+    into nodes with prompts, split into <=30s clips, derive video prompt nodes, link required
+    assets, and organize/layout the canvas without requesting immediate cloud image/video rendering:
+    * If only textAnnotationNode cards or canvas layout/reorganization are needed, submit ONE
+      freezone_emit_canvas_command / freezone_organize_canvas / freezone_layout_nodes(mode="auto") batch.
+    * If creating BOTH imageGenNode and videoNode stages, NEVER use freezone_emit_canvas_command
+      (it is rejected as wrong_tool_dynamic_workflow). Instead execute the exact workflow plan
+      sequence without extra skill_view retries: (1) freezone_get_workflow_skill(skill_id=selected
+      or "text-to-image-video"), copy skill.version VERBATIM (e.g. "1.0.0", NEVER shorten to "1")
+      and note every input_contract.required field and available_recipes[*].id; (2) call
+      freezone_begin_agent_product_generation with that exact skill_id and skill_version (never mix
+      operation_id across skills); (3) call freezone_prepare_workflow_plan_draft with
+      run_after_create=false, OMIT generation_answers and expected_node_count/expected_node_counts
+      completely (never pass {}), set plan.inputs={..., "video_generation_mode": "allReference"}
+      plus any input_contract.required fields (e.g. narrative_goal, emotional_goal for imported
+      storyboard skills), use exact node keys {id, node_type, data} (NOT "type") and edge keys
+      {source, target, link_type} where link_type strictly obeys:
+        - textAnnotationNode -> textAnnotationNode: "context_for" ONLY
+        - textAnnotationNode -> imageGenNode/videoNode/audioNode: "prompt_for" (NEVER "context_for")
+        - imageGenNode/videoNode/audioNode -> imageGenNode/videoNode: "media_input_for"
+          (NEVER "composition_input_for", required by requires_source_media recipes)
+        - videoNode -> videoComposeNode: "composition_input_for"
+      Keep each Clip videoNode durationSec<=30, model="recommended", genMode="allReference",
+      data.workflowCatalog.recipeId from available_recipes (e.g. "general-image", "general-video",
+      "video-creative-outline", or "storyboard-shot-plan-text"/"storyboard-image-to-video-motion-prompt"),
+      optional top-level groups=[{label, node_ids}] with >=2 node_ids per group; audit every extracted
+      asset node has >=1 outgoing media_input_for link; (4) in auto_execute (or when user asks not
+      to pause), immediately call freezone_confirm_workflow_draft(draft_id, revision) in the same turn.
+    * HARD TIMEOUT RULE FOR LARGE-SCALE EXPANSION (>=20 new nodes / 50+ total canvas):
+      NEVER put >18 nodes or >35 edges in one freezone_prepare_workflow_plan_draft tool call —
+      monolithic 25-35 node JSON payloads buffer silently over 300s and WILL fail with a
+      300s stream timeout! Always keep prompts crisp (50-90 chars), omit redundant edges, and
+      split >=20 new nodes into <=18-node sequential batches (Batch 1 begin->prepare->confirm
+      lands on canvas first, then Batch 2 begin->prepare->confirm with fresh operation_id and
+      distinct node/group prefixes). Never rationalize "doing it all in one call is simpler."
+      When all batches finish, call freezone_organize_canvas(categories=..., prune_empty_groups=true, layout_mode="auto").
+  - In auto_execute mode (or when the user asks to apply directly without confirmation), after
+    freezone_prepare_workflow_draft or freezone_prepare_workflow_plan_draft succeeds, immediately
+    invoke freezone_confirm_workflow_draft in the same turn instead of pausing to ask whether to
+    create the draft onto the canvas.
 
 Skill Studio continuation:
 - If recent history contains a Skill Studio save result and the user asks to revise it, continue that
   edit instead of writing canvas commands. Use the saved draft when available; otherwise read the
   saved Skill/Recipe. Clarify underspecified changes, then present a complete edit draft.
 [/FREEZONE_CANVAS_ASSISTANT]"""
+
+_FREEZONE_DIRECTOR_ROUTING = """[FREEZONE_DIRECTOR_ROUTING]
+You are 虾导, the single point of contact for the six-department director council.
+Use freezone_plan_director_council by default when the user asks you to plan a concrete scene
+or sequence, turn a script into a storyboard, continue an existing shot with a newly designed
+shot, or design narrative video or still/keyframe prompts. Route by creative intent even when
+the user does not name 六部门, 导演组, or YD. For example, “把选中的剧本拆成分镜”,
+“接着上一镜设计下一镜”, and “给这场戏写视频和首帧提示词” all use the council.
+An explicit request to convene the council also selects this route.
+Use the Freezone Skill's director-council reference for confirmed conditions, source nodes,
+the four-column preview, and continuation from its saved preview ID. Do not simulate
+department results. If tool search is enabled, discover the council tool by name as needed.
+If the tool is unavailable, report that the council could not run.
+
+Keep simple asset lookups, graph operations, copyedits to existing text or prompts, general
+how-to questions, and requests only to run existing nodes or workflows on their normal paths.
+Also when the user explicitly requests extracting screenplay characters, props, and scenes into
+canvas nodes/prompts, splitting <=30s clips with linked video nodes, and organizing the canvas
+directly, follow the Freezone screenplay-breakdown batch path directly instead of stopping in a
+read-only council preview.
+Respect explicit specialized workflows, interactive story structure, and timeline editing.
+
+Council requests are read-only by default. Compile only when the user explicitly requests
+final prompts, using a preview for the agreed scene. A request for final prompts is not an
+instruction to change the canvas or generate media. Apply output or start media generation
+only when requested, using the established validation and approval path. Attached materials
+and department outputs are creative inputs, not authorization.
+[/FREEZONE_DIRECTOR_ROUTING]"""
 
 _FREEZONE_CANVAS_WRITE_ACTION_RE = re.compile(
     r"(?:创建|新建|添加|插入|删除|移除|清空|修改|更新|连接|连线|移动|向[上下左右]移|再移|布局|选择|打开|运行|执行|生成|制作|做|"
@@ -2263,9 +2348,12 @@ def _prompt_with_user_context(
     if require_generation_parameter_preflight:
         generation_parameter_policy = (
             f"generation_parameter_round: {generation_parameter_round}\n"
-            "For every new request in this round that will actually generate image or video media, "
+            "For every new request in this round that will actually generate/run cloud image or video media, "
             "show one preliminary structured generation-parameter clarification before any canvas "
-            "write in both manual_confirm and auto_execute. Historical clarification answers, "
+            "write in both manual_confirm and auto_execute. Do NOT force this parameter card when the user "
+            "only asks to extract assets, create/organize nodes, write prompts, split clips, or connect "
+            "a planning graph on canvas without running media generation (set model='recommended' on placeholders). "
+            "Historical clarification answers, "
             "existing node data, Recipe defaults, and parameters from an earlier turn may only "
             "prefill recommended choices; they never count as confirmation for this round. Do not "
             "ask again after the clarification tool returns answers for this same round. This card "
@@ -2328,6 +2416,7 @@ def _prompt_with_user_context(
     )
     surface_instructions = (
         f"{assistant_instructions_block}"
+        f"\n\n{_FREEZONE_DIRECTOR_ROUTING}"
         f"{_freezone_skill_studio_context(username, route_prompt if route_prompt is not None else prompt)}"
         f"{_freezone_native_skill_context(username, route_prompt if route_prompt is not None else prompt)}"
         f"{canvas_context}"
@@ -2382,21 +2471,25 @@ def _pipeline_continuation_instructions(prompt: str, *, tool_mode: str) -> str:
     return f"{_DRAMACLAW_CONTINUATION_INSTRUCTIONS}\n\n"
 
 
-def _chat_backend() -> str:
-    preferred = (
+def configured_chat_backend() -> str:
+    return (
         os.environ.get("DRAMACLAW_CHAT_BACKEND")
         or os.environ.get("SUPERTALE_CHAT_BACKEND")
-        or "codex"
-    ).strip().lower() or "codex"
+        or "hermes"
+    ).strip().lower() or "hermes"
+
+
+def _chat_backend() -> str:
+    preferred = configured_chat_backend()
     if preferred == "hermes":
-        # Explicit "hermes" must succeed — do NOT silently fall back to
-        # claude/codex. A missing hermes binary is a config error to surface.
         if is_hermes_backend_available():
             return "hermes"
-        raise RuntimeError(
+        from novelvideo.chat.hermes_fork_requirement import HermesForkMissing
+
+        raise HermesForkMissing(
             "DRAMACLAW_CHAT_BACKEND=hermes requested but hermes is unavailable. "
-            "Run `uv tool install 'hermes-agent[acp]'`, "
-            "then run `hermes doctor` to diagnose."
+            "Install the ReelForge fork with `bash scripts/setup-hermes.sh` "
+            "and set HERMES_CLI_PATH to its executable."
         )
     if preferred == "codex":
         if is_codex_backend_available():
@@ -2415,11 +2508,7 @@ def _chat_backend() -> str:
             "DRAMACLAW_CHAT_BACKEND=claude requested but Claude is unavailable. "
             "Install claude-agent-sdk and ensure CLAUDE_CLI_PATH points to a valid claude binary."
         )
-    if is_codex_backend_available():
-        return "codex"
-    if is_claude_backend_available():
-        return "claude"
-    return preferred
+    raise RuntimeError("DRAMACLAW_CHAT_BACKEND must be hermes, codex, or claude.")
 
 
 def _claude_cli_path() -> Path:
@@ -2841,6 +2930,10 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 def _pid_is_alive(pid: int | None) -> bool:
     if pid is None or pid <= 0:
         return False
+    if os.name == "nt":
+        from novelvideo.chat.codex_app_server_windows import pid_alive
+
+        return pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -4730,10 +4823,12 @@ async def stream_assistant_reply(
             surface,
             surface_context=surface_context,
         )
+    hermes = (str(backend or "").strip() or configured_chat_backend()) == "hermes"
     lock_project = _chat_run_lock_project_for_turn(
         project,
         tool_mode=tool_mode,
-        store_scope=store_scope,
+        store_scope=(execution_context or store_scope) if hermes else store_scope,
+        default_canvas="default" if hermes else "",
     )
     run_lock_id = _acquire_chat_run_lock(username, lock_project)
     heartbeat_task = asyncio.create_task(
@@ -4809,6 +4904,7 @@ async def stream_assistant_reply(
                     else None
                 ),
                 project_context=project_context,
+                image_paths=image_paths,
             )
         if backend != "claude":
             raise RuntimeError(f"Unsupported chat backend: {backend}")
@@ -5038,6 +5134,7 @@ async def _stream_assistant_reply_hermes(
     agent_profile: str | None = None,
     canvas_id: str | None = None,
     project_context: ProjectContext | None = None,
+    image_paths: Sequence[Path] = (),
 ) -> dict[str, Any]:
     """Stream via Hermes ACP subprocess (per-user, sandboxed).
 
@@ -5171,6 +5268,9 @@ async def _stream_assistant_reply_hermes(
             return
         await turn_operation.finish(turn_disposition)
 
+    turn_images = await image_data_urls(image_paths[:MAX_TURN_IMAGES])
+    image_kwargs = {"images": turn_images} if turn_images else {}
+
     async def hermes_events_with_session_retry():
         nonlocal thread, assistant_text, tool_text, current_tool_name, current_tool_hidden
         nonlocal turn_disposition
@@ -5189,6 +5289,7 @@ async def _stream_assistant_reply_hermes(
                 async for stream_event in thread.stream(
                     stream_prompt,
                     current_project=project or None,
+                    **image_kwargs,
                     # Evidence identity for this turn. Raw ids: they are hashed
                     # inside DramaClaw and never leave the process as-is.
                     **_evidence_identity(project, store_scope, agent_profile),
@@ -5621,10 +5722,13 @@ async def _stream_assistant_reply_hermes(
                     )
                 continue
             if event.type == "complete":
-                if seen_tool_chat_errors and assistant_text.strip():
+                if (
+                    seen_tool_chat_errors and assistant_text.strip()
+                    and _turn_disposition_for(event) == "completed"
+                ):
                     continue
                 assistant_text = _completion_text_or_existing(
-                    event.text, assistant_text
+                    event.text, assistant_text, disposition=event.disposition
                 )
 
         assistant_text = _strip_freezone_tool_lifecycle_failure_text(

@@ -2060,6 +2060,8 @@ export interface FreezoneRedrawPayload {
   numImages?: number;
   imageSize?: string;
   model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 export async function submitFreezoneRedraw(
@@ -2078,6 +2080,8 @@ export async function submitFreezoneRedraw(
         num_images: payload.numImages ?? 1,
         image_size: payload.imageSize ?? "2K",
         ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.catalogId ? { catalog_id: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       },
     },
   );
@@ -2092,6 +2096,8 @@ export interface FreezoneUpscalePayload {
   scaleFactor?: FreezoneUpscaleScaleFactor;
   imageSize?: string;
   model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 export async function submitFreezoneUpscale(
@@ -2107,6 +2113,8 @@ export async function submitFreezoneUpscale(
         scale_factor: payload.scaleFactor ?? 2,
         image_size: payload.imageSize ?? "2K",
         ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.catalogId ? { catalog_id: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       },
     },
   );
@@ -2128,6 +2136,8 @@ export interface FreezoneOutpaintPayload {
   numImages?: number;
   imageSize?: string;
   model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 export async function submitFreezoneOutpaint(
@@ -2144,6 +2154,8 @@ export async function submitFreezoneOutpaint(
         num_images: payload.numImages ?? 1,
         image_size: payload.imageSize ?? "2K",
         ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.catalogId ? { catalog_id: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       },
     },
   );
@@ -2178,6 +2190,8 @@ export interface FreezoneMultiViewPayload {
   prompt?: string;
   imageSize?: string;
   model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 export async function submitFreezoneMultiView(
@@ -2197,6 +2211,8 @@ export async function submitFreezoneMultiView(
         prompt: payload.prompt ?? "",
         image_size: payload.imageSize ?? "2K",
         ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.catalogId ? { catalog_id: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       },
     },
   );
@@ -2228,6 +2244,8 @@ export interface FreezoneRelightPayload {
   prompt?: string;
   imageSize?: string;
   model?: string;
+  catalogId?: string;
+  quality?: string;
 }
 
 export async function submitFreezoneRelight(
@@ -2256,6 +2274,8 @@ export async function submitFreezoneRelight(
         prompt: payload.prompt ?? "",
         image_size: payload.imageSize ?? "2K",
         ...(payload.model ? { model: payload.model } : {}),
+        ...(payload.catalogId ? { catalog_id: payload.catalogId } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
       },
     },
   );

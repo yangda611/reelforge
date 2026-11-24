@@ -7,7 +7,6 @@ of failing the first turn with a misleading "please restart the app" error.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -36,11 +35,7 @@ def assistant_runtime_status() -> dict[str, Any]:
     """
     from novelvideo.chat import service as chat_service
 
-    preferred = (
-        os.environ.get("DRAMACLAW_CHAT_BACKEND")
-        or os.environ.get("SUPERTALE_CHAT_BACKEND")
-        or "codex"
-    ).strip().lower() or "codex"
+    preferred = chat_service.configured_chat_backend()
     if preferred == "hermes":
         available = chat_service.is_hermes_backend_available()
     elif preferred == "claude":
@@ -49,7 +44,7 @@ def assistant_runtime_status() -> dict[str, Any]:
         available = chat_service.is_codex_backend_available()
     else:
         available = False
-    label = _RUNTIME_LABELS.get(preferred, preferred or "Codex")
+    label = _RUNTIME_LABELS.get(preferred, preferred)
     if available:
         return {
             "available": True,

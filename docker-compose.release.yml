@@ -25,7 +25,7 @@ services:
       NOVELVIDEO_OUTPUT_DIR: /data/output
       NOVELVIDEO_STATE_DIR: /data/state
       NOVELVIDEO_RUNTIME_DIR: /data/runtime
-      DRAMACLAW_CHAT_BACKEND: "${DRAMACLAW_CHAT_BACKEND:-codex}"
+      DRAMACLAW_CHAT_BACKEND: "${DRAMACLAW_CHAT_BACKEND:-${SUPERTALE_CHAT_BACKEND:-hermes}}"
       HERMES_CLI_PATH: /usr/local/bin/hermes
       SUPERTALE_ALLOW_UNSANDBOXED: "1"
       # OpenFilm binds inside the API container's loopback namespace, which the host browser cannot

@@ -66,13 +66,8 @@ docker compose up -d --build    # 用两个 checkout 从源码构建 api、web �
 前端还需要 Node.js 和 pnpm；pnpm 版本以 `frontend/package.json` 的声明为准。
 只安装 Python 只能运行 API，不能启动 Vite 开发界面。
 
-虾导使用 Codex。`scripts/start-ce.sh` 会根据宿主机平台，自动下载公开的
-**ReelForge 凭据保护版 Codex 0.164.0**，支持 macOS Apple Silicon/Intel 和
-Linux x64/ARM64，不需要私有源码仓库权限。首次下载约 250–310 MB，需安装 curl
-以及 `shasum`（macOS）或 `sha256sum`（Linux）。
-脚本先核对固定的 SHA256，再检查版本；文件缓存到 `runtime/codex/bin/`，后续启动
-校验通过便直接复用，也遵循 `NOVELVIDEO_RUNTIME_DIR` / `NOVELVIDEO_DATA_ROOT` 自定义目录。
-此脚本不支持 Windows 原生启动，请使用 WSL2 或 Docker。
+虾导默认使用 ReelForge 的 Hermes fork。`scripts/start-ce.sh` 会在独立环境中安装或验证它。
+Windows 原生启动以及未配置 Hermes 沙箱的 Linux 环境建议使用 Docker。
 
 ### 2. 装依赖并启动
 
@@ -87,17 +82,16 @@ scripts/start-ce.sh
 
 浏览器打开 `http://localhost:5173`，这是支持热更新的 Vite 开发界面；
 API 为 `http://localhost:8780`。脚本安装依赖后同时启动前后端，Ctrl+C 停止二者。
-`.env` 中保持 `DRAMACLAW_CHAT_BACKEND=codex`；旧配置若指定其他后端，脚本会提示修改，
-不会静默切换。
+已有 `.env` 中的 `DRAMACLAW_CHAT_BACKEND=codex` 仍是显式覆盖；切换时改成 `hermes`。
+启动器不会同时安装或运行两套后端。
 
-如果需要分开管理 API 和前端，先准备同一套运行时再启动 API
-（单独运行下载脚本时读取已导出的环境变量，不读取 `.env`）：
+如果需要分开启动 API 和前端，可先准备 Hermes 再启动 API：
 
 ```bash
-uv sync --group dev
-CODEX_BIN="$(bash scripts/setup-codex.sh)" &&
-  CODEX_BIN="$CODEX_BIN" DRAMACLAW_CHAT_BACKEND=codex \
-    uv run --no-sync novelvideo api --host 127.0.0.1 --port 8780
+uv sync --group dev --no-install-package openai-codex-cli-bin
+bash scripts/setup-hermes.sh
+HERMES_CLI_PATH="$PWD/.cache/hermes-venv/bin/hermes" \
+  DRAMACLAW_CHAT_BACKEND=hermes uv run --no-sync novelvideo api --host 127.0.0.1 --port 8780
 ```
 
 在另一个终端进入仓库根目录，启动前端：
@@ -106,14 +100,9 @@ CODEX_BIN="$(bash scripts/setup-codex.sh)" &&
 cd frontend && pnpm install && pnpm dev --host 127.0.0.1 --port 5173
 ```
 
-若已有配套运行时，可在 `.env` 设置 `CODEX_BIN=/absolute/path/to/codex-reelforge`，
-或在单独运行下载脚本前导出该变量，以跳过下载。手动指定的文件由使用者管理：脚本检查
-能否执行，但不能据此证明它带有凭据保护补丁，请勿用官方原版 Codex CLI 替代。
-下载或校验失败时，脚本会在启动服务前退出，不会回退到其他后端。
+Compose 使用 API 镜像内置的 Hermes fork，沙箱规则不变。如需显式回退，设置
+`DRAMACLAW_CHAT_BACKEND=codex`；源码启动器会改为准备带凭据保护补丁的 Codex。
 
-v2.1.1 Docker 构建已内置凭据保护版 Codex 0.164.0。源码和发布版 Compose 均默认选择 Codex；
-如显式设置 `DRAMACLAW_CHAT_BACKEND`，请保持为 `codex`。
-上面本地 Python 命令中的 `CODEX_BIN` 是宿主机路径，不是容器内路径。
 CE 默认 `ST_EDITION=ce`、免登录单本地用户、任务进程内 inline 执行(无 Ray/Redis/Celery)。
 
 ### 3. 验证

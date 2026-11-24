@@ -39,7 +39,7 @@ cp .env.example .env
 | 服务 | `api` + `newapi` + `web` | 无 PG/Redis；`newapi` 是内置网关 |
 | 镜像（release） | `${DRAMACLAW_IMAGE_PREFIX:-reelforge}/...` | 默认拉 Docker Hub；`.env` 设 `DRAMACLAW_IMAGE_PREFIX` 切到 ACR 镜像（只有钉 tag） |
 | 版本（release） | `DRAMACLAW_VERSION`（api/web）、`DRAMACLAW_GATEWAY_VERSION` | 当前版本请在 `.env` 中显式指定 `2.1.1` / `v1.0.0-rc.24-dramaclaw.3` |
-| 虾导后端 | `DRAMACLAW_CHAT_BACKEND` | 源码和发布版 Compose 均默认 `codex` |
+| 虾导后端 | `DRAMACLAW_CHAT_BACKEND` | 源码和发布版 Compose 均默认 `hermes` |
 | 端口 | `8780:8780` | REST API |
 | 网关管理端口 | `${ST_NEWAPI_BIND:-127.0.0.1}:${ST_NEWAPI_PORT:-3000}:3000` | 默认只绑 `127.0.0.1`；`.env` 设 `ST_NEWAPI_BIND=0.0.0.0` 放开 |
 | 强制环境 | `ST_EDITION=ce`、清空 control-plane/Redis/Celery | CE 模式不可降级 |
@@ -67,9 +67,9 @@ DRAMACLAW_GATEWAY_VERSION=v1.0.0-rc.24-dramaclaw.3
 docker compose -f docker-compose.release.yml config --images
 ```
 
-v2.1.1 的发布版和源码 Compose 均默认选择镜像内置的凭据保护版 Codex 0.164.0。
-终端环境或 `.env` 中显式设置的 `DRAMACLAW_CHAT_BACKEND` 会覆盖默认值；
-若旧配置选择了其他后端，请改为 `codex`。
+发布版和源码 Compose 均默认选择镜像内置的 ReelForge Hermes fork。
+终端或旧 `.env` 显式设置的 `DRAMACLAW_CHAT_BACKEND=codex` 仍会覆盖默认值；
+要迁移请改成 `hermes` 并重建 API 容器。
 虾导后端的选择不等于模型网关模式的选择，
 「官方／自定义／混合」仍通过网页设置。
 

@@ -1,10 +1,13 @@
-import pytest
-from fastapi import HTTPException
+from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
+from novelvideo.api.routes import chat as chat_routes
 from novelvideo.chat import service as chat_service
 from novelvideo.chat.store import ChatScope, ChatStore
-from novelvideo.api.routes import chat as chat_routes
+from novelvideo.project_context import ProjectContext
 
 
 @pytest.mark.asyncio
@@ -248,6 +251,198 @@ async def test_archive_codex_scope_thread_preserves_newer_active_turn(
         )
         == "thread-new"
     )
+
+
+@pytest.mark.asyncio
+async def test_hermes_clear_detaches_cold_canvas_session_only(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
+    monkeypatch.setenv("ST_EDITION", "ce")
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.setattr(
+        chat_service, "_chat_run_lock_path", lambda *_: tmp_path / "chat.lock"
+    )
+
+    async def resolve(*, user, project_id, required_role):
+        assert required_role == "editor"
+        return SimpleNamespace(
+            state_dir=tmp_path,
+            project_name="project-1",
+            project_id="project-1",
+            requester_user_id="alice",
+            requester_username="alice",
+            requester_principals=(),
+            is_home_node=True,
+        )
+
+    monkeypatch.setattr(chat_routes, "resolve_project_context", resolve)
+    first = ChatScope(
+        kind="project", id="project-1", surface="freezone", canvas_id="canvas-1",
+        agent_id="main", state_dir=str(tmp_path),
+    )
+    other = ChatScope(
+        kind="project", id="project-1", surface="freezone", canvas_id="canvas-2",
+        agent_id="main", state_dir=str(tmp_path),
+    )
+    store = chat_routes.chat_store
+    await store.append_message_async("alice", first, "user", "old")
+    await store.append_message_async("alice", other, "user", "keep")
+    index = tmp_path / "agents/hermes/freezone/dramaclaw_sessions.json"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    selected = '["freezone:main","project","project-1","canvas-1"]'
+    sibling = '["freezone:main","project","project-1","canvas-2"]'
+    index.write_text(json.dumps({selected: "old-session", sibling: "keep-session"}))
+
+    result = await chat_routes.clear_chat_scope(
+        chat_routes.ClearChatRequest(scope=first.to_dict()), user={"username": "alice"}
+    )
+
+    assert result == {"ok": True, "data": {"cleared_messages": 1, "archived_threads": 0}}
+    assert await store.list_messages_async("alice", first) == []
+    assert len(await store.list_messages_async("alice", other)) == 1
+    assert json.loads(index.read_text()) == {sibling: "keep-session"}
+
+
+@pytest.fixture
+def hermes_clear_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat_service, "get_chat_backend_name", lambda: "hermes")
+    monkeypatch.setenv("ST_EDITION", "ce")
+    monkeypatch.delenv("ST_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.setenv("NOVELVIDEO_STATE_DIR", str(tmp_path))
+    return ProjectContext(
+        project_id="project-1",
+        project_name="project-1",
+        owner_type="user",
+        owner_id="alice",
+        owner_username="alice",
+        requester_user_id="alice",
+        requester_username="alice",
+        requester_principals=(("user", "alice"),),
+        effective_role="editor",
+        home_node_id="node-1",
+        output_dir=tmp_path / "output",
+        state_dir=tmp_path / "state",
+        runtime_dir=tmp_path / "runtime",
+        is_home_node=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope_fields, user_fields, project_fields, status, expected_detail",
+    [
+        pytest.param(
+            {},
+            {},
+            {"is_home_node": False},
+            409,
+            {
+                "code": "project_not_on_this_node",
+                "project_id": "project-1",
+                "home_node_id": "node-1",
+            },
+            id="non-home-node",
+        ),
+        pytest.param(
+            {},
+            {},
+            {"project_id": "project-2"},
+            400,
+            "project scope mismatch",
+            id="project-mismatch",
+        ),
+        pytest.param(
+            {},
+            {"credential_kind": "agent_session"},
+            None,
+            403,
+            "agent sessions cannot clear chat history",
+            id="agent-session",
+        ),
+        pytest.param(
+            {"canvasId": "invalid.canvas"},
+            {},
+            None,
+            400,
+            "invalid canvas id",
+            id="invalid-canvas",
+        ),
+    ],
+)
+async def test_hermes_clear_route_rejects_before_acquiring_lease(
+    monkeypatch,
+    hermes_clear_project,
+    scope_fields,
+    user_fields,
+    project_fields,
+    status,
+    expected_detail,
+):
+    async def resolve(*, user, project_id, required_role):
+        if project_fields is None:
+            pytest.fail("request must be rejected before project lookup")
+        assert project_id == "project-1"
+        assert required_role == "editor"
+        return replace(hermes_clear_project, **project_fields)
+
+    monkeypatch.setattr(chat_routes, "resolve_project_context", resolve)
+    monkeypatch.setattr(
+        chat_service,
+        "_acquire_chat_run_lock",
+        lambda *_: pytest.fail("rejected clear must not acquire a lease"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await chat_routes.clear_chat_scope(
+            chat_routes.ClearChatRequest(
+                scope={
+                    "kind": "project",
+                    "id": "project-1",
+                    "surface": "freezone",
+                    **scope_fields,
+                }
+            ),
+            user={"username": "alice", **user_fields},
+        )
+
+    assert error.value.status_code == status
+    if isinstance(expected_detail, dict):
+        assert isinstance(error.value.detail, dict)
+        assert {key: error.value.detail[key] for key in expected_detail} == expected_detail
+    else:
+        assert error.value.detail == expected_detail
+
+
+@pytest.mark.asyncio
+async def test_hermes_clear_route_implicit_and_explicit_default_share_lease(
+    monkeypatch, hermes_clear_project,
+):
+    from novelvideo.chat.hermes_pool import pool as hermes_pool
+
+    async def resolve(*, user, project_id, required_role):
+        return hermes_clear_project
+
+    async def unexpected_detach(*_args, **_kwargs):
+        pytest.fail("clear must not detach a session while its lease is held")
+
+    monkeypatch.setattr(chat_routes, "resolve_project_context", resolve)
+    monkeypatch.setattr(hermes_pool, "clear_scope", unexpected_detach)
+    implicit = {"kind": "project", "id": "project-1", "surface": "freezone"}
+    explicit = {**implicit, "canvasId": "default"}
+    lease_key = "freezone:project-1:canvas:default:agent:main"
+    lease_id = chat_service._acquire_chat_run_lock("alice", lease_key)
+    try:
+        for scope in (implicit, explicit):
+            with pytest.raises(HTTPException) as error:
+                await chat_routes.clear_chat_scope(
+                    chat_routes.ClearChatRequest(scope=scope),
+                    user={"username": "alice"},
+                )
+            assert error.value.status_code == 409
+            assert error.value.detail == "当前对话仍在进行，请等待完成或先停止后再清空"
+    finally:
+        chat_service._release_chat_run_lock("alice", lease_key, lease_id)
 
 
 @pytest.mark.asyncio

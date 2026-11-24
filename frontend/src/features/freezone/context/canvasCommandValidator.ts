@@ -493,6 +493,30 @@ export function validateCanvasChatCommandEnvelopes(
           for (const id of command.node_ids) {
             if (!isKnownDeleteRef(id)) addIssue(issues, path, `node or edge not found: ${id}`);
             const target = nodeById.get(id);
+            if (target?.type === CANVAS_NODE_TYPES.group) {
+              const descendants = new Set<string>();
+              let changed = true;
+              while (changed) {
+                changed = false;
+                for (const candidate of nodeById.values()) {
+                  if (
+                    candidate.parentId &&
+                    (candidate.parentId === id || descendants.has(candidate.parentId)) &&
+                    !descendants.has(candidate.id)
+                  ) {
+                    descendants.add(candidate.id);
+                    changed = true;
+                  }
+                }
+              }
+              if (descendants.size > 0) {
+                addIssue(
+                  issues,
+                  path,
+                  `cannot delete non-empty group ${id} from an assistant command; regroup its children first, then delete the empty group`,
+                );
+              }
+            }
             if (target && isSystemManagedNodeData(target.data)) {
               const projectionKey = projectionKeyFromNode(target);
               if (!projectionKey) {
@@ -626,7 +650,11 @@ export function validateCanvasChatCommandEnvelopes(
               "group requires at least two independent existing nodes (do not include both a group and its children in node_ids)",
             );
           } else if (!hasMissingRef) {
-            const virtualGroupId = `__validate_group__:${envelopeIndex}:${commandIndex}`;
+            const clientId = command.client_id?.trim();
+            if (clientId && isKnownNodeRef(clientId)) {
+              addIssue(issues, path, `duplicate group client_id: ${clientId}`);
+            }
+            const virtualGroupId = clientId || `__validate_group__:${envelopeIndex}:${commandIndex}`;
             const virtualGroup = {
               id: virtualGroupId,
               type: CANVAS_NODE_TYPES.group,
@@ -634,6 +662,7 @@ export function validateCanvasChatCommandEnvelopes(
               data: { label: command.label ?? "" },
             } as CanvasNode;
             nodeIds.add(virtualGroupId);
+            if (clientId) clientIds.add(clientId);
             nodeById.set(virtualGroupId, virtualGroup);
             for (const memberId of effectiveMemberIds) {
               const member = nodeById.get(memberId);
@@ -641,6 +670,24 @@ export function validateCanvasChatCommandEnvelopes(
                 nodeById.set(memberId, { ...member, parentId: virtualGroupId });
               }
             }
+          }
+          break;
+        }
+        case "organize_canvas": {
+          for (const [categoryIndex, category] of (command.categories ?? []).entries()) {
+            if (!category.label || !category.label.trim()) {
+              addIssue(issues, path, `organize_canvas.categories[${categoryIndex}].label must be non-empty`);
+            }
+            if (!Array.isArray(category.node_ids) || category.node_ids.length === 0) {
+              addIssue(issues, path, `organize_canvas.categories[${categoryIndex}].node_ids must be non-empty`);
+              continue;
+            }
+            for (const id of category.node_ids) {
+              if (!isKnownNodeRef(id)) addIssue(issues, path, missingNodeMessage(id));
+            }
+          }
+          for (const id of command.ungroup_node_ids ?? []) {
+            if (!isKnownNodeRef(id)) addIssue(issues, path, missingNodeMessage(id));
           }
           break;
         }

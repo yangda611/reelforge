@@ -1,0 +1,3 @@
+# Canvas and story validators run inside Hermes, separately from the API venv.
+# Match the application lockfile without installing its model SDK dependencies.
+jsonschema==4.26.0
