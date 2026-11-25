@@ -10,8 +10,9 @@ import ipaddress
 import os
 import socket
 import tempfile
+import time
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 from urllib.parse import urljoin
 
 import aiohttp
@@ -20,6 +21,12 @@ from yarl import URL
 from novelvideo.ports.video_delivery import VideoDeliveryError, VideoDeliveryReceipt
 
 _CHUNK_SIZE = 1024 * 1024
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429})
+
+
+def _is_retryable_http_status(status: int) -> bool:
+    """Only transient HTTP failures (timeouts, rate-limits, 5xx) warrant retries."""
+    return status in _RETRYABLE_HTTP_STATUSES or status >= 500
 #: Addresses a desktop TUN proxy (Clash/Mihomo 一类) hands back for every name.
 #: 双栈机器上同一个域名会同时拿到 IPv4 与 IPv6 两个 Fake-IP：只认 IPv4 会让
 #: 「任一解析结果不是公网」成立，于是本机 CE 上每个域名都被判成非法目的地。
@@ -175,6 +182,8 @@ async def download_to_path(
     expected_sha256: str | None = None,
     headers: Mapping[str, str] | None = None,
     public_only: bool = False,
+    on_progress: Callable[[int, int | None], None] | None = None,
+    progress_interval_seconds: float = 15.0,
 ) -> VideoDeliveryReceipt:
     """Stream media into a sibling temp file and atomically publish it."""
 
@@ -207,7 +216,11 @@ async def download_to_path(
                 digest.update(chunk)
                 size = len(chunk)
             else:
-                timeout = aiohttp.ClientTimeout(total=600)
+                timeout = aiohttp.ClientTimeout(
+                    total=1800,
+                    sock_connect=30,
+                    sock_read=120,
+                )
                 session_options = {"timeout": timeout}
                 if public_only:
                     trace = aiohttp.TraceConfig()
@@ -221,12 +234,20 @@ async def download_to_path(
                     async with session.get(url, **request_options) as response:
                         if response.status < 200 or response.status >= 300:
                             raise VideoDeliveryError(
-                                f"VIDEO_DOWNLOAD_HTTP_{response.status}", retryable=True
+                                f"VIDEO_DOWNLOAD_HTTP_{response.status}",
+                                retryable=_is_retryable_http_status(response.status),
                             )
+                        total_bytes = getattr(response, "content_length", None)
+                        last_progress_at = time.monotonic()
                         async for chunk in response.content.iter_chunked(_CHUNK_SIZE):
                             stream.write(chunk)
                             digest.update(chunk)
                             size += len(chunk)
+                            if on_progress is not None:
+                                now = time.monotonic()
+                                if now - last_progress_at >= progress_interval_seconds:
+                                    last_progress_at = now
+                                    on_progress(size, total_bytes)
             stream.flush()
             os.fsync(stream.fileno())
 

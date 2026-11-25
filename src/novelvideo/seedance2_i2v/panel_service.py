@@ -385,8 +385,11 @@ async def generate_seedance2_prompt_for_panel(
     from novelvideo.s9_storyboard import (
         S9AssetManifestItem,
         S9SegmentAssetSlot,
+        S9SegmentMeta,
         S9SegmentPlan,
+        build_s9_scene_prop_consistency_notes,
         build_s9_slots_from_beat,
+        extract_s9_lighting_style_block,
         is_s9_segment_beat,
         rebind_s9_prompt_with_active_assets,
         renumber_resolved_seedance2_assets,
@@ -459,7 +462,15 @@ async def generate_seedance2_prompt_for_panel(
                 kind = (
                     "first_frame"
                     if key == "first_frame"
-                    else ("identity" if key.startswith("identity:") else ("scene" if key.startswith("scene:") else "prop"))
+                    else (
+                        "identity"
+                        if key.startswith("identity:")
+                        else (
+                            "scene_reverse"
+                            if key.startswith("scene_reverse:")
+                            else ("scene" if key.startswith("scene:") else "prop")
+                        )
+                    )
                 )
                 active_img_slots.append(
                     S9SegmentAssetSlot(
@@ -482,6 +493,7 @@ async def generate_seedance2_prompt_for_panel(
                 )
         stage2_slots = (active_img_slots + active_aud_slots) or slots
         episode_source_text = ""
+        scenes_list: list[Any] = []
         try:
             from novelvideo.sqlite_store import load_episode_planning_content
 
@@ -492,6 +504,44 @@ async def generate_seedance2_prompt_for_panel(
                 ).strip()
         except Exception:
             episode_source_text = ""
+        try:
+            if hasattr(store, "list_scenes"):
+                scenes_list = list(await store.list_scenes() or [])
+            elif hasattr(store, "get_all_scenes"):
+                scenes_list = list(store.get_all_scenes() or [])
+        except Exception:
+            scenes_list = []
+        scene_context_notes = build_s9_scene_prop_consistency_notes(
+            slots=stage2_slots,
+            scenes=scenes_list,
+            prop_menu=prop_menu,
+            time_of_day=str(beat.get("time_of_day") or ""),
+            has_multiple_segments=bool(prev_beat or next_beat),
+        )
+        continuity_anchor = ""
+        if prev_beat:
+            from novelvideo.models import beat_scene_ref
+
+            cur_sref = beat_scene_ref(beat)
+            prev_sref = beat_scene_ref(prev_beat)
+            same_scene = bool(
+                cur_sref
+                and prev_sref
+                and cur_sref.scene_id
+                and cur_sref.scene_id == prev_sref.scene_id
+            )
+            same_time = str(beat.get("time_of_day") or "").strip() == str(
+                prev_beat.get("time_of_day") or ""
+            ).strip()
+            if same_scene and same_time:
+                prev_cfg = parse_seedance2_config(prev_beat.get("seedance2_config_json"))
+                prev_lighting = extract_s9_lighting_style_block(prev_cfg.final_prompt)
+                if prev_lighting:
+                    continuity_anchor = (
+                        f"同场景前一段（Beat {prev_beat.get('beat_number')}）已锁定的光影画风基准"
+                        "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变）：\n"
+                        f"{prev_lighting}"
+                    )
         effective_s9_guidance = _localized_prompt_guidance(
             config.prompt_guidance,
             config.prompt_guidance_template_keys,
@@ -508,6 +558,8 @@ async def generate_seedance2_prompt_for_panel(
             user_guidance=effective_s9_guidance,
             source_text=episode_source_text,
             current_prompt=reference_prompt,
+            scene_context_notes=scene_context_notes,
+            continuity_anchor=continuity_anchor,
         )
         config.final_prompt = mark_seedance2_prompt_references_for_editor(rendered_s9)
         if not config.duration_user_set:
@@ -543,6 +595,16 @@ async def generate_seedance2_prompt_for_panel(
                 sref = build_scene_ref(scene_slot.asset_id, scene_slot.variant_id).model_dump()
                 asset_patch["scene_ref"] = sref
                 beat["scene_ref"] = sref
+        if stage2_slots:
+            import json as _json
+
+            updated_meta = (s9_meta or S9SegmentMeta()).model_copy(
+                update={"segment_asset_slots": stage2_slots}
+            )
+            meta_json = _json.dumps(updated_meta.model_dump(mode="json"), ensure_ascii=False)
+            asset_patch["s9_segment_meta_json"] = meta_json
+            beat["s9_segment_meta_json"] = meta_json
+            beat["s9_segment_meta"] = updated_meta.model_dump(mode="json")
 
         await store.update_beat_asset(
             episode_number=episode,
@@ -1124,27 +1186,17 @@ def build_seedance2_video_panel_state(
     s9_missing_assets: list[dict[str, str]] = []
     s9_effective_prompt = final_prompt
     from novelvideo.s9_storyboard import (
-        build_s9_slots_from_beat,
         is_s9_segment_beat,
-        rebind_s9_prompt_with_active_assets,
-        renumber_resolved_seedance2_assets,
+        resolve_s9_active_assets_and_prompt,
     )
 
     if is_s9_segment_beat(beat) and config.mode == Seedance2I2VMode.MULTIMODAL_REFERENCE:
-        _subshots, s9_meta, slots = build_s9_slots_from_beat(
+        s9_effective_prompt, assets, s9_missing_assets = resolve_s9_active_assets_and_prompt(
             beat,
-            include_first_frame=bool(config.s9_include_first_frame),
-        )
-        raw_slots = (
-            list(s9_meta.segment_asset_slots) if s9_meta and s9_meta.segment_asset_slots else slots
-        )
-        s9_effective_prompt, reordered_assets, s9_missing_assets = rebind_s9_prompt_with_active_assets(
-            final_prompt,
-            slots=raw_slots,
             assets=assets,
+            prompt=final_prompt,
             include_first_frame=bool(config.s9_include_first_frame),
         )
-        assets = renumber_resolved_seedance2_assets(reordered_assets)
     current_prompt_inputs_hash = _seedance2_prompt_inputs_hash(
         config=config,
         beat=beat,

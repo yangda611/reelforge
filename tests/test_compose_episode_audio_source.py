@@ -194,3 +194,49 @@ def test_compose_episode_preserves_video_tail_and_bounds_audio(
     else:
         assert rms(0.6, 0.8) > 100
     assert rms(1.2, 1.4) < 10
+
+
+def test_compose_episode_trims_embedded_audio_to_video_duration_and_normalizes_pts(
+    monkeypatch,
+    tmp_path,
+):
+    from novelvideo.task_backend.runners import video
+
+    _write_beat_video(tmp_path, episode=2, beat_num=1)
+    manager = _FakeTaskManager()
+    commands = []
+
+    def fake_run(cmd, **_kwargs):
+        commands.append(cmd)
+        if cmd[0] == "ffprobe":
+            if "-select_streams" in cmd and "v:0" in cmd:
+                return SimpleNamespace(returncode=0, stdout="23.000000\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="0\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(video, "get_task_manager", lambda: manager)
+    monkeypatch.setattr(video, "run_project_subprocess", fake_run)
+
+    video.run_compose_episode(
+        {
+            "episode": 2,
+            "payload": {
+                "output_dir": str(tmp_path),
+                "beats": [{"beat_number": 1}],
+                "resolution": "1280x720",
+            },
+        },
+        _ctx(tmp_path),
+    )
+
+    clip_cmd = next(cmd for cmd in commands if cmd[0] == "ffmpeg" and "beat_0001.mp4" in cmd[-1])
+    concat_cmd = next(cmd for cmd in commands if cmd[0] == "ffmpeg" and "ep002_final.mp4" in cmd[-1])
+    af_expr = clip_cmd[clip_cmd.index("-af") + 1]
+    assert "atrim=0:23.000000" in af_expr
+    assert "asetpts=PTS-STARTPTS" in af_expr
+    assert "-t" in clip_cmd
+    assert clip_cmd[clip_cmd.index("-t") + 1] == "23.000000"
+    assert "setpts=PTS-STARTPTS" in clip_cmd
+    filter_complex = concat_cmd[concat_cmd.index("-filter_complex") + 1]
+    assert "setpts=PTS-STARTPTS" in filter_complex
+    assert "asetpts=PTS-STARTPTS" in filter_complex

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextvars
 import hashlib
 import ipaddress
 import json
@@ -83,6 +84,17 @@ NEWAPI_VIDEO_HTTP_TIMEOUT_SECONDS = 1800.0
 NEWAPI_VIDEO_POLL_HTTP_TIMEOUT_SECONDS = 60.0
 NEWAPI_POLL_MAX_CONSECUTIVE_ERRORS = 60
 NEWAPI_POLL_ERROR_MAX_BACKOFF_SECONDS = 30.0
+NEWAPI_DOWNLOAD_MAX_RETRIES = 3
+_GATEWAY_CONTENT_FALLBACK_ERROR_CODES = frozenset(
+    {
+        "VIDEO_DOWNLOAD_HTTP_401",
+        "VIDEO_DOWNLOAD_HTTP_403",
+        "VIDEO_DOWNLOAD_HTTP_410",
+    }
+)
+_DOWNLOAD_PROGRESS_LOG: contextvars.ContextVar[
+    Callable[[str], None] | None
+] = contextvars.ContextVar("newapi_video_download_progress_log", default=None)
 NEWAPI_MEDIA_INPUT_MIN_TTL_SECONDS = 2 * 60 * 60
 _POST_ACCEPT_AUTHZ_MAX_RETRIES = 5
 _POST_ACCEPT_AUTHZ_RETRY_BASE_SECONDS = 2.0
@@ -2369,8 +2381,30 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 # Gateway content endpoints require the same token as polling.
                 # Never send that token to a provider/CDN result URL.
                 headers = {"Authorization": self.headers["Authorization"]}
+        log_fn = _DOWNLOAD_PROGRESS_LOG.get()
+        on_progress = None
+        if log_fn is not None:
+
+            def _emit_download_progress(
+                downloaded_bytes: int, total_bytes: int | None
+            ) -> None:
+                downloaded_mb = downloaded_bytes / (1024 * 1024)
+                if total_bytes and total_bytes > 0:
+                    total_mb = total_bytes / (1024 * 1024)
+                    pct = min(100.0, downloaded_bytes * 100.0 / total_bytes)
+                    log_fn(
+                        f"正在下载视频: {downloaded_mb:.1f} / {total_mb:.1f} MB ({pct:.0f}%)"
+                    )
+                else:
+                    log_fn(f"正在下载视频: {downloaded_mb:.1f} MB")
+
+            on_progress = _emit_download_progress
         return await download_to_path(
-            url, output_path, headers=headers, public_only=public_only
+            url,
+            output_path,
+            headers=headers,
+            public_only=public_only,
+            on_progress=on_progress,
         )
 
     @staticmethod
@@ -2993,6 +3027,46 @@ class NewApiVideoGenerator(VideoGeneratorBase):
         return urllib.parse.urlunsplit(
             (gateway.scheme, gateway.netloc, parsed.path, parsed.query, parsed.fragment)
         )
+
+    @staticmethod
+    def _gateway_content_fallback_url(
+        *,
+        poll_url: str,
+        video_url: str,
+        lingke_target: bool,
+        organization_request: bool,
+    ) -> str | None:
+        """Return the gateway ``/content`` proxy URL when ``video_url`` is a separate link."""
+        if lingke_target or organization_request or not poll_url:
+            return None
+        parsed_poll = urllib.parse.urlsplit(poll_url)
+        if (
+            parsed_poll.scheme not in {"http", "https"}
+            or not parsed_poll.netloc
+            or parsed_poll.query
+            or not parsed_poll.path.strip("/")
+        ):
+            return None
+        content_path = parsed_poll.path.rstrip("/") + "/content"
+        candidate = urllib.parse.urlunsplit(
+            (parsed_poll.scheme, parsed_poll.netloc, content_path, "", "")
+        )
+        parsed_video = urllib.parse.urlsplit(video_url)
+        candidate_key = (
+            parsed_poll.scheme,
+            parsed_poll.hostname,
+            parsed_poll.port or (443 if parsed_poll.scheme == "https" else 80),
+            content_path,
+        )
+        video_key = (
+            parsed_video.scheme,
+            parsed_video.hostname,
+            parsed_video.port or (443 if parsed_video.scheme == "https" else 80),
+            parsed_video.path.rstrip("/"),
+        )
+        if candidate_key == video_key:
+            return None
+        return candidate
 
     @staticmethod
     def _extract_returned_last_frame_url(task: dict) -> str:
@@ -4162,6 +4236,7 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 progress(0.2)
             poll_count = 0
             consecutive_poll_errors = 0
+            delivery_retry_count = 0
             while poll_count < max_polls:
                 if initial_polled is not None:
                     polled = initial_polled
@@ -4438,14 +4513,45 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                                     "视频生成完成，正在下载...",
                                 )
                             )
-                            if public_only_result:
-                                delivery = await self._download_video(
-                                    video_url, output_path, public_only=True
-                                )
-                            else:
-                                delivery = await self._download_video(
-                                    video_url, output_path
-                                )
+                            progress_token = _DOWNLOAD_PROGRESS_LOG.set(log)
+                            try:
+                                try:
+                                    if public_only_result:
+                                        delivery = await self._download_video(
+                                            video_url, output_path, public_only=True
+                                        )
+                                    else:
+                                        delivery = await self._download_video(
+                                            video_url, output_path
+                                        )
+                                except VideoDeliveryError as primary_exc:
+                                    fallback_url = (
+                                        self._gateway_content_fallback_url(
+                                            poll_url=poll_url,
+                                            video_url=video_url,
+                                            lingke_target=lingke_target,
+                                            organization_request=organization_request,
+                                        )
+                                        if primary_exc.code
+                                        in _GATEWAY_CONTENT_FALLBACK_ERROR_CODES
+                                        else None
+                                    )
+                                    if not fallback_url:
+                                        raise
+                                    log(
+                                        f"[video_delivery] {primary_exc.code}，尝试从中转站内容接口回退下载..."
+                                    )
+                                    try:
+                                        delivery = await self._download_video(
+                                            fallback_url, output_path
+                                        )
+                                    except VideoDeliveryError as fallback_exc:
+                                        if fallback_exc.code == "VIDEO_DOWNLOAD_HTTP_404":
+                                            raise primary_exc from None
+                                        raise
+                                    video_url = fallback_url
+                            finally:
+                                _DOWNLOAD_PROGRESS_LOG.reset(progress_token)
                     except (
                         VideoDeliveryError,
                         aiohttp.ClientError,
@@ -4459,21 +4565,36 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                             last_delivery_error = "VIDEO_DOWNLOAD_FAILED"
                             delivery_retryable = True
                         log(f"[video_delivery] {last_delivery_error}")
+                        delivery_retry_count += 1
+                        can_retry_delivery = (
+                            delivery_retryable
+                            and poll_count + 1 < max_polls
+                            and (
+                                archived_source is not None
+                                or delivery_retry_count <= NEWAPI_DOWNLOAD_MAX_RETRIES
+                            )
+                        )
                         update_request_status(
                             task_id,
-                            "delivery_pending" if delivery_retryable else "delivery_failed",
+                            "delivery_pending" if can_retry_delivery else "delivery_failed",
                             last_delivery_error,
                             resumable=(
-                                delivery_retryable and not organization_request
+                                can_retry_delivery and not organization_request
                             ),
                         )
-                        if delivery_retryable and poll_count + 1 < max_polls:
-                            log(
-                                lmsg(
-                                    "tasks.log.video.retryingDelivery",
-                                    "项目存储暂未就绪，正在重试交付...",
+                        if can_retry_delivery:
+                            if archived_source is not None:
+                                log(
+                                    lmsg(
+                                        "tasks.log.video.retryingDelivery",
+                                        "项目存储暂未就绪，正在重试交付...",
+                                    )
                                 )
-                            )
+                            else:
+                                log(
+                                    f"视频下载暂未成功 ({last_delivery_error})，正在重试 "
+                                    f"({delivery_retry_count}/{NEWAPI_DOWNLOAD_MAX_RETRIES})..."
+                                )
                             poll_count += 1
                             await asyncio.sleep(poll_interval)
                             continue
@@ -4676,6 +4797,15 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 error=timeout_error,
                 task_id=task_id,
             )
+        except asyncio.CancelledError:
+            if task_id and not organization_request:
+                update_request_status(
+                    task_id,
+                    "cancelled",
+                    "cancelled by user",
+                    resumable=False,
+                )
+            raise
         except RunningTaskAuthorityIndeterminate as exc:
             # Provider acceptance is already durable.  This branch must not
             # resubmit the provider request or decide refund/confirm locally.
@@ -4790,6 +4920,15 @@ class NewApiVideoGenerator(VideoGeneratorBase):
                 task_id=task_id,
             )
         except Exception as exc:
+            if isinstance(exc, TaskCancelled) and not organization_request:
+                if task_id:
+                    update_request_status(
+                        task_id,
+                        "cancelled",
+                        "cancelled by user",
+                        resumable=False,
+                    )
+                raise
             await update_current_model_call_log(
                 error_message=type(exc).__name__,
             )

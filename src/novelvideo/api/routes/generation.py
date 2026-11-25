@@ -2957,36 +2957,24 @@ async def generate_single_video(
                         }
                     effective_final_prompt = str(merged_config.final_prompt or "")
                     from novelvideo.s9_storyboard import (
-                        build_s9_slots_from_beat,
                         is_s9_segment_beat,
-                        rebind_s9_prompt_with_active_assets,
-                        renumber_resolved_seedance2_assets,
+                        resolve_s9_active_assets_and_prompt,
                     )
 
                     if is_s9_segment_beat(beat) or merged_config.prompt_source in {
                         "s9_script",
                         "s9_generated",
                     }:
-                        _subshots, s9_meta, slots = build_s9_slots_from_beat(
-                            beat,
-                            include_first_frame=bool(merged_config.s9_include_first_frame),
-                        )
-                        raw_slots = (
-                            list(s9_meta.segment_asset_slots)
-                            if s9_meta and s9_meta.segment_asset_slots
-                            else slots
-                        )
-                        effective_final_prompt, reordered_assets, _s9_missing = (
-                            rebind_s9_prompt_with_active_assets(
-                                effective_final_prompt,
-                                slots=raw_slots,
+                        effective_final_prompt, assets, _s9_missing = (
+                            resolve_s9_active_assets_and_prompt(
+                                beat,
                                 assets=assets,
+                                prompt=effective_final_prompt,
                                 include_first_frame=bool(
                                     merged_config.s9_include_first_frame
                                 ),
                             )
                         )
-                        assets = renumber_resolved_seedance2_assets(reordered_assets)
                         if effective_final_prompt.strip():
                             prompt = normalize_seedance2_prompt(effective_final_prompt)
                     selected_assets = apply_prompt_audio_selection(
@@ -2994,6 +2982,38 @@ async def generate_single_video(
                         effective_final_prompt,
                         generate_audio=bool(merged_config.generate_audio),
                     )
+                    if is_s9_segment_beat(beat) or merged_config.prompt_source in {
+                        "s9_script",
+                        "s9_generated",
+                    }:
+                        import re as _re
+                        from novelvideo.seedance2_i2v.request import (
+                            _validate_prompt_reference_numbers,
+                        )
+
+                        if _re.search(r"(?m)^\s*-\s*[：:]", effective_final_prompt):
+                            raise ValueError(
+                                "提示词【参考职责】中存在缺失的 @图片/@音频 编号（如“- ：”），"
+                                "请先点击「AI 优化」或补全引用后再生成视频。"
+                            )
+                        _validate_prompt_reference_numbers(
+                            prompt,
+                            image_count=sum(
+                                1
+                                for asset in selected_assets
+                                if asset.selected and asset.media_type == "image"
+                            ),
+                            video_count=sum(
+                                1
+                                for asset in selected_assets
+                                if asset.selected and asset.media_type == "video"
+                            ),
+                            audio_count=sum(
+                                1
+                                for asset in selected_assets
+                                if asset.selected and asset.media_type == "audio"
+                            ),
+                        )
                     resolved_video_references = [
                         {
                             "type": asset.media_type,

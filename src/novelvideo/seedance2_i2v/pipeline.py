@@ -330,30 +330,20 @@ async def prepare_seedance2_generation_inputs(
         )
 
     from novelvideo.s9_storyboard import (
-        build_s9_slots_from_beat,
         is_s9_segment_beat,
-        rebind_s9_prompt_with_active_assets,
-        renumber_resolved_seedance2_assets,
+        resolve_s9_active_assets_and_prompt,
     )
     from novelvideo.video_duration import seedance2_media_limits_for_backend
 
     limits = seedance2_media_limits_for_backend(video_backend)
     s9_mode = is_s9_segment_beat(beat) or config.prompt_source in {"s9_script", "s9_generated"}
     if s9_mode and config.mode == Seedance2I2VMode.MULTIMODAL_REFERENCE:
-        _subshots, s9_meta, slots = build_s9_slots_from_beat(
+        final_prompt, assets, _missing = resolve_s9_active_assets_and_prompt(
             beat,
-            include_first_frame=bool(config.s9_include_first_frame),
-        )
-        raw_slots = (
-            list(s9_meta.segment_asset_slots) if s9_meta and s9_meta.segment_asset_slots else slots
-        )
-        final_prompt, reordered_assets, _missing = rebind_s9_prompt_with_active_assets(
-            final_prompt,
-            slots=raw_slots,
             assets=assets,
+            prompt=final_prompt,
             include_first_frame=bool(config.s9_include_first_frame),
         )
-        assets = renumber_resolved_seedance2_assets(reordered_assets)
     elif config.generate_audio and "【角色声音】" not in final_prompt and not s9_mode:
         voice_mappings = [
             f"Voice mapping: {asset.label}: use the voice from {asset.reference_label}."

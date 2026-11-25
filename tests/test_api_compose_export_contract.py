@@ -458,3 +458,33 @@ def test_srt_export_falls_back_when_audio_duration_probe_fails(monkeypatch, tmp_
 
     assert response.status_code == 200
     assert b"00:00:00,000 --> 00:00:05,000" in response.content
+
+
+@pytest.mark.asyncio
+async def test_build_srt_content_uses_video_or_beat_duration_when_mp3_missing(
+    monkeypatch, tmp_path
+):
+    from novelvideo.export import episode_export
+
+    ep_dir = tmp_path / "videos" / "beats" / "ep002"
+    ep_dir.mkdir(parents=True)
+    (ep_dir / "beat_01.mp4").write_bytes(b"v1")
+
+    async def fake_duration(media_path: str) -> float:
+        assert media_path.endswith("beat_01.mp4")
+        return 15.0
+
+    monkeypatch.setattr(episode_export, "get_audio_duration_async", fake_duration)
+    srt = await episode_export.build_srt_content(
+        tmp_path,
+        2,
+        [
+            {"beat_number": 1, "narration_segment": "第一句", "estimated_duration": 15},
+            {"beat_number": 2, "narration_segment": "第二句", "estimated_duration": 23},
+            {"beat_number": 3, "narration_segment": "第三句", "duration_seconds": 25},
+        ],
+    )
+
+    assert "00:00:00,000 --> 00:00:15,000" in srt
+    assert "00:00:15,000 --> 00:00:38,000" in srt
+    assert "00:00:38,000 --> 00:01:03,000" in srt

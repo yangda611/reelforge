@@ -326,6 +326,49 @@ def _audio_duration(
         return None
 
 
+def _video_stream_duration(
+    video_path: Path, *, timeout_seconds: int | None = 30
+) -> float | None:
+    if not video_path.exists():
+        return None
+    import math
+    import subprocess
+
+    try:
+        result = run_project_subprocess(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration:format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TaskTimedOut(timeout_seconds=timeout_seconds) from exc
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        token = line.strip()
+        if not token or token.upper() == "N/A":
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            continue
+        if math.isfinite(value) and value > 0.0:
+            return value
+    return None
+
+
 def _video_has_audio_stream(
     video_path: Path, *, timeout_seconds: int | None = 30
 ) -> bool:
@@ -428,6 +471,21 @@ def run_compose_episode(
             )
             cmd = ["ffmpeg", "-y", "-i", str(video_path)]
             has_embedded_audio = False
+            video_duration = _video_stream_duration(
+                video_path,
+                timeout_seconds=subprocess_timeout(30),
+            )
+            check_cancel()
+            audio_filter = (
+                f"asetpts=PTS-STARTPTS,aresample=44100:async=1,apad,atrim=0:{video_duration:.6f}"
+                if video_duration is not None
+                else "apad"
+            )
+            duration_args = (
+                ["-t", f"{video_duration:.6f}"]
+                if video_duration is not None
+                else ["-shortest"]
+            )
             if audio_path.exists():
                 cmd.extend(["-i", str(audio_path)])
                 cmd.extend(
@@ -436,6 +494,8 @@ def run_compose_episode(
                         "0:v:0",
                         "-map",
                         "1:a:0",
+                        "-vf",
+                        "setpts=PTS-STARTPTS",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -449,8 +509,8 @@ def run_compose_episode(
                         "-pix_fmt",
                         "yuv420p",
                         "-af",
-                        "apad",
-                        "-shortest",
+                        audio_filter,
+                        *duration_args,
                     ]
                 )
                 manager.update_progress_for_project(
@@ -472,6 +532,8 @@ def run_compose_episode(
                         "0:v:0",
                         "-map",
                         "0:a:0",
+                        "-vf",
+                        "setpts=PTS-STARTPTS",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -485,8 +547,8 @@ def run_compose_episode(
                         "-pix_fmt",
                         "yuv420p",
                         "-af",
-                        "apad",
-                        "-shortest",
+                        audio_filter,
+                        *duration_args,
                     ]
                 )
                 manager.update_progress_for_project(
@@ -506,6 +568,8 @@ def run_compose_episode(
                         "0:v:0",
                         "-map",
                         "1:a:0",
+                        "-vf",
+                        "setpts=PTS-STARTPTS",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -518,7 +582,7 @@ def run_compose_episode(
                         "128k",
                         "-pix_fmt",
                         "yuv420p",
-                        "-shortest",
+                        *duration_args,
                     ]
                 )
             cmd.append(str(clip_path))
@@ -549,9 +613,11 @@ def run_compose_episode(
                 f"[{index}:v]scale={target_width}:{target_height}:"
                 f"force_original_aspect_ratio=decrease,"
                 f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"setsar=1,format=yuv420p[v{index}]"
+                f"setsar=1,setpts=PTS-STARTPTS,format=yuv420p[v{index}]"
             )
-            filter_parts.append(f"[{index}:a]aresample=44100[a{index}]")
+            filter_parts.append(
+                f"[{index}:a]aresample=44100:async=1,asetpts=PTS-STARTPTS[a{index}]"
+            )
         concat_inputs = "".join(
             f"[v{index}][a{index}]" for index in range(len(video_clips))
         )

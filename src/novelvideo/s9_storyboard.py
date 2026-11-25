@@ -67,7 +67,7 @@ class S9AssetManifestItem(BaseModel):
 
     slot_label: str = Field(description="如 @图片1 / @音频1")
     media_type: Literal["image", "audio"] = Field(description="image 或 audio")
-    asset_kind: Literal["identity", "scene", "prop", "voice", "first_frame"] = Field(
+    asset_kind: Literal["identity", "scene", "scene_reverse", "prop", "voice", "first_frame"] = Field(
         description="资产类型"
     )
     name: str = Field(description="资产展示名/角色名/场景名/道具名")
@@ -81,7 +81,7 @@ class S9SegmentAssetSlot(BaseModel):
 
     slot: int = Field(ge=1, description="1-based reference slot index")
     media_type: Literal["image", "audio"]
-    asset_kind: Literal["first_frame", "identity", "scene", "prop", "voice"]
+    asset_kind: Literal["first_frame", "identity", "scene", "scene_reverse", "prop", "voice"]
     name: str
     asset_id: str = ""
     variant_id: str = ""
@@ -275,11 +275,47 @@ def resolve_s9_style_context(
     )
 
 
+_REVERSE_SCENE_CUE_RE = re.compile(
+    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框)",
+    re.IGNORECASE,
+)
+
+
+def _scene_record_lookup(scenes: list[Any] | None) -> dict[str, Any]:
+    lookup: dict[str, Any] = {}
+    for sc in scenes or []:
+        name = str(getattr(sc, "name", "") or "").strip()
+        if name:
+            lookup[name] = sc
+    return lookup
+
+
+def _scene_has_reverse_master_on_disk(
+    output_dir: str | Path | None,
+    scene_id: str,
+    variant_id: str = "",
+) -> bool:
+    if not output_dir or not scene_id:
+        return False
+    from novelvideo.utils.path_resolver import canonical_scene_reverse_master_path
+
+    root = Path(output_dir)
+    candidates = []
+    if variant_id:
+        candidates.append(canonical_scene_reverse_master_path(root, f"{scene_id}_{variant_id}"))
+    candidates.append(canonical_scene_reverse_master_path(root, scene_id))
+    if "_" in scene_id:
+        candidates.append(canonical_scene_reverse_master_path(root, scene_id.split("_", 1)[0]))
+    return any(p.exists() for p in candidates)
+
+
 def _format_planned_assets_summary(
     *,
     characters: list[Any],
     episode: Any,
     voice_available_names: set[str],
+    scenes: list[Any] | None = None,
+    output_dir: str | Path | None = None,
 ) -> str:
     """Format episode cast, scenes, props, and voices for LLM grounding."""
 
@@ -321,8 +357,11 @@ def _format_planned_assets_summary(
     if char_lines:
         lines.append("【已规划角色与身份】\n" + "\n".join(char_lines))
 
+    scene_lookup = _scene_record_lookup(scenes)
     scene_items = list(getattr(episode, "scene_menu", []) or []) if episode else []
     if scene_items:
+        from novelvideo.models import build_scene_effective_prompt
+
         scene_lines = []
         for item in scene_items:
             sid = str(getattr(item, "scene_id", "") or "").strip()
@@ -330,10 +369,29 @@ def _format_planned_assets_summary(
                 continue
             vid = str(getattr(item, "variant_id", "") or "").strip()
             desc = str(getattr(item, "description", "") or getattr(item, "notes", "") or "").strip()
+            plate_key = f"{sid}_{vid}" if vid else sid
+            scene_obj = scene_lookup.get(plate_key) or scene_lookup.get(sid)
+            base_obj = scene_lookup.get(sid) if scene_obj is not None and scene_obj is not scene_lookup.get(sid) else None
+            env_detail = ""
+            time_note = ""
+            if scene_obj is not None:
+                env_detail = build_scene_effective_prompt(scene_obj, base_obj).strip()
+                sc_time = str(getattr(scene_obj, "time_of_day", "") or "").strip()
+                if sc_time:
+                    time_note = f" | 固定时段: {sc_time}"
+                notes = str(getattr(scene_obj, "notes", "") or "").strip()
+                if notes and notes not in env_detail:
+                    env_detail = f"{env_detail}\n  空间/设定补充：{notes}" if env_detail else notes
+            has_reverse = _scene_has_reverse_master_on_disk(output_dir, sid, vid)
+            reverse_note = " | 已有背面参考图(reverse_master.png，需拍背面/入户门侧时请选用 scene_reverse)" if has_reverse else ""
+            detail_parts = [p for p in [desc, env_detail] if p]
+            combined_desc = "；".join(dict.fromkeys(detail_parts))
             scene_lines.append(
                 f"- scene_id=`{sid}`"
                 + (f" (变体: `{vid}`)" if vid else "")
-                + (f" — {desc}" if desc else "")
+                + time_note
+                + reverse_note
+                + (f" — {combined_desc}" if combined_desc else "")
             )
         if scene_lines:
             lines.append("【已规划场景菜单】\n" + "\n".join(scene_lines))
@@ -718,6 +776,7 @@ def normalize_s9_storyboard_plan(
     max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
     characters: list[Any] | None = None,
     episode: Any = None,
+    output_dir: str | Path | None = None,
     max_images_per_segment: int = 9,
     max_audios_per_segment: int = 3,
 ) -> tuple[S9StoryboardPlan, list[list[S9SegmentAssetSlot]]]:
@@ -732,16 +791,19 @@ def normalize_s9_storyboard_plan(
 
     manifest_identities: list[str] = []
     manifest_scenes: list[tuple[str, str]] = []
+    manifest_reverse_scenes: set[str] = set()
     manifest_props: list[str] = []
     for item in plan.asset_manifest or []:
         if item.asset_kind == "identity":
             resolved = _match_identity_id(item.asset_id or item.name, valid_identities, char_to_default)
             if resolved and resolved not in manifest_identities:
                 manifest_identities.append(resolved)
-        elif item.asset_kind == "scene":
+        elif item.asset_kind in {"scene", "scene_reverse"}:
             sid, vid = _match_scene_id(item.asset_id or item.name, episode)
             if sid and (sid, item.variant_id or vid) not in manifest_scenes:
                 manifest_scenes.append((sid, item.variant_id or vid))
+            if item.asset_kind == "scene_reverse" and sid:
+                manifest_reverse_scenes.add(sid)
         elif item.asset_kind == "prop":
             pid = _match_prop_id(item.asset_id or item.name, episode)
             if pid and pid not in manifest_props:
@@ -910,6 +972,17 @@ def normalize_s9_storyboard_plan(
                     update={"prop_ids": list(seg_prop_ids)}
                 )
 
+        # Deduplicate scene keys by scene_id (prefer variant_id when present)
+        dedup_scene_by_sid: dict[str, str] = {}
+        ordered_scene_sids: list[str] = []
+        for sid, vid in seg_scene_keys:
+            if sid not in dedup_scene_by_sid:
+                dedup_scene_by_sid[sid] = vid
+                ordered_scene_sids.append(sid)
+            elif vid and not dedup_scene_by_sid[sid]:
+                dedup_scene_by_sid[sid] = vid
+        seg_scene_keys = [(sid, dedup_scene_by_sid[sid]) for sid in ordered_scene_sids]
+
         # Build local ordered @图片1..P and @音频1..A slots for THIS segment
         image_slots: list[S9SegmentAssetSlot] = []
         for iid in seg_identity_ids:
@@ -924,19 +997,39 @@ def normalize_s9_storyboard_plan(
                     asset_id=iid,
                 )
             )
+        wants_reverse_scene = bool(_REVERSE_SCENE_CUE_RE.search(seg_prose))
         for sid, vid in seg_scene_keys:
             if len(image_slots) >= max(1, max_images_per_segment):
                 break
+            scene_display = f"{sid}({vid})" if vid else sid
             image_slots.append(
                 S9SegmentAssetSlot(
                     slot=len(image_slots) + 1,
                     media_type="image",
                     asset_kind="scene",
-                    name=f"{sid}({vid})" if vid else sid,
+                    name=scene_display,
                     asset_id=sid,
                     variant_id=vid,
                 )
             )
+            has_reverse_disk = _scene_has_reverse_master_on_disk(output_dir, sid, vid)
+            if (
+                len(image_slots) < max(1, max_images_per_segment)
+                and (
+                    (wants_reverse_scene and has_reverse_disk)
+                    or (sid in manifest_reverse_scenes and (not output_dir or has_reverse_disk))
+                )
+            ):
+                image_slots.append(
+                    S9SegmentAssetSlot(
+                        slot=len(image_slots) + 1,
+                        media_type="image",
+                        asset_kind="scene_reverse",
+                        name=f"{scene_display}背面",
+                        asset_id=sid,
+                        variant_id=vid,
+                    )
+                )
         for pid in seg_prop_ids:
             if len(image_slots) >= max(1, max_images_per_segment):
                 break
@@ -997,9 +1090,14 @@ def normalize_s9_storyboard_plan(
             manifest_seen.values(),
             key=lambda x: (
                 0 if x.media_type == "image" else 1,
-                {"identity": 0, "scene": 1, "prop": 2, "voice": 3, "first_frame": 4}.get(
-                    x.asset_kind, 9
-                ),
+                {
+                    "identity": 0,
+                    "scene": 1,
+                    "scene_reverse": 2,
+                    "prop": 3,
+                    "voice": 4,
+                    "first_frame": 5,
+                }.get(x.asset_kind, 9),
             ),
         )
     ]
@@ -1068,7 +1166,8 @@ def format_slot_table_for_stage2(slots: list[S9SegmentAssetSlot]) -> str:
     kind_labels = {
         "first_frame": "开篇首帧渲染图",
         "identity": "角色",
-        "scene": "场景",
+        "scene": "场景正面",
+        "scene_reverse": "场景背面（反打/入户侧）",
         "prop": "道具",
         "voice": "角色音色",
     }
@@ -1121,6 +1220,8 @@ def build_s9_stage2_task_prompt(
     user_guidance: str = "",
     source_text: str = "",
     current_prompt: str = "",
+    scene_context_notes: str = "",
+    continuity_anchor: str = "",
 ) -> str:
     """Build Stage 2 user prompt for compiling one 大段 into a full Seedance prompt."""
 
@@ -1187,6 +1288,19 @@ def build_s9_stage2_task_prompt(
         else ""
     )
 
+    scene_consistency_parts = [
+        p.strip()
+        for p in (scene_context_notes, continuity_anchor)
+        if str(p or "").strip()
+    ]
+    scene_consistency_block = (
+        "\n【场景锁图光、空间地标与跨段道具一致性铁律（严禁擅自改动）】\n"
+        + "\n".join(scene_consistency_parts)
+        + "\n"
+        if scene_consistency_parts
+        else ""
+    )
+
     current_clean = str(current_prompt or "").strip()
     current_block = ""
     if current_clean:
@@ -1213,9 +1327,12 @@ def build_s9_stage2_task_prompt(
                 "用户主动发起了「AI 优化」。请在保留逐字台词原文、正确 @图片N/@音频N 绑定、"
                 f"用户手动修改意图以及完整 0秒—{segment.planned_duration_seconds}秒（共 {max(1, len(segment.shots))} 镜）结构的前提下，"
                 "进行**实质性的导演级精修升级**（不要原封不动照抄原文）：\n"
-                "1. 若上方存在【用户附加微调要求】，优先落实用户指定维度（主体/场景/光影/镜头/风格/无字幕等）；\n"
-                "2. 细化镜内亚区间动态时间轴中的眼神落点、微表情时程错峰、身体重心传导与道具拿放最终归属；\n"
-                "3. 强化机位动机、景别转换与物理光影/贴动作拟音细节，删去空泛套话，完整输出到最后一镜结束。\n"
+                "1. **强制纠偏旧稿冲突（最高优先）**：若基准稿中的 `@图片N`/`@音频N` 编号与上方【本段可用素材索引表】不一致或存在空缺引用（如 `- ：`），"
+                "或者基准稿的光影时段/虚构灯具、门窗方位、道具颜色或遮挡位置与上方【场景锁图光、空间地标与跨段道具一致性铁律】冲突，"
+                "必须直接按最新索引表与铁律推翻并修正旧稿，严禁沿用旧错误；\n"
+                "2. 若上方存在【用户附加微调要求】，优先落实用户指定维度（主体/场景/光影/镜头/风格/无字幕等）；\n"
+                "3. 细化镜内亚区间动态时间轴中的眼神落点、微表情时程错峰、身体重心传导与道具拿放最终归属；\n"
+                "4. 强化机位动机、景别转换与物理光影/贴动作拟音细节，删去空泛套话，完整输出到最后一镜结束。\n"
             )
 
     return f"""请为「大段{segment.segment_number}：{segment.title}」（计划总时长 **{segment.planned_duration_seconds}秒**，必须在这 {segment.planned_duration_seconds} 秒内讲完本段故事闭环、零空等拖秒）生成完整的 Seedance 2.0/2.5 生成提示词：
@@ -1231,7 +1348,7 @@ def build_s9_stage2_task_prompt(
 {layout_block}
 【本大段叙事核心】
 {segment.story_beat}
-{source_block}
+{scene_consistency_block}{source_block}
 【本大段内部各分镜规划（时间轴共 {segment.planned_duration_seconds} 秒）】
 {chr(10).join(shots_lines)}
 {guidance_block}{current_block}
@@ -1363,7 +1480,11 @@ def build_s9_stage2_fallback_prompt(
                 )
             elif s.asset_kind == "scene":
                 duty_lines.append(
-                    f"@图片{s.slot} 是场景{s.name}参考：锁定空间结构、陈设材质与环境光色；仅作空间与光线基准，不冻结镜头运镜。"
+                    f"@图片{s.slot} 是场景{s.name}正面参考：锁定空间结构、陈设材质与环境光色；仅作空间与光线基准，不冻结镜头运镜。"
+                )
+            elif s.asset_kind == "scene_reverse":
+                duty_lines.append(
+                    f"@图片{s.slot} 是场景{s.name}背面/入户侧参考：锁定反打方向门窗结构、左右位置与同场光色；拍摄门/玄关/反打方向时严格按此图方位执行。"
                 )
             else:
                 duty_lines.append(
@@ -1723,6 +1844,8 @@ async def run_s9_stage1_plan(
     characters: list[Any],
     episode: Any,
     voice_available_names: set[str],
+    scenes: list[Any] | None = None,
+    output_dir: str | Path | None = None,
     max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
     spine_template: str = "drama",
     tail_anchor: bool = False,
@@ -1747,6 +1870,8 @@ async def run_s9_stage1_plan(
         characters=characters,
         episode=episode,
         voice_available_names=voice_available_names,
+        scenes=scenes,
+        output_dir=output_dir,
     )
     task_prompt = build_s9_stage1_task_prompt(
         source_text=source_text,
@@ -1830,6 +1955,8 @@ async def run_s9_stage2_segment_prompt(
     user_guidance: str = "",
     source_text: str = "",
     current_prompt: str = "",
+    scene_context_notes: str = "",
+    continuity_anchor: str = "",
 ) -> str:
     """Invoke LLM to compile Stage 2 full Seedance 2.0/2.5 prompt for one 大段."""
 
@@ -1852,6 +1979,8 @@ async def run_s9_stage2_segment_prompt(
         user_guidance=user_guidance,
         source_text=source_text,
         current_prompt=current_prompt,
+        scene_context_notes=scene_context_notes,
+        continuity_anchor=continuity_anchor,
     )
     model_env = "SEEDANCE2_PROMPT_COMPOSER_MODEL"
     agent = Agent(
@@ -1965,6 +2094,26 @@ async def run_s9_stage2_segment_prompt(
     )
 
 
+_LIGHTING_SECTION_RE = re.compile(
+    r"(【全局光影画风】\s*\n.*?)(?=\n\s*【|\n\s*分镜|\Z)",
+    re.DOTALL,
+)
+
+
+def extract_s9_lighting_style_block(prompt: str) -> str:
+    """Extract the 【全局光影画风】 section from an s9 Stage 2 prompt."""
+
+    match = _LIGHTING_SECTION_RE.search(str(prompt or ""))
+    return match.group(1).strip() if match else ""
+
+
+def _primary_scene_key_for_slots(slots: list[S9SegmentAssetSlot]) -> str:
+    for slot in slots or []:
+        if slot.asset_kind == "scene" and slot.asset_id:
+            return f"{slot.asset_id}|{slot.variant_id}"
+    return ""
+
+
 async def generate_all_s9_segment_prompts(
     *,
     plan: S9StoryboardPlan,
@@ -1975,13 +2124,48 @@ async def generate_all_s9_segment_prompts(
     include_first_frame: bool = False,
     max_concurrency: int = 4,
     source_text: str = "",
+    scene_context_notes_by_segment: list[str] | None = None,
+    continuity_anchor: str = "",
 ) -> list[str]:
-    """Generate Stage 2 continuous prompts across all 大段 with bounded concurrency."""
+    """Generate Stage 2 continuous prompts across all 大段 with bounded concurrency.
+
+    When multiple segments share the same primary scene, the first segment of
+    each scene compiles in wave 1 so its resolved ``【全局光影画风】`` block can
+    be inherited by subsequent segments in that same scene (wave 2), locking
+    color tone and lighting across clips without sacrificing parallelism.
+    """
 
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
     segments = plan.segments
+    if not segments:
+        return []
 
-    async def _compile_one(idx: int) -> str:
+    scene_keys = [
+        _primary_scene_key_for_slots(per_segment_slots[i] if i < len(per_segment_slots) else [])
+        for i in range(len(segments))
+    ]
+    wave1_indices: list[int] = []
+    wave2_indices: list[int] = []
+    first_idx_by_scene: dict[str, int] = {}
+    for i, skey in enumerate(scene_keys):
+        if skey and skey in first_idx_by_scene:
+            wave2_indices.append(i)
+        else:
+            if skey:
+                first_idx_by_scene[skey] = i
+            wave1_indices.append(i)
+
+    results: list[str] = [""] * len(segments)
+
+    async def _compile_one(idx: int, extra_anchor: str = "") -> str:
+        seg_notes = (
+            scene_context_notes_by_segment[idx]
+            if scene_context_notes_by_segment and idx < len(scene_context_notes_by_segment)
+            else ""
+        )
+        combined_anchor = "\n".join(
+            part for part in (continuity_anchor.strip(), extra_anchor.strip()) if part
+        )
         async with semaphore:
             return await run_s9_stage2_segment_prompt(
                 segment=segments[idx],
@@ -1993,9 +2177,35 @@ async def generate_all_s9_segment_prompts(
                 tail_anchor=tail_anchor,
                 include_first_frame=include_first_frame,
                 source_text=source_text,
+                scene_context_notes=seg_notes,
+                continuity_anchor=combined_anchor,
             )
 
-    return await asyncio.gather(*(_compile_one(i) for i in range(len(segments))))
+    wave1_outputs = await asyncio.gather(*(_compile_one(i) for i in wave1_indices))
+    scene_lighting_anchor: dict[str, str] = {}
+    for idx, text in zip(wave1_indices, wave1_outputs):
+        results[idx] = text
+        skey = scene_keys[idx]
+        if skey:
+            lighting = extract_s9_lighting_style_block(text)
+            if lighting:
+                scene_lighting_anchor[skey] = (
+                    f"同场景首段（大段{segments[idx].segment_number}）已锁定的光影画风基准"
+                    "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变）：\n"
+                    f"{lighting}"
+                )
+
+    if wave2_indices:
+        wave2_outputs = await asyncio.gather(
+            *(
+                _compile_one(i, extra_anchor=scene_lighting_anchor.get(scene_keys[i], ""))
+                for i in wave2_indices
+            )
+        )
+        for idx, text in zip(wave2_indices, wave2_outputs):
+            results[idx] = text
+
+    return results
 
 
 def parse_s9_segment_meta(raw: Any) -> S9SegmentMeta | None:
@@ -2080,7 +2290,9 @@ def _match_resolved_asset_to_slot(
         if want_kind == "identity":
             return category == "identity" or key.startswith("identity:")
         if want_kind == "scene":
-            return category == "scene" or key.startswith("scene")
+            return category == "scene" or key.startswith("scene:")
+        if want_kind == "scene_reverse":
+            return category == "scene_reverse" or key.startswith("scene_reverse:")
         if want_kind == "prop":
             return category == "prop" or key.startswith("prop:")
         if want_kind == "voice":
@@ -2134,6 +2346,7 @@ def rebind_s9_prompt_with_active_assets(
 
     ordered_assets: list[Any] = []
     seen_paths: set[str] = set()
+    path_to_runtime: dict[tuple[str, str], int] = {}
     slot_to_runtime: dict[tuple[str, int], int] = {}
     slot_lookup = {(s.media_type, s.slot): s for s in slots}
     missing_slots: list[dict[str, str]] = []
@@ -2147,8 +2360,11 @@ def rebind_s9_prompt_with_active_assets(
         ]
         if ff_assets:
             ff = ff_assets[0]
+            ff_path = str(getattr(ff, "path", "") or "")
             ordered_assets.append(ff)
-            seen_paths.add(str(getattr(ff, "path", "")))
+            if ff_path:
+                seen_paths.add(ff_path)
+                path_to_runtime[("image", ff_path)] = 1
             image_index += 1
 
     # Walk configured segment slots in manifest order
@@ -2168,6 +2384,10 @@ def rebind_s9_prompt_with_active_assets(
             )
             continue
         matched_path = str(getattr(matched, "path", "") or "")
+        existing_runtime = path_to_runtime.get((slot.media_type, matched_path)) if matched_path else None
+        if existing_runtime is not None:
+            slot_to_runtime[(slot.media_type, slot.slot)] = existing_runtime
+            continue
         if slot.media_type == "image":
             image_index += 1
             runtime_num = image_index
@@ -2175,9 +2395,11 @@ def rebind_s9_prompt_with_active_assets(
             audio_index += 1
             runtime_num = audio_index
         slot_to_runtime[(slot.media_type, slot.slot)] = runtime_num
-        if matched_path and matched_path not in seen_paths:
-            ordered_assets.append(matched)
-            seen_paths.add(matched_path)
+        if matched_path:
+            path_to_runtime[(slot.media_type, matched_path)] = runtime_num
+            if matched_path not in seen_paths:
+                ordered_assets.append(matched)
+                seen_paths.add(matched_path)
 
     # Also include any additional selected assets (e.g. user manual uploads) after manifest slots
     for asset in assets:
@@ -2190,8 +2412,10 @@ def rebind_s9_prompt_with_active_assets(
             seen_paths.add(path)
             if str(getattr(asset, "media_type", "")) == "image":
                 image_index += 1
+                path_to_runtime[("image", path)] = image_index
             elif str(getattr(asset, "media_type", "")) == "audio":
                 audio_index += 1
+                path_to_runtime[("audio", path)] = audio_index
 
     text = str(prompt or "")
     if slots and text.strip():
@@ -2209,7 +2433,7 @@ def rebind_s9_prompt_with_active_assets(
                 return slot_item.name
             if 1 <= raw_num <= total_media:
                 return f"@{prefix}{raw_num}"
-            return ""
+            return f"@{prefix}{raw_num}"
 
         text = _MENTION_RE.sub(_replace_mention, text)
         # If first frame was newly injected as @图片1 and prompt doesn't describe it yet,
@@ -2223,6 +2447,126 @@ def rebind_s9_prompt_with_active_assets(
                     text = f"{ff_line}\n{text}"
 
     return text, ordered_assets, missing_slots
+
+
+def resolve_s9_active_assets_and_prompt(
+    beat: dict[str, Any] | Any,
+    *,
+    assets: list[Any],
+    prompt: str,
+    include_first_frame: bool = False,
+) -> tuple[str, list[Any], list[dict[str, str]]]:
+    """Rebind an s9 prompt against active assets and return renumbered assets."""
+
+    _subshots, s9_meta, slots = build_s9_slots_from_beat(
+        beat,
+        include_first_frame=include_first_frame,
+    )
+    raw_slots = (
+        list(s9_meta.segment_asset_slots)
+        if s9_meta and s9_meta.segment_asset_slots
+        else slots
+    )
+    effective_prompt, reordered_assets, missing_slots = rebind_s9_prompt_with_active_assets(
+        prompt,
+        slots=raw_slots,
+        assets=assets,
+        include_first_frame=include_first_frame,
+    )
+    return (
+        effective_prompt,
+        renumber_resolved_seedance2_assets(reordered_assets),
+        missing_slots,
+    )
+
+
+def build_s9_scene_prop_consistency_notes(
+    *,
+    slots: list[S9SegmentAssetSlot],
+    scenes: list[Any] | None = None,
+    prop_menu: list[Any] | None = None,
+    props: list[Any] | None = None,
+    time_of_day: str = "",
+    has_multiple_segments: bool = False,
+) -> str:
+    """Build deterministic scene lighting, spatial landmark, and prop color/visibility rules."""
+
+    from novelvideo.models import build_scene_effective_prompt
+
+    lines: list[str] = []
+    scene_lookup = _scene_record_lookup(scenes)
+    seen_scenes: set[str] = set()
+    for slot in slots:
+        if slot.asset_kind not in {"scene", "scene_reverse"} or not slot.asset_id:
+            continue
+        key = f"{slot.asset_id}|{slot.variant_id}"
+        if key in seen_scenes:
+            continue
+        seen_scenes.add(key)
+        plate_key = f"{slot.asset_id}_{slot.variant_id}" if slot.variant_id else slot.asset_id
+        scene_obj = scene_lookup.get(plate_key) or scene_lookup.get(slot.asset_id)
+        base_obj = (
+            scene_lookup.get(slot.asset_id)
+            if scene_obj is not None and scene_obj is not scene_lookup.get(slot.asset_id)
+            else None
+        )
+        scene_time = str(getattr(scene_obj, "time_of_day", "") or "").strip() if scene_obj else ""
+        effective_time = str(time_of_day or "").strip() or scene_time
+        if effective_time:
+            lines.append(
+                f"- 场景 `{plate_key}` 锁定光影时段为「{effective_time}」：严格沿用对应场景参考图的光源方向、色温与明暗基调，严禁擅自推进成夜晚/冷蓝调或凭空新增参考图没有的吊灯/灯具。"
+            )
+        else:
+            lines.append(
+                f"- 场景 `{plate_key}` 开启「锁图光（不重打光）」：主光源方向、冷暖色温与室内外明暗比例必须严格锁定场景参考图，严禁擅自改换时段或凭空添加参考图不存在的头顶吊灯/新光源。"
+            )
+        if scene_obj is not None:
+            env_text = build_scene_effective_prompt(scene_obj, base_obj).strip()
+            notes = str(getattr(scene_obj, "notes", "") or "").strip()
+            if env_text:
+                lines.append(f"- 场景 `{plate_key}` 参考图真实空间设定：{env_text}")
+            if notes and notes not in env_text:
+                lines.append(f"- 场景 `{plate_key}` 正/背面方位补充：{notes}")
+
+    if has_multiple_segments:
+        lines.append(
+            "- 跨段同场景连续性：本集包含多个同场景大段，全集在未发生场景或时段切换时必须保持完全一致的光源方向、色温基调与陈设布局。"
+        )
+
+    prop_desc_by_id: dict[str, str] = {}
+    for item in prop_menu or []:
+        pid = str(
+            (item.get("prop_id") or item.get("name") if isinstance(item, dict) else getattr(item, "prop_id", "") or getattr(item, "name", ""))
+            or ""
+        ).strip()
+        if not pid:
+            continue
+        desc = str(
+            (item.get("visual_prompt") or item.get("description") if isinstance(item, dict) else getattr(item, "visual_prompt", "") or getattr(item, "description", ""))
+            or ""
+        ).strip()
+        if desc:
+            prop_desc_by_id[pid] = desc
+    for p in props or []:
+        pid = str(getattr(p, "name", "") or "").strip()
+        if pid and pid not in prop_desc_by_id:
+            desc = str(getattr(p, "visual_prompt", "") or getattr(p, "description", "") or "").strip()
+            if desc:
+                prop_desc_by_id[pid] = desc
+
+    prop_slots = [s for s in slots if s.asset_kind == "prop" and s.asset_id]
+    if prop_slots:
+        for s in prop_slots:
+            desc = prop_desc_by_id.get(s.asset_id, "")
+            desc_part = f"（外观约束：{desc}）" if desc else ""
+            lines.append(
+                f"- 道具 `{s.asset_id}`（@图片{s.slot}）{desc_part}：颜色、材质与造型必须严格遵循参考图与设定，禁止自行改色。"
+            )
+        lines.append(
+            "- 关键道具可见性铁律：已选入本段的核心道具（尤其跨段随身携带的包袋/器物），除非剧情明确要求藏匿，否则严禁放到桌下、双膝等被前景遮挡的位置；对坐戏应放置在桌面可见区或怀中/手侧，确保中景画面清晰可见。"
+        )
+
+    return "\n".join(lines)
 
 
 def renumber_resolved_seedance2_assets(ordered_assets: list[Any]) -> list[Any]:
@@ -2439,11 +2783,13 @@ def compute_s9_manifest_with_live_status(
         canonical_portrait_path,
         canonical_prop_reference_path,
         canonical_scene_master_path,
+        canonical_scene_reverse_master_path,
     )
 
     project_root = Path(output_dir)
     ready_identities: set[str] = set()
     ready_scenes: set[str] = set()
+    ready_reverse_scenes: set[str] = set()
     ready_props: set[str] = set()
     ready_voices: set[str] = set()
 
@@ -2522,6 +2868,13 @@ def compute_s9_manifest_with_live_status(
             scene_candidates.append(canonical_scene_master_path(project_root, sid.split("_", 1)[0]))
         if any(p.exists() for p in scene_candidates):
             ready_scenes.add(sid)
+        rev_candidates = [canonical_scene_reverse_master_path(project_root, f"{sid}_{vid}") if vid else canonical_scene_reverse_master_path(project_root, sid)]
+        if vid:
+            rev_candidates.append(canonical_scene_reverse_master_path(project_root, sid))
+        if "_" in sid:
+            rev_candidates.append(canonical_scene_reverse_master_path(project_root, sid.split("_", 1)[0]))
+        if any(p.exists() for p in rev_candidates):
+            ready_reverse_scenes.add(sid)
 
     for item in list(getattr(episode, "prop_menu", []) or []) if episode else []:
         pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
@@ -2549,6 +2902,8 @@ def compute_s9_manifest_with_live_status(
             )
         elif kind == "scene":
             is_ready = aid in ready_scenes or name in ready_scenes
+        elif kind == "scene_reverse":
+            is_ready = aid in ready_reverse_scenes or name in ready_reverse_scenes
         elif kind == "prop":
             is_ready = aid in ready_props or name in ready_props
         elif kind == "voice":
@@ -2692,6 +3047,7 @@ __all__ = [
     "aggregate_segment_visual_summary",
     "aspect_ratio_to_video_ratio",
     "audit_s9_plan_pacing",
+    "build_s9_scene_prop_consistency_notes",
     "build_s9_stage1_system_prompt",
     "build_s9_stage1_task_prompt",
     "build_s9_stage2_fallback_prompt",
@@ -2699,6 +3055,7 @@ __all__ = [
     "build_s9_stage2_task_prompt",
     "compute_segment_subshots_update",
     "compute_s9_manifest_with_live_status",
+    "extract_s9_lighting_style_block",
     "format_slot_table_for_stage2",
     "generate_all_s9_segment_prompts",
     "is_s9_segment_beat",
@@ -2707,6 +3064,7 @@ __all__ = [
     "parse_s9_segment_meta",
     "parse_s9_subshots",
     "rebind_s9_prompt_with_active_assets",
+    "resolve_s9_active_assets_and_prompt",
     "resolve_s9_style_context",
     "run_s9_stage1_plan",
     "run_s9_stage2_segment_prompt",

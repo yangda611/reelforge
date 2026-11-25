@@ -258,3 +258,58 @@ async def test_public_only_download_still_rejects_literal_fake_ip_url(
             str(tmp_path / "result.mp4"),
             public_only=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_retryable"),
+    [
+        (401, False),
+        (403, False),
+        (404, False),
+        (410, False),
+        (429, True),
+        (503, True),
+    ],
+)
+async def test_download_to_path_http_status_retryability(
+    tmp_path: Path, status: int, expected_retryable: bool
+) -> None:
+    async def handler(_request: web.Request) -> web.Response:
+        return web.Response(status=status, text="err")
+
+    app = web.Application()
+    app.router.add_get("/video.mp4", handler)
+    async with _serve(app) as base_url:
+        with pytest.raises(VideoDeliveryError) as captured:
+            await download_to_path(
+                f"{base_url}/video.mp4",
+                str(tmp_path / "result.mp4"),
+            )
+
+    assert captured.value.code == f"VIDEO_DOWNLOAD_HTTP_{status}"
+    assert captured.value.retryable is expected_retryable
+
+
+async def test_download_to_path_emits_progress_and_uses_extended_timeout(
+    tmp_path: Path,
+) -> None:
+    payload = b"a" * (64 * 1024)
+
+    async def handler(_request: web.Request) -> web.Response:
+        return web.Response(body=payload, content_type="video/mp4")
+
+    app = web.Application()
+    app.router.add_get("/video.mp4", handler)
+    progress_events: list[tuple[int, int | None]] = []
+    async with _serve(app) as base_url:
+        receipt = await download_to_path(
+            f"{base_url}/video.mp4",
+            str(tmp_path / "result.mp4"),
+            on_progress=lambda downloaded, total: progress_events.append(
+                (downloaded, total)
+            ),
+            progress_interval_seconds=0.0,
+        )
+
+    assert receipt.size == len(payload)
+    assert progress_events == [(len(payload), len(payload))]

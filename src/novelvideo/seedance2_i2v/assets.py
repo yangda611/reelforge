@@ -40,6 +40,10 @@ from novelvideo.seedance2_i2v.voice_clone import (
     normalize_seedance2_audio_type,
     resolve_character_voice,
 )
+from novelvideo.utils.background_anchor import (
+    ANCHOR_REVERSE,
+    normalize_background_anchor_id,
+)
 from novelvideo.utils.path_resolver import (
     PathResolver,
     canonical_identity_path,
@@ -47,6 +51,7 @@ from novelvideo.utils.path_resolver import (
     canonical_portrait_path,
     canonical_prop_reference_path,
     canonical_scene_master_path,
+    canonical_scene_reverse_master_path,
 )
 
 MIN_REFERENCE_ASPECT_RATIO = 0.4
@@ -363,6 +368,68 @@ def _beat_scene_label(project_output: Path, beat: dict[str, Any]) -> str:
 
 def _scene_asset_path(project_output: Path, beat: dict[str, Any]) -> Path:
     return _beat_scene_asset(project_output, beat)[1]
+
+
+_REVERSE_SCENE_CUE_RE = re.compile(
+    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框)",
+    re.IGNORECASE,
+)
+
+
+def _beat_uses_reverse_scene_view(
+    beat: dict[str, Any],
+    s9_subshots: list[Any],
+    s9_meta: Any,
+) -> bool:
+    if normalize_background_anchor_id(beat.get("render_anchor_id")) == ANCHOR_REVERSE:
+        return True
+    if s9_meta is not None:
+        for slot in getattr(s9_meta, "segment_asset_slots", []) or []:
+            if getattr(slot, "asset_kind", "") == "scene_reverse":
+                return True
+    text_parts = [
+        _text(beat.get("visual_description")),
+        _text(getattr(s9_meta, "story_beat", "") if s9_meta else ""),
+        _text(getattr(s9_meta, "entry_state", "") if s9_meta else ""),
+        _text(getattr(s9_meta, "exit_state", "") if s9_meta else ""),
+        _text(getattr(s9_meta, "scene_layout", "") if s9_meta else ""),
+    ]
+    for shot in s9_subshots or []:
+        if isinstance(shot, dict):
+            fields = (
+                shot.get("title"),
+                shot.get("content"),
+                shot.get("camera_angle"),
+                shot.get("transition_note"),
+            )
+        else:
+            fields = (
+                getattr(shot, "title", ""),
+                getattr(shot, "content", ""),
+                getattr(shot, "camera_angle", ""),
+                getattr(shot, "transition_note", ""),
+            )
+        text_parts.extend(_text(f) for f in fields if _text(f))
+    return bool(_REVERSE_SCENE_CUE_RE.search("\n".join(p for p in text_parts if p)))
+
+
+def _resolve_scene_reverse_path(
+    project_output: Path,
+    *,
+    plate_name: str,
+    scene_id: str,
+) -> Path | None:
+    candidates = [canonical_scene_reverse_master_path(project_output, plate_name)]
+    if scene_id and scene_id != plate_name:
+        candidates.append(canonical_scene_reverse_master_path(project_output, scene_id))
+    if "_" in scene_id:
+        candidates.append(
+            canonical_scene_reverse_master_path(project_output, scene_id.split("_", 1)[0])
+        )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def _beat_scene_asset(project_output: Path, beat: dict[str, Any]) -> tuple[str, Path]:
@@ -1193,38 +1260,76 @@ def build_seedance2_project_assets(
                 prop_ids.append(_text(slot.asset_id))
 
     def _add_scene_entries() -> None:
+        existing_scene_names = _scene_asset_names(project_output)
+        desired_time = _text(beat.get("time_of_day"))
+        wants_reverse = _beat_uses_reverse_scene_view(beat, s9_subshots, s9_meta)
+
         if s9_mode:
-            seen_scenes: list[tuple[str, str]] = []
+            beat_scene_ref_obj = beat_scene_ref(beat)
+            preferred_variant_by_sid: dict[str, str] = {}
+            ordered_sids: list[str] = []
+
+            def _record_scene_candidate(sid: str, vid: str) -> None:
+                clean_sid = _text(sid)
+                clean_vid = _text(vid)
+                if not clean_sid:
+                    return
+                if clean_sid not in ordered_sids:
+                    ordered_sids.append(clean_sid)
+                if clean_vid and clean_sid not in preferred_variant_by_sid:
+                    preferred_variant_by_sid[clean_sid] = clean_vid
+
+            if beat_scene_ref_obj and beat_scene_ref_obj.scene_id:
+                _record_scene_candidate(
+                    beat_scene_ref_obj.scene_id,
+                    beat_scene_ref_obj.variant_id or "",
+                )
             for shot in s9_subshots:
-                sid = _text(getattr(shot, "scene_id", "") if not isinstance(shot, dict) else shot.get("scene_id"))
-                vid = _text(getattr(shot, "scene_variant_id", "") if not isinstance(shot, dict) else shot.get("scene_variant_id"))
-                if sid and (sid, vid) not in seen_scenes:
-                    seen_scenes.append((sid, vid))
-            scene_ref = beat_scene_ref(beat)
-            if scene_ref and scene_ref.scene_id:
-                pair = (scene_ref.scene_id, scene_ref.variant_id or "")
-                if pair not in seen_scenes:
-                    seen_scenes.append(pair)
+                sid = _text(
+                    getattr(shot, "scene_id", "")
+                    if not isinstance(shot, dict)
+                    else shot.get("scene_id")
+                )
+                vid = _text(
+                    getattr(shot, "scene_variant_id", "")
+                    if not isinstance(shot, dict)
+                    else shot.get("scene_variant_id")
+                )
+                _record_scene_candidate(sid, vid)
             if s9_meta:
                 for slot in s9_meta.segment_asset_slots:
-                    if slot.asset_kind == "scene" and _text(slot.asset_id):
-                        pair = (_text(slot.asset_id), _text(slot.variant_id))
-                        if pair not in seen_scenes:
-                            seen_scenes.append(pair)
-            if seen_scenes:
-                for sid, vid in seen_scenes:
-                    label_key = f"{sid}_{vid}" if vid else sid
+                    if slot.asset_kind in {"scene", "scene_reverse"} and _text(slot.asset_id):
+                        _record_scene_candidate(
+                            _text(slot.asset_id),
+                            _text(slot.variant_id),
+                        )
+
+            if ordered_sids:
+                seen_plates: set[str] = set()
+                for sid in ordered_sids:
+                    vid = preferred_variant_by_sid.get(sid, "")
+                    resolved_plate, _time_baked = resolve_scene_plate(
+                        sid,
+                        vid,
+                        desired_time,
+                        existing_scene_names,
+                    )
+                    label_key = resolved_plate or (f"{sid}_{vid}" if vid else sid)
+                    if label_key in seen_plates:
+                        continue
+                    seen_plates.add(label_key)
                     candidate = canonical_scene_master_path(project_output, label_key)
-                    if vid and not candidate.exists():
+                    if not candidate.exists() and vid:
                         base_candidate = canonical_scene_master_path(project_output, sid)
                         if base_candidate.exists():
                             candidate = base_candidate
                     if not candidate.exists() and "_" in sid:
-                        base_candidate = canonical_scene_master_path(project_output, sid.split("_", 1)[0])
+                        base_sid = sid.split("_", 1)[0]
+                        base_candidate = canonical_scene_master_path(project_output, base_sid)
                         if base_candidate.exists():
                             candidate = base_candidate
                     add_image(
-                        key=f"scene:{sid}",
+                        key=f"scene:{label_key}",
                         label=f"场景锚点 · {label_key}",
                         path=candidate,
                         selected=True,
@@ -1233,8 +1338,34 @@ def build_seedance2_project_assets(
                         fallback_text=label_key,
                         note="用于约束场景结构、材质和空间关系。",
                     )
+                    if wants_reverse:
+                        reverse_path = _resolve_scene_reverse_path(
+                            project_output,
+                            plate_name=label_key,
+                            scene_id=sid,
+                        )
+                        if reverse_path is not None:
+                            add_image(
+                                key=f"scene_reverse:{label_key}",
+                                label=f"场景背面 · {label_key}",
+                                path=reverse_path,
+                                selected=True,
+                                request_field="reference_images",
+                                required=False,
+                                fallback_text=f"{label_key}背面",
+                                note="用于约束场景背面/入户侧空间结构、门窗位置与光线。",
+                            )
                 return
+
         location, scene_path = _beat_scene_asset(project_output, beat)
+        if normalize_background_anchor_id(beat.get("render_anchor_id")) == ANCHOR_REVERSE:
+            reverse_path = _resolve_scene_reverse_path(
+                project_output,
+                plate_name=location,
+                scene_id=location,
+            )
+            if reverse_path is not None:
+                scene_path = reverse_path
         add_image(
             key=f"scene:{location}",
             label=f"场景锚点 · {location}",

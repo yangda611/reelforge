@@ -55,8 +55,9 @@ type BlockerStage = Exclude<StageId, "compose">;
 
 function formatDuration(totalSeconds: number): string | null {
   if (!totalSeconds || totalSeconds <= 0) return null;
-  const m = Math.floor(totalSeconds / 60);
-  const s = Math.round(totalSeconds % 60);
+  const rounded = Math.round(totalSeconds);
+  const m = Math.floor(rounded / 60);
+  const s = rounded % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
@@ -137,6 +138,7 @@ function ComposeTabContent() {
   const [addSubtitles, setAddSubtitles] = useState(true);
   const [resolution, setResolution] = useState<Resolution>("720x1280");
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [actualDurationSec, setActualDurationSec] = useState<number | null>(null);
   const [composeConfirm, setComposeConfirm] = useState(false);
 
   useEffect(() => {
@@ -186,7 +188,7 @@ function ComposeTabContent() {
     (acc, b) => acc + (b.estimated_duration ?? 0),
     0,
   );
-  const durationLabel = formatDuration(totalDurationSec);
+  const durationLabel = formatDuration(actualDurationSec ?? totalDurationSec);
 
   // De-dup: trust the episode title when present, else fall back to the
   // "第 N 集" header. Previous layout rendered both, which produced the
@@ -235,9 +237,14 @@ function ComposeTabContent() {
     if (hydratedUrl) setResultUrl(hydratedUrl);
   }, [hydratedUrl, isComposing, resultUrl]);
 
+  useEffect(() => {
+    setActualDurationSec(null);
+  }, [resultUrl]);
+
   const handleCompose = async () => {
     try {
       setResultUrl(null);
+      setActualDurationSec(null);
       await composeEpisode.mutateAsync({
         add_subtitles: addSubtitles,
         add_bgm: false,
@@ -510,6 +517,12 @@ function ComposeTabContent() {
               <video
                 src={resultUrl}
                 controls
+                onLoadedMetadata={(e) => {
+                  const dur = e.currentTarget.duration;
+                  if (Number.isFinite(dur) && dur > 0) {
+                    setActualDurationSec(dur);
+                  }
+                }}
                 className="block max-h-full max-w-full rounded-lg"
               />
             </div>

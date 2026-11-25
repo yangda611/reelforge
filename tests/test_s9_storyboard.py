@@ -793,3 +793,277 @@ async def test_s9_stage2_streams_prompt_instead_of_blocking_request(monkeypatch)
     assert "分镜1（0秒到4秒）" in rendered
 
 
+def test_s9_scene_dedup_and_reverse_master_inclusion(tmp_path):
+    from novelvideo.s9_storyboard import resolve_s9_active_assets_and_prompt
+
+    project_dir = tmp_path / "proj"
+    base_scene_dir = project_dir / "assets" / "scenes" / "乔瑟夫家"
+    variant_scene_dir = project_dir / "assets" / "scenes" / "乔瑟夫家_空枪套版"
+    base_scene_dir.mkdir(parents=True, exist_ok=True)
+    variant_scene_dir.mkdir(parents=True, exist_ok=True)
+    (base_scene_dir / "master.png").write_bytes(b"base-master")
+    (base_scene_dir / "reverse_master.png").write_bytes(b"base-reverse")
+    (variant_scene_dir / "master.png").write_bytes(b"variant-master")
+
+    prop_img = project_dir / "assets" / "props" / "公文包" / "reference_3view.png"
+    prop_img.parent.mkdir(parents=True, exist_ok=True)
+    prop_img.write_bytes(b"prop-briefcase")
+
+    beat = {
+        "beat_number": 1,
+        "visual_description": "乔瑟夫起身走到玄关拉开入户门，门外艾莉森抱着公文包。",
+        "scene_ref": {"scene_id": "乔瑟夫家", "variant_id": "空枪套版"},
+        "detected_props": ["公文包"],
+        "s9_subshots": [
+            {
+                "shot_number": 1,
+                "scene_id": "乔瑟夫家",
+                "scene_variant_id": "",
+                "prop_ids": ["公文包"],
+                "content": "乔瑟夫走到入户门前开门。",
+            }
+        ],
+        "s9_segment_meta": {
+            "segment_number": 1,
+            "planned_duration_seconds": 15,
+            "segment_asset_slots": [
+                {"slot": 1, "media_type": "image", "asset_kind": "scene", "name": "乔瑟夫家", "asset_id": "乔瑟夫家", "variant_id": "空枪套版"},
+                {"slot": 2, "media_type": "image", "asset_kind": "scene_reverse", "name": "乔瑟夫家背面", "asset_id": "乔瑟夫家", "variant_id": "空枪套版"},
+                {"slot": 3, "media_type": "image", "asset_kind": "prop", "name": "公文包", "asset_id": "公文包"},
+            ],
+        },
+    }
+
+    assets = build_seedance2_project_assets(
+        project_output=project_dir,
+        episode=2,
+        beat=beat,
+        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+        state_dir=project_dir,
+        prop_menu=[{"prop_id": "公文包", "reference_image_path": str(prop_img)}],
+    )
+    image_assets = [a for a in assets if a.media_type == "image" and a.selected]
+    # Base master must NOT be emitted as a duplicate alongside variant master; reverse_master IS included.
+    assert [a.key for a in image_assets] == [
+        "scene:乔瑟夫家_空枪套版",
+        "scene_reverse:乔瑟夫家_空枪套版",
+        "prop:公文包",
+    ]
+    assert image_assets[0].path == variant_scene_dir / "master.png"
+    assert image_assets[1].path == base_scene_dir / "reverse_master.png"
+
+    prompt, renumbered, missing = resolve_s9_active_assets_and_prompt(
+        beat,
+        assets=assets,
+        prompt="@图片1为客厅正面，@图片2为入户门背面，@图片3为公文包。",
+        include_first_frame=False,
+    )
+    assert missing == []
+    assert [a.reference_label for a in renumbered] == ["图片1", "图片2", "图片3"]
+    assert "@图片1为客厅正面，@图片2为入户门背面，@图片3为公文包。" == prompt
+
+
+def test_rebind_duplicate_scene_slots_does_not_shift_prop_indices(tmp_path):
+    scene_img = tmp_path / "scene.png"
+    prop_img = tmp_path / "prop.png"
+    scene_img.write_bytes(b"scene")
+    prop_img.write_bytes(b"prop")
+
+    assets = [
+        SimpleNamespace(
+            key="scene:客厅_变体",
+            label="场景锚点 · 客厅_变体",
+            media_type="image",
+            path=scene_img,
+            exists=True,
+            selected=True,
+            reference_label="图片1",
+        ),
+        SimpleNamespace(
+            key="prop:公文包",
+            label="全局道具 · 公文包",
+            media_type="image",
+            path=prop_img,
+            exists=True,
+            selected=True,
+            reference_label="图片2",
+        ),
+    ]
+    slots = [
+        S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="scene", name="客厅", asset_id="客厅"),
+        S9SegmentAssetSlot(slot=2, media_type="image", asset_kind="scene", name="客厅(变体)", asset_id="客厅", variant_id="变体"),
+        S9SegmentAssetSlot(slot=3, media_type="image", asset_kind="prop", name="公文包", asset_id="公文包"),
+    ]
+    rebound, ordered, _missing = rebind_s9_prompt_with_active_assets(
+        "参考@图片1和@图片2，拿着@图片3（未绑定@图片9保留）。",
+        slots=slots,
+        assets=assets,
+    )
+    assert len(ordered) == 2
+    assert "参考@图片1和@图片1，拿着@图片2（未绑定@图片9保留）。" == rebound
+
+
+@pytest.mark.asyncio
+async def test_s9_panel_prompt_regen_injects_consistency_and_syncs_segment_slots(
+    tmp_path, monkeypatch
+):
+    from novelvideo import s9_storyboard as s9_mod
+    from novelvideo.models import NovelScene
+    from novelvideo.seedance2_i2v import panel_service
+
+    project_dir = tmp_path / "proj"
+    scene_dir = project_dir / "assets" / "scenes" / "乔瑟夫家_空枪套版"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    (scene_dir / "master.png").write_bytes(b"scene")
+    prop_dir = project_dir / "assets" / "props" / "公文包"
+    prop_dir.mkdir(parents=True, exist_ok=True)
+    (prop_dir / "reference_3view.png").write_bytes(b"prop")
+
+    captured: dict[str, object] = {}
+
+    async def fake_stage2(**kwargs):
+        captured.update(kwargs)
+        return "【参考职责】\n@图片1场景，@图片2公文包。\n【全局光影画风】\n黄昏。\n【注意事项】\n无。\n分镜1（0秒到8秒）：桌面上放公文包。"
+
+    monkeypatch.setattr(s9_mod, "run_s9_stage2_segment_prompt", fake_stage2)
+
+    beat = {
+        "beat_number": 2,
+        "segment_title": "大段2 · 对峙",
+        "audio_type": "silence",
+        "scene_ref": {"scene_id": "乔瑟夫家", "variant_id": "空枪套版"},
+        "detected_props": ["公文包"],
+        "s9_subshots": [
+            {
+                "shot_number": 1,
+                "planned_duration_seconds": 8,
+                "start_seconds": 0,
+                "end_seconds": 8,
+                "scene_id": "乔瑟夫家",
+                "scene_variant_id": "空枪套版",
+                "prop_ids": ["公文包"],
+                "content": "两人隔桌对坐。",
+            }
+        ],
+        "s9_segment_meta_json": json.dumps(
+            {
+                "segment_number": 2,
+                "planned_duration_seconds": 8,
+                "segment_asset_slots": [
+                    {"slot": 1, "media_type": "image", "asset_kind": "scene", "name": "乔瑟夫家", "asset_id": "乔瑟夫家"},
+                    {"slot": 2, "media_type": "image", "asset_kind": "scene", "name": "多余旧槽", "asset_id": "乔瑟夫家"},
+                    {"slot": 3, "media_type": "image", "asset_kind": "prop", "name": "公文包", "asset_id": "公文包"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        "seedance2_config_json": json.dumps(
+            {"mode": "multimodal_reference", "prompt_source": "s9_script", "prompt_style": "s9_segment"},
+            ensure_ascii=False,
+        ),
+    }
+
+    updated_calls = []
+
+    class _StubStore:
+        async def list_scenes(self):
+            return [
+                NovelScene(
+                    name="乔瑟夫家_空枪套版",
+                    base_scene_id="乔瑟夫家",
+                    variant_id="空枪套版",
+                    environment_prompt="黄昏斜阳穿过右侧百叶窗",
+                    notes="背面：reverse方向为入户门与玄关，大门在右侧",
+                )
+            ]
+
+        def get_episode(self, _ep):
+            return None
+
+        async def update_beat_asset(self, **kwargs):
+            updated_calls.append(kwargs)
+            return True
+
+    await panel_service.generate_seedance2_prompt_for_panel(
+        store=_StubStore(),
+        state_dir=project_dir,
+        episode=2,
+        beat=beat,
+        project_dir=project_dir,
+        prev_beat={"beat_number": 1},
+        prop_menu=[{"prop_id": "公文包", "description": "深棕色硬质皮革公文包"}],
+    )
+
+    notes = str(captured.get("scene_context_notes") or "")
+    assert "锁图光" in notes
+    assert "黄昏斜阳穿过右侧百叶窗" in notes
+    assert "深棕色硬质皮革公文包" in notes
+    assert "关键道具可见性铁律" in notes
+
+    assert updated_calls
+    saved_meta = json.loads(updated_calls[-1]["s9_segment_meta_json"])
+    assert [(s["slot"], s["asset_kind"]) for s in saved_meta["segment_asset_slots"]] == [
+        (1, "scene"),
+        (2, "prop"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_s9_same_scene_segments_inherit_lighting_style_anchor(monkeypatch):
+    from novelvideo import s9_storyboard as s9_mod
+
+    anchors_by_seg: dict[int, str] = {}
+
+    async def fake_stage2(**kwargs):
+        seg = kwargs["segment"]
+        anchors_by_seg[seg.segment_number] = str(kwargs.get("continuity_anchor") or "")
+        return (
+            "【参考职责】\n@图片1 场景。\n\n"
+            "【全局光影画风】\n"
+            "- 视觉风格：真人电影实拍。\n"
+            "- 全局主光：低角度黄昏斜阳穿透右侧百叶窗。\n"
+            "- 色彩与材质：暖金琥珀高光配冷青灰阴影。\n\n"
+            "【注意事项】\n无字幕。\n\n"
+            "分镜1（0秒到8秒）：镜头稳定推进。"
+        )
+
+    monkeypatch.setattr(s9_mod, "run_s9_stage2_segment_prompt", fake_stage2)
+
+    seg1 = S9SegmentPlan(
+        segment_number=1,
+        title="入场",
+        planned_duration_seconds=8,
+        story_beat="推门入室",
+        shots=[S9SubShot(shot_number=1, planned_duration_seconds=8, start_seconds=0, end_seconds=8, content="推门")],
+    )
+    seg2 = S9SegmentPlan(
+        segment_number=2,
+        title="对坐",
+        planned_duration_seconds=8,
+        story_beat="对坐交谈",
+        shots=[S9SubShot(shot_number=1, planned_duration_seconds=8, start_seconds=0, end_seconds=8, content="对坐")],
+    )
+    slots_1 = [S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="scene", name="乔瑟夫家", asset_id="乔瑟夫家", variant_id="空枪套版")]
+    slots_2 = [S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="scene", name="乔瑟夫家", asset_id="乔瑟夫家", variant_id="空枪套版")]
+
+    outputs = await s9_mod.generate_all_s9_segment_prompts(
+        plan=S9StoryboardPlan(segments=[seg1, seg2]),
+        per_segment_slots=[slots_1, slots_2],
+        style_context=s9_mod.resolve_s9_style_context(visual_style="chinese_period_drama", aspect_ratio="16:9"),
+    )
+
+    assert len(outputs) == 2
+    assert anchors_by_seg[1] == ""
+    assert "低角度黄昏斜阳穿透右侧百叶窗" in anchors_by_seg[2]
+    assert "禁止改变" in anchors_by_seg[2]
+
+    task_prompt = s9_mod.build_s9_stage2_task_prompt(
+        segment=seg2,
+        slots=slots_2,
+        style_context=s9_mod.resolve_s9_style_context(visual_style="chinese_period_drama", aspect_ratio="16:9"),
+        current_prompt="【参考职责】\n- ：绑定旧稿。\n【全局光影画风】\n吊灯深夜。\n【注意事项】\n无。\n分镜1（0秒到8秒）：旧稿。",
+    )
+    assert "强制纠偏旧稿冲突" in task_prompt
+
+
+

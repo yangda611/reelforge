@@ -17,8 +17,50 @@ def format_srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+async def _resolve_beat_subtitle_duration(
+    project_dir: Path,
+    episode: int,
+    beat_num: int,
+    beat: dict,
+) -> float:
+    from novelvideo.utils.path_resolver import PathResolver
+
+    paths = PathResolver(str(project_dir), episode)
+    audio_path = paths.audio(beat_num)
+    if audio_path.exists():
+        try:
+            duration = await get_audio_duration_async(str(audio_path))
+            if duration > 0:
+                return float(duration)
+        except Exception:
+            pass
+
+    video_path = paths.video(beat_num)
+    if video_path.exists():
+        try:
+            duration = await get_audio_duration_async(str(video_path))
+            if duration > 0:
+                return float(duration)
+        except Exception:
+            pass
+
+    for candidate in (
+        beat.get("duration_seconds"),
+        beat.get("estimated_duration"),
+        (beat.get("s9_segment_meta") or {}).get("planned_duration_seconds")
+        if isinstance(beat.get("s9_segment_meta"), dict)
+        else None,
+    ):
+        try:
+            parsed = float(candidate)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            continue
+    return 5.0
+
+
 async def build_srt_content(project_dir: Path, episode: int, beats: list[dict]) -> str:
-    audio_dir = project_dir / "audio" / f"ep{episode:03d}"
     srt_lines: list[str] = []
     current_time = 0.0
     seq = 0
@@ -29,13 +71,9 @@ async def build_srt_content(project_dir: Path, episode: int, beats: list[dict]) 
         if not narration:
             continue
 
-        audio_path = audio_dir / f"beat_{beat_num:02d}.mp3"
-        duration = 5.0
-        if audio_path.exists():
-            try:
-                duration = await get_audio_duration_async(str(audio_path))
-            except Exception:
-                duration = 5.0
+        duration = await _resolve_beat_subtitle_duration(
+            project_dir, episode, beat_num, beat
+        )
 
         start = current_time
         end = current_time + duration

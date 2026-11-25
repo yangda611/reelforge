@@ -440,3 +440,84 @@ async def test_single_video_seedance1x_still_requires_first_frame(monkeypatch, t
 
     assert response == {"ok": False, "error": "Beat 2 首帧不存在，请先生成预览"}
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bad_prompt", "expected_error"),
+    [
+        ("@图片1 推门进入，拿起 @图片5 的公文包。", "提示词引用了 图片5"),
+        ("【参考职责】\n- ：绑定艾莉森五官。\n@图片1 推门。", "缺失的 @图片/@音频 编号"),
+    ],
+)
+async def test_single_video_s9_custom_panel_blocks_invalid_or_missing_mentions(
+    monkeypatch, tmp_path, bad_prompt, expected_error
+):
+    from novelvideo.api.routes import generation
+    from novelvideo.api.schemas import SingleVideoRequest
+
+    ref_img = tmp_path / "ref-role.png"
+    ref_img.write_bytes(b"img")
+
+    calls = []
+    config_payload = {
+        "mode": "multimodal_reference",
+        "duration": 11,
+        "resolution": "720p",
+        "ratio": "16:9",
+        "generate_audio": True,
+        "prompt_source": "s9_script",
+        "prompt_style": "s9_segment",
+        "s9_include_first_frame": False,
+        "final_prompt": bad_prompt,
+        "reference_image_paths": [str(ref_img)],
+        "reference_audio_paths": [],
+    }
+    store = _FakeStore(
+        [
+            {
+                "beat_number": 2,
+                "video_mode": "first_frame",
+                "video_prompt": "",
+                "seedance2_config_json": json.dumps(config_payload, ensure_ascii=False),
+            }
+        ]
+    )
+
+    async def fake_audio_duration(*_args, **_kwargs):
+        return 0.0
+
+    _patch_generation_celery(monkeypatch, generation, tmp_path, store)
+    monkeypatch.setattr(
+        generation,
+        "get_task_backend",
+        lambda: SimpleNamespace(enqueue_project_task=_fake_enqueue(calls)),
+    )
+    monkeypatch.setattr(generation, "_api_audio_duration_seconds", fake_audio_duration)
+    monkeypatch.setattr(
+        "novelvideo.seedance2_i2v.assets.build_seedance2_project_assets",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "novelvideo.video_duration.video_duration_bounds_for_backend",
+        lambda _backend: (4, 30),
+    )
+
+    response = await generation.generate_single_video(
+        project="demo",
+        episode_num=3,
+        beat_num=2,
+        body=SingleVideoRequest(
+            video_backend="newapi_YK-SD2.5-2",
+            mode="multimodal_reference",
+            resolution="720p",
+            duration=11,
+            ratio="16:9",
+            seedance2_config_json=json.dumps(config_payload, ensure_ascii=False),
+        ),
+        user={"username": "alice"},
+    )
+
+    assert response["ok"] is False
+    assert expected_error in response["error"]
+    assert calls == []

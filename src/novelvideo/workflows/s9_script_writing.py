@@ -23,6 +23,7 @@ from novelvideo.s9_storyboard import (
     S9_PROMPT_STYLE,
     aggregate_segment_narration,
     aggregate_segment_visual_summary,
+    build_s9_scene_prop_consistency_notes,
     generate_all_s9_segment_prompts,
     normalize_max_segment_seconds,
     normalize_s9_storyboard_plan,
@@ -154,6 +155,24 @@ class S9ScriptWritingWorkflow:
         if not characters and hasattr(self.cognee_store, "list_characters"):
             characters = list(await self.cognee_store.list_characters() or [])
 
+        scenes: list[Any] = []
+        try:
+            if hasattr(self.sqlite_store, "list_scenes"):
+                scenes = list(await self.sqlite_store.list_scenes() or [])
+            elif hasattr(self.cognee_store, "get_all_scenes"):
+                scenes = list(self.cognee_store.get_all_scenes() or [])
+        except Exception:
+            scenes = []
+
+        props: list[Any] = []
+        try:
+            if hasattr(self.sqlite_store, "list_props"):
+                props = list(await self.sqlite_store.list_props() or [])
+            elif hasattr(self.cognee_store, "get_all_props"):
+                props = list(self.cognee_store.get_all_props() or [])
+        except Exception:
+            props = []
+
         prev_episode_context = ""
         if episode_num > 1:
             try:
@@ -190,6 +209,8 @@ class S9ScriptWritingWorkflow:
             characters=characters,
             episode=episode,
             voice_available_names=voice_names,
+            scenes=scenes,
+            output_dir=effective_output_dir or None,
             max_segment_seconds=cap,
             spine_template=effective_spine,
             tail_anchor=bool(tail_anchor),
@@ -200,6 +221,7 @@ class S9ScriptWritingWorkflow:
             max_segment_seconds=cap,
             characters=characters,
             episode=episode,
+            output_dir=effective_output_dir or None,
             max_images_per_segment=max_images,
             max_audios_per_segment=max_audios,
         )
@@ -214,6 +236,18 @@ class S9ScriptWritingWorkflow:
             0.55,
             f"Stage 2：为 {len(plan.segments)} 个大段生成完整 Seedance2.0 主体提示词",
         )
+        prop_menu = list(getattr(episode, "prop_menu", []) or [])
+        has_multi_segments = len(plan.segments) > 1
+        scene_context_notes_by_segment = [
+            build_s9_scene_prop_consistency_notes(
+                slots=per_segment_slots[idx],
+                scenes=scenes,
+                prop_menu=prop_menu,
+                props=props,
+                has_multiple_segments=has_multi_segments,
+            )
+            for idx in range(len(plan.segments))
+        ]
         stage2_prompts = await generate_all_s9_segment_prompts(
             plan=plan,
             per_segment_slots=per_segment_slots,
@@ -222,6 +256,7 @@ class S9ScriptWritingWorkflow:
             tail_anchor=bool(tail_anchor),
             include_first_frame=False,
             source_text=resolved_text,
+            scene_context_notes_by_segment=scene_context_notes_by_segment,
         )
 
         report_progress(0.85, "持久化 YD 分镜预览与 Seedance2.0 主体提示词")
