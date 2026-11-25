@@ -43,6 +43,11 @@ export interface ScriptBeatPreviewLabels {
   syncingPrompt?: string;
   assetReady?: string;
   assetPending?: string;
+  batchFillMissingPrompts?: (count: number) => string;
+  batchRegenPrompts?: string;
+  batchGeneratingPrompts?: string;
+  promptReady?: string;
+  promptPending?: string;
 }
 
 interface ScriptBeatPreviewProps {
@@ -52,11 +57,13 @@ interface ScriptBeatPreviewProps {
   loading?: boolean;
   savingBeatNumber?: number | null;
   regeneratingBeatNumber?: number | null;
+  batchPromptsBusy?: boolean;
   onUpdateSegmentSubshots?: (
     beatNumber: number,
     payload: { segment_title?: string; s9_subshots: S9SubShot[] },
   ) => void | Promise<void>;
   onRegenerateSegmentPrompt?: (beatNumber: number) => void | Promise<void>;
+  onBatchGeneratePrompts?: (onlyMissing: boolean) => void | Promise<void>;
   className?: string;
 }
 
@@ -114,6 +121,21 @@ function resolveSegmentMeta(beat: Beat): S9SegmentMeta | null {
   return null;
 }
 
+function hasSegmentVideoPrompt(beat: Beat): boolean {
+  if (!beat.seedance2_config_json) return false;
+  try {
+    const parsed = JSON.parse(beat.seedance2_config_json) as {
+      final_prompt?: unknown;
+    };
+    return (
+      typeof parsed?.final_prompt === "string" &&
+      parsed.final_prompt.trim().length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function ScriptBeatPreview({
   beats,
   s9PreviewMeta,
@@ -121,11 +143,16 @@ export function ScriptBeatPreview({
   loading = false,
   savingBeatNumber = null,
   regeneratingBeatNumber = null,
+  batchPromptsBusy = false,
   onUpdateSegmentSubshots,
   onRegenerateSegmentPrompt,
+  onBatchGeneratePrompts,
   className,
 }: ScriptBeatPreviewProps) {
   const hasS9Segments = beats.some((b) => resolveSegmentSubshots(b).length > 0);
+  const missingPromptCount = hasS9Segments
+    ? beats.filter((b) => !hasSegmentVideoPrompt(b)).length
+    : 0;
   const totalShots = beats.reduce(
     (sum, b) => sum + resolveSegmentSubshots(b).length,
     0,
@@ -140,17 +167,59 @@ export function ScriptBeatPreview({
 
   return (
     <section className={cn("min-w-0", className)}>
-      <div className="mb-2 flex h-7 items-center gap-2">
-        <h2 className="text-sm font-semibold tracking-tight text-foreground">
-          {labels.title}
-        </h2>
-        <span className="text-[11px] text-muted-foreground/70">
-          (
-          {hasS9Segments && labels.segmentCountSummary
-            ? labels.segmentCountSummary(beats.length, totalShots, Math.round(totalSeconds))
-            : labels.count(beats.length)}
-          )
-        </span>
+      <div className="mb-2 flex min-h-7 flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold tracking-tight text-foreground">
+            {labels.title}
+          </h2>
+          <span className="text-[11px] text-muted-foreground/70">
+            (
+            {hasS9Segments && labels.segmentCountSummary
+              ? labels.segmentCountSummary(beats.length, totalShots, Math.round(totalSeconds))
+              : labels.count(beats.length)}
+            )
+          </span>
+        </div>
+        {hasS9Segments && onBatchGeneratePrompts && (
+          <div className="flex items-center gap-1.5">
+            {missingPromptCount > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={batchPromptsBusy}
+                onClick={() => void onBatchGeneratePrompts(true)}
+                className="h-6 gap-1 rounded-full border-amber-400/25 bg-amber-400/[0.08] px-2.5 text-[11px] font-medium text-amber-300 hover:bg-amber-400/[0.15] hover:text-amber-200"
+              >
+                {batchPromptsBusy ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3" />
+                )}
+                {labels.batchFillMissingPrompts
+                  ? labels.batchFillMissingPrompts(missingPromptCount)
+                  : `补全缺失提示词 (${missingPromptCount})`}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={batchPromptsBusy}
+              onClick={() => void onBatchGeneratePrompts(false)}
+              className="h-6 gap-1 rounded-full border border-white/[0.08] bg-[#0f1117] px-2.5 text-[11px] font-medium text-foreground/82 hover:bg-[#1f2a3f] hover:text-[#5ba0ff]"
+            >
+              {batchPromptsBusy ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Sparkles className="size-3" />
+              )}
+              {batchPromptsBusy
+                ? (labels.batchGeneratingPrompts ?? "批量更新中...")
+                : (labels.batchRegenPrompts ?? "批量更新视频提示词")}
+            </Button>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -307,6 +376,7 @@ function S9SegmentPreviewCard({
   const plannedDuration = Math.round(
     Number(meta?.planned_duration_seconds || beat.duration_seconds || beat.estimated_duration || 15),
   );
+  const promptReady = hasSegmentVideoPrompt(beat);
   const rawSegmentTitle = String(
     beat.segment_title || meta?.segment_title || "",
   ).trim();
@@ -359,6 +429,19 @@ function S9SegmentPreviewCard({
               ? labels.plannedDurationBadge(plannedDuration)
               : `计划段长 ${plannedDuration}秒`}
           </span>
+          <Badge
+            variant="outline"
+            className={cn(
+              "h-5 rounded-full px-2 text-[10px] font-medium",
+              promptReady
+                ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300"
+                : "border-amber-400/25 bg-amber-400/[0.08] text-amber-300",
+            )}
+          >
+            {promptReady
+              ? (labels.promptReady ?? "提示词已就绪")
+              : (labels.promptPending ?? "提示词待生成")}
+          </Badge>
         </div>
 
         {onRegenerateSegmentPrompt && (

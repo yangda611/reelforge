@@ -70,6 +70,7 @@ _PROJECT_TASK_RESOURCE_KINDS = {
     "build_props": "script",
     "build_episodes": "script",
     "script_writer": "script",
+    "seedance2_prompt_batch": "script",
     "identity_planner": "portrait",
     "episode_scene_planner": "script",
     "episode_prop_planner": "script",

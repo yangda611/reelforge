@@ -43,6 +43,32 @@ export function useGenerateScript(project: string, episode: number) {
   });
 }
 
+export function useBatchGenerateSeedance2Prompts(
+  project: string,
+  episode: number,
+) {
+  return useMutation({
+    mutationFn: (params?: {
+      only_missing?: boolean;
+      beat_numbers?: number[];
+      prompt_guidance?: string;
+      prompt_guidance_template_keys?: string[];
+      s9_tail_anchor?: boolean;
+    }) =>
+      jsonWithBackendError<
+        (TaskResponse & { skipped?: boolean; target_beats?: number[] }) | ErrorResponse
+      >(
+        api.post(
+          p`api/v1/projects/${project}/episodes/${episode}/seedance2-prompts/batch-generate`,
+          {
+            json: params ?? {},
+            throwHttpErrors: false,
+          },
+        ),
+      ),
+  });
+}
+
 export function useGenerateRewrite(project: string, episode: number) {
   const qc = useQueryClient();
   return useMutation({

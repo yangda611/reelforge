@@ -13,7 +13,11 @@ vi.mock("@/lib/api", () => ({
   uploadApi: ky.create({ baseUrl: "http://localhost:3000/" }),
 }));
 
-import { useGenerateScript, useSaveScript } from "@/lib/queries/scripts";
+import {
+  useBatchGenerateSeedance2Prompts,
+  useGenerateScript,
+  useSaveScript,
+} from "@/lib/queries/scripts";
 import { useEpisodes } from "@/lib/queries/episodes";
 import { BillingRuleNotConfiguredError } from "@/lib/api-errors";
 
@@ -153,5 +157,47 @@ describe("saving a script refreshes the episode list beat count", () => {
     await waitFor(() =>
       expect(result.current.episodes.data?.data?.[0]?.beat_count).toBe(7),
     );
+  });
+
+  it("enqueues batch Seedance2 prompt generation with only_missing", async () => {
+    let postedBody: Record<string, unknown> | null = null;
+    server.use(
+      http.post(
+        "http://localhost:3000/api/v1/projects/demo/episodes/1/seedance2-prompts/batch-generate",
+        async ({ request }) => {
+          postedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({
+            ok: true,
+            task_type: "seedance2_prompt_batch",
+            task_id: "task-batch-1",
+            target_beats: [2],
+            message: "queued",
+          });
+        },
+      ),
+    );
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(
+      () => useBatchGenerateSeedance2Prompts("demo", 1),
+      { wrapper },
+    );
+
+    const res = await act(async () =>
+      result.current.mutateAsync({ only_missing: true, s9_tail_anchor: false }),
+    );
+
+    expect(postedBody).toEqual({ only_missing: true, s9_tail_anchor: false });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.task_id).toBe("task-batch-1");
+      expect(res.target_beats).toEqual([2]);
+    }
   });
 });

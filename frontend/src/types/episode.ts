@@ -77,6 +77,7 @@ export interface S9SegmentMeta {
   planned_duration_seconds: number;
   max_segment_seconds: number;
   story_beat: string;
+  source_excerpt?: string;
   tail_anchor: boolean;
   include_first_frame: boolean;
   segment_asset_slots: S9SegmentAssetSlot[];
@@ -92,6 +93,7 @@ export interface S9EpisodePreviewMeta {
   aspect_ratio: string;
   duration_assessment?: S9DurationAssessment | null;
   asset_manifest: S9AssetManifestItem[];
+  continuity_bible?: Record<string, unknown> | null;
 }
 
 export interface Episode {

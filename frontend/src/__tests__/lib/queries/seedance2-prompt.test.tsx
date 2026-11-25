@@ -191,4 +191,38 @@ describe("Seedance2 prompt generation query", () => {
     await waitFor(() => expect(result.current.error).toBeDefined());
     expect(result.current.error).toBeInstanceOf(BillingRuleNotConfiguredError);
   });
+
+  it("passes an extended timeout for long single-beat prompt generation", async () => {
+    server.use(
+      http.post(
+        "http://localhost:3000/api/v1/projects/demo/episodes/1/beats/2/seedance2-prompt/generate",
+        () =>
+          HttpResponse.json({
+            ok: true,
+            data: {
+              beat: { beat_number: 2, seedance2_config_json: JSON.stringify({ final_prompt: "ok" }) },
+              seedance2_config: { final_prompt: "ok" },
+            },
+          }),
+      ),
+    );
+
+    const { api } = await import("@/lib/api");
+    const postSpy = vi.spyOn(api, "post");
+
+    const { result } = renderHook(
+      () => useGenerateSeedance2Prompt("demo", 1),
+      { wrapper },
+    );
+
+    await result.current.mutateAsync({ beatNum: 2, promptStyle: "s9_segment" });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      "api/v1/projects/demo/episodes/1/beats/2/seedance2-prompt/generate",
+      expect.objectContaining({
+        timeout: 600_000,
+      }),
+    );
+    postSpy.mockRestore();
+  });
 });

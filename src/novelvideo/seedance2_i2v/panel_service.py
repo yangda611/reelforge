@@ -425,6 +425,7 @@ async def generate_seedance2_prompt_for_panel(
             entry_state=str(getattr(s9_meta, "entry_state", "") or ""),
             exit_state=str(getattr(s9_meta, "exit_state", "") or ""),
             scene_layout=str(getattr(s9_meta, "scene_layout", "") or ""),
+            source_excerpt=str(getattr(s9_meta, "source_excerpt", "") or ""),
             shots=subshots,
         )
 
@@ -493,55 +494,111 @@ async def generate_seedance2_prompt_for_panel(
                 )
         stage2_slots = (active_img_slots + active_aud_slots) or slots
         episode_source_text = ""
+        ep_obj = None
         scenes_list: list[Any] = []
         try:
             from novelvideo.sqlite_store import load_episode_planning_content
 
             ep_obj = store.get_episode(episode) if hasattr(store, "get_episode") else None
+            if ep_obj is None and hasattr(store, "get_episode_from_graph"):
+                ep_obj = await store.get_episode_from_graph(episode)
             if ep_obj is not None:
                 episode_source_text = (
                     await load_episode_planning_content(store, ep_obj) or ""
                 ).strip()
         except Exception:
             episode_source_text = ""
+
+        continuity_bible = None
+        if ep_obj is not None:
+            raw_pm = (
+                ep_obj.get("s9_preview_meta_json")
+                if isinstance(ep_obj, dict)
+                else getattr(ep_obj, "s9_preview_meta_json", None)
+            )
+            if isinstance(raw_pm, str) and raw_pm.strip():
+                try:
+                    from novelvideo.s9_storyboard import S9EpisodePreviewMeta
+
+                    parsed_pm = S9EpisodePreviewMeta.model_validate_json(raw_pm)
+                    continuity_bible = parsed_pm.continuity_bible
+                except Exception:
+                    continuity_bible = None
+
+        raw_sqlite = getattr(store, "sqlite_store", store)
+        props_list: list[Any] = []
         try:
-            if hasattr(store, "list_scenes"):
-                scenes_list = list(await store.list_scenes() or [])
+            if hasattr(raw_sqlite, "list_scenes"):
+                scenes_list = list(await raw_sqlite.list_scenes() or [])
             elif hasattr(store, "get_all_scenes"):
                 scenes_list = list(store.get_all_scenes() or [])
         except Exception:
             scenes_list = []
+        try:
+            if hasattr(raw_sqlite, "list_props"):
+                props_list = list(await raw_sqlite.list_props() or [])
+            elif hasattr(store, "get_all_props"):
+                props_list = list(store.get_all_props() or [])
+        except Exception:
+            props_list = []
         scene_context_notes = build_s9_scene_prop_consistency_notes(
             slots=stage2_slots,
             scenes=scenes_list,
             prop_menu=prop_menu,
+            props=props_list,
             time_of_day=str(beat.get("time_of_day") or ""),
             has_multiple_segments=bool(prev_beat or next_beat),
         )
-        continuity_anchor = ""
+        continuity_parts: list[str] = []
+        if continuity_bible is not None:
+            from novelvideo.s9_storyboard import format_s9_continuity_bible_for_segment
+
+            bible_anchor = format_s9_continuity_bible_for_segment(
+                continuity_bible,
+                segment=segment_plan,
+                slots=stage2_slots,
+            )
+            if bible_anchor:
+                continuity_parts.append(bible_anchor)
         if prev_beat:
             from novelvideo.models import beat_scene_ref
+            from novelvideo.s9_storyboard import sanitize_s9_lighting_anchor
 
             cur_sref = beat_scene_ref(beat)
             prev_sref = beat_scene_ref(prev_beat)
+            cur_sid = str(cur_sref.scene_id or "").strip() if cur_sref else ""
+            prev_sid = str(prev_sref.scene_id or "").strip() if prev_sref else ""
             same_scene = bool(
-                cur_sref
-                and prev_sref
-                and cur_sref.scene_id
-                and cur_sref.scene_id == prev_sref.scene_id
+                cur_sid
+                and prev_sid
+                and (
+                    cur_sid == prev_sid
+                    or cur_sid.startswith(f"{prev_sid}_")
+                    or prev_sid.startswith(f"{cur_sid}_")
+                )
             )
             same_time = str(beat.get("time_of_day") or "").strip() == str(
                 prev_beat.get("time_of_day") or ""
             ).strip()
             if same_scene and same_time:
                 prev_cfg = parse_seedance2_config(prev_beat.get("seedance2_config_json"))
-                prev_lighting = extract_s9_lighting_style_block(prev_cfg.final_prompt)
+                prev_lighting = sanitize_s9_lighting_anchor(
+                    extract_s9_lighting_style_block(prev_cfg.final_prompt)
+                )
                 if prev_lighting:
-                    continuity_anchor = (
+                    continuity_parts.append(
                         f"同场景前一段（Beat {prev_beat.get('beat_number')}）已锁定的光影画风基准"
-                        "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变）：\n"
+                        "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变；"
+                        "引用场景图时请按本段【本大段素材槽位表】的实际 @图片N 编号书写，严禁照抄前段编号）：\n"
                         f"{prev_lighting}"
                     )
+        continuity_anchor = "\n\n".join(part for part in continuity_parts if part)
+        from novelvideo.s9_storyboard import build_s9_context_slice_from_episode_text
+
+        scoped_source_text = build_s9_context_slice_from_episode_text(
+            episode_source_text,
+            segment_plan.source_excerpt,
+        )
         effective_s9_guidance = _localized_prompt_guidance(
             config.prompt_guidance,
             config.prompt_guidance_template_keys,
@@ -556,7 +613,7 @@ async def generate_seedance2_prompt_for_panel(
             tail_anchor=bool(config.s9_tail_anchor),
             include_first_frame=bool(config.s9_include_first_frame and any(s.asset_kind == "first_frame" for s in stage2_slots)),
             user_guidance=effective_s9_guidance,
-            source_text=episode_source_text,
+            source_text=scoped_source_text,
             current_prompt=reference_prompt,
             scene_context_notes=scene_context_notes,
             continuity_anchor=continuity_anchor,

@@ -21,6 +21,7 @@ export const TASK_TYPES = {
   IDENTITY_PORTRAIT: "identity_portrait",
   // Script
   SCRIPT_WRITER: "script_writer",
+  SEEDANCE2_PROMPT_BATCH: "seedance2_prompt_batch",
   LITERAL_SCRIPT_WRITER: "literal_script_writer",
   // Backend emits `director_notes`; keep the FE key aligned with that exact
   // task_type so the task stream and cancel endpoint target the same task.

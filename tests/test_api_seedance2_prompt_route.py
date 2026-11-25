@@ -444,3 +444,143 @@ def test_generate_seedance2_prompt_requires_next_beat_for_first_last_mode(
         "error": "这是最后一个 Beat，无法使用首尾帧模式",
     }
     assert store.updates == []
+
+
+async def test_generate_seedance2_prompt_s9_inherits_continuity_bible_and_neighbor_shots(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+    from novelvideo import s9_storyboard
+    from novelvideo.s9_storyboard import (
+        S9EpisodeContinuityBible,
+        S9EpisodePreviewMeta,
+        S9SceneLightingAnchor,
+        S9SegmentAssetSlot,
+        S9SegmentMeta,
+        S9SubShot,
+    )
+    from novelvideo.seedance2_i2v import panel_service
+    from novelvideo.seedance2_i2v.models import (
+        Seedance2I2VMode,
+        Seedance2VideoConfig,
+        dump_seedance2_config,
+        parse_seedance2_config,
+    )
+
+    bible = S9EpisodeContinuityBible(
+        scene_lighting_rules=[
+            S9SceneLightingAnchor(
+                scene_id="客厅",
+                time_of_day="夜",
+                key_lighting="台灯暖金侧光搭配窗外冷青霓虹反光",
+            )
+        ],
+        prop_state_chain=["铜钥匙：大段1落桌面，大段2握入掌心"],
+    )
+    ep_meta = S9EpisodePreviewMeta(continuity_bible=bible)
+    full_source = "\n".join(
+        [
+            "第1行：雨点急促敲打着老旧木窗棂，窗外整条长街路灯在夜幕雨雾里泛起昏黄光斑与水渍倒影。",
+            "第2行：远处街头转角处偶尔驶过一辆黑色轿车，轮胎碾过积水路面溅起细碎水花很快消失夜色中。",
+            "第3行：陈默推门走进安静的玄关，抖落肩头雨水并将一枚沉甸甸的铜钥匙轻轻放在玄关柜角处。",
+            "第4行：他缓慢脱下湿透的深灰风衣外套顺手搭在玄关木椅椅背上，抬眼扫视着空无一人的客厅。",
+            "第5行：他摘下帽檐坐进沙发，拿起床头档案。",
+            "第6行：对方突然在电话里报出暗号。",
+            "第7行：整个客厅陷入短暂而凝重的沉默，墙壁挂钟秒针走字声和窗外雨声此刻格外清晰刺耳。",
+            "第8行：陈默缓缓合上那份泛黄的纸质档案，眉头深锁地将视线缓缓转向几米开外的玄关方向。",
+            "第9行：他毫不犹豫伸手抓起柜角那枚铜钥匙，猛然起身披上风衣大步冲向门口准备趁夜离开。",
+            "第10行：沉重的防盗房门在他的身后发出一声闷响重重合上，走廊声控灯光随即亮起又渐渐暗去。",
+        ]
+    )
+
+    prev_shots = [
+        S9SubShot(shot_number=1, planned_duration_seconds=4, start_seconds=0, end_seconds=4, content="推门进入", scene_id="客厅"),
+        S9SubShot(shot_number=2, planned_duration_seconds=4, start_seconds=4, end_seconds=8, content="前段末镜：钥匙放稳玄关桌", scene_id="客厅"),
+    ]
+    cur_shots = [
+        S9SubShot(shot_number=1, planned_duration_seconds=5, start_seconds=0, end_seconds=5, content="坐进沙发翻开档案", scene_id="客厅"),
+    ]
+    next_shots = [
+        S9SubShot(shot_number=1, planned_duration_seconds=5, start_seconds=0, end_seconds=5, content="后段首镜：抓钥匙起身奔出", scene_id="客厅"),
+    ]
+
+    def _s9_beat(num: int, shots: list[S9SubShot], excerpt: str = "") -> dict:
+        meta = S9SegmentMeta(
+            segment_number=num,
+            segment_title=f"大段{num}",
+            planned_duration_seconds=5,
+            source_excerpt=excerpt,
+            segment_asset_slots=[
+                S9SegmentAssetSlot(slot=1, media_type="image", asset_kind="scene", name="客厅", asset_id="客厅")
+            ],
+        )
+        return {
+            "beat_number": num,
+            "segment_title": f"大段{num}",
+            "time_of_day": "夜",
+            "scene_ref": {"scene_id": "客厅", "variant_id": ""},
+            "visual_description": f"大段{num}描述",
+            "s9_subshots_json": json.dumps([s.model_dump(mode="json") for s in shots], ensure_ascii=False),
+            "s9_segment_meta_json": json.dumps(meta.model_dump(mode="json"), ensure_ascii=False),
+            "seedance2_config_json": dump_seedance2_config(
+                Seedance2VideoConfig(
+                    mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+                    prompt_style="s9_segment",
+                    prompt_source="s9_script",
+                )
+            ),
+        }
+
+    beats = [
+        _s9_beat(1, prev_shots),
+        _s9_beat(2, cur_shots, excerpt="第5行：他摘下帽檐坐进沙发，拿起床头档案。\n第6行：对方突然在电话里报出暗号。"),
+        _s9_beat(3, next_shots),
+    ]
+
+    class _S9Store(DummySqliteStore):
+        def get_episode(self, episode_num: int):
+            return SimpleNamespace(
+                beat_source_text=full_source,
+                raw_content=full_source,
+                s9_preview_meta_json=ep_meta.model_dump_json(ensure_ascii=False),
+            )
+
+        def get_all_scenes(self):
+            return [SimpleNamespace(id="客厅", name="客厅")]
+
+        def get_all_props(self):
+            return []
+
+    captured: dict = {}
+
+    async def _fake_stage2(**kwargs):
+        captured.update(kwargs)
+        return "【全局光影画风】\n暖金侧光。\n\n【分镜详情】\n分镜1 [0s-5s]：翻看档案。"
+
+    monkeypatch.setattr(s9_storyboard, "run_s9_stage2_segment_prompt", _fake_stage2)
+    monkeypatch.setattr(
+        panel_service,
+        "build_seedance2_project_assets",
+        lambda *_a, **_kw: [],
+    )
+
+    store = _S9Store(beats=beats, source_text=full_source)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    saved_json = await panel_service.generate_seedance2_prompt_for_panel(
+        store=store,
+        state_dir=state_dir,
+        episode=1,
+        beat=beats[1],
+        project_dir=tmp_path,
+        prev_beat=beats[0],
+        next_beat=beats[2],
+    )
+
+    assert "台灯暖金侧光搭配窗外冷青霓虹反光" in captured["continuity_anchor"]
+    assert "前段末镜：钥匙放稳玄关桌" == captured["prev_segment"].shots[-1].content
+    assert "后段首镜：抓钥匙起身奔出" == captured["next_segment"].shots[0].content
+    assert "第5行：他摘下帽檐" in captured["source_text"]
+    assert "第1行：雨点急促敲打" not in captured["source_text"]
+    assert "第10行：沉重的防盗房门" not in captured["source_text"]
+    assert parse_seedance2_config(saved_json).final_prompt.startswith("【全局光影画风】")

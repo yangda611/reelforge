@@ -18,7 +18,13 @@ import {
 } from "@/lib/queries/episodes";
 import { useCharacters } from "@/lib/queries/characters";
 import { useProject } from "@/lib/queries/projects";
-import { useGenerateRewrite, useGenerateScript, useScript, useUpdateBeat } from "@/lib/queries/scripts";
+import {
+  useBatchGenerateSeedance2Prompts,
+  useGenerateRewrite,
+  useGenerateScript,
+  useScript,
+  useUpdateBeat,
+} from "@/lib/queries/scripts";
 import { useGenerateSeedance2Prompt } from "@/lib/queries/video";
 import { useTaskController } from "@/hooks/use-task-controller";
 import { useTaskActivity } from "@/task-center/use-task-activity";
@@ -125,6 +131,7 @@ function ScriptTabContent() {
       ? t("common.billingRuleNotConfiguredShort")
       : null);
   const generateScript = useGenerateScript(project, epNum);
+  const batchGeneratePrompts = useBatchGenerateSeedance2Prompts(project, epNum);
   const updateBeat = useUpdateBeat(project, epNum);
   const generateSeedance2Prompt = useGenerateSeedance2Prompt(project, epNum);
   const [maxSegmentSeconds, setMaxSegmentSeconds] = useState<15 | 30>(30);
@@ -158,6 +165,52 @@ function ScriptTabContent() {
     onComplete: (result) =>
       notifyScriptFeedback(getScriptReviewFeedback(result)),
   });
+
+  const batchPromptsTask = useTaskController({
+    key: { taskType: TASK_TYPES.SEEDANCE2_PROMPT_BATCH, project, episode: epNum },
+    invalidateKeys: [
+      queryKeys.script(project, epNum),
+      queryKeys.beats(project, epNum),
+    ],
+    showCompleteToast: true,
+  });
+
+  const lastScriptProgressRef = useRef(-1);
+  useEffect(() => {
+    if (!scriptTask.started) {
+      lastScriptProgressRef.current = -1;
+      return;
+    }
+    const progress = scriptTask.stream.progress ?? 0;
+    if (progress < 0.48) return;
+    if (progress > lastScriptProgressRef.current + 0.01) {
+      lastScriptProgressRef.current = progress;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.script(project, epNum),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.beats(project, epNum),
+      });
+    }
+  }, [scriptTask.started, scriptTask.stream.progress, queryClient, project, epNum]);
+
+  const lastBatchProgressRef = useRef(-1);
+  useEffect(() => {
+    if (!batchPromptsTask.started) {
+      lastBatchProgressRef.current = -1;
+      return;
+    }
+    const progress = batchPromptsTask.stream.progress ?? 0;
+    if (progress > 0 && progress > lastBatchProgressRef.current + 0.01) {
+      lastBatchProgressRef.current = progress;
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.script(project, epNum),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.beats(project, epNum),
+      });
+    }
+  }, [batchPromptsTask.started, batchPromptsTask.stream.progress, queryClient, project, epNum]);
 
   const episodeData = episodeRes?.data;
   const characters: Character[] = charactersRes?.data ?? [];
@@ -469,6 +522,26 @@ function ScriptTabContent() {
     }
   };
 
+  const handleBatchGeneratePrompts = async (onlyMissing: boolean) => {
+    try {
+      const res = await batchGeneratePrompts.mutateAsync({
+        only_missing: onlyMissing,
+        s9_tail_anchor: tailAnchor,
+      });
+      if (!res.ok) {
+        toast.error(backendErrorToastMessage(res.error, t));
+        return;
+      }
+      if (res.skipped) {
+        toast.info(res.message || t("episode.script.batchPromptsNoMissing"));
+        return;
+      }
+      batchPromptsTask.start({ scope: res.scope, taskId: res.task_id });
+    } catch (err) {
+      toast.error(backendErrorToastMessage(err, t));
+    }
+  };
+
   const handlePlanIdentities = async () => {
     try {
       const res = await planIdentities.mutateAsync(epNum);
@@ -685,6 +758,38 @@ function ScriptTabContent() {
               <span className="min-w-0 truncate text-foreground/80">
                 {scriptProgressLabel}
               </span>
+            </div>
+          )}
+          {batchPromptsTask.started && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="flex min-w-[240px] max-w-[360px] items-center gap-2 rounded-[7px] border border-amber-400/20 bg-amber-400/[0.06] px-2.5 py-1.5 text-xs text-muted-foreground"
+            >
+              <Loader2 className="size-3.5 shrink-0 animate-spin text-amber-300" />
+              <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-white/[0.08]">
+                <div
+                  className="h-full rounded-full bg-amber-300 transition-[width]"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, Math.round((batchPromptsTask.stream.progress ?? 0) * 100)))}%`,
+                  }}
+                />
+              </div>
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-amber-200">
+                {Math.min(100, Math.max(0, Math.round((batchPromptsTask.stream.progress ?? 0) * 100)))}%
+              </span>
+              <span className="min-w-0 truncate text-foreground/80">
+                {batchPromptsTask.stream.currentTask || t("episode.script.batchGeneratingPrompts")}
+              </span>
+              <button
+                type="button"
+                aria-label={t("common.stop")}
+                onClick={() => void batchPromptsTask.stop()}
+                className="ml-1 shrink-0 rounded p-0.5 text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
+              >
+                <Square className="size-3" />
+              </button>
             </div>
           )}
           <div className="flex h-7 items-center gap-1.5">
@@ -919,8 +1024,14 @@ function ScriptTabContent() {
               loading={beatsLoading}
               savingBeatNumber={savingBeatNumber}
               regeneratingBeatNumber={regeneratingBeatNumber}
+              batchPromptsBusy={
+                batchGeneratePrompts.isPending ||
+                batchPromptsTask.started ||
+                scriptTask.started
+              }
               onUpdateSegmentSubshots={handleUpdateSegmentSubshots}
               onRegenerateSegmentPrompt={handleRegenerateSegmentPrompt}
+              onBatchGeneratePrompts={handleBatchGeneratePrompts}
               className="px-0 pb-0"
               labels={{
                 title: t("episode.script.previewTitle"),
@@ -958,6 +1069,12 @@ function ScriptTabContent() {
                 syncingPrompt: t("episode.script.syncingPrompt"),
                 assetReady: t("episode.script.assetReady"),
                 assetPending: t("episode.script.assetPending"),
+                batchFillMissingPrompts: (count) =>
+                  t("episode.script.batchFillMissingPrompts", { count }),
+                batchRegenPrompts: t("episode.script.batchRegenPrompts"),
+                batchGeneratingPrompts: t("episode.script.batchGeneratingPrompts"),
+                promptReady: t("episode.script.promptReady"),
+                promptPending: t("episode.script.promptPending"),
               }}
             />
           </div>

@@ -955,3 +955,126 @@ def test_multimodal_first_frame_upscales_small_grid_render_above_300px(tmp_path)
     assert read_seedance2_image_size(frame) == (418, 235)
     scene_asset = next(asset for asset in assets if asset.key == "scene:便利店")
     assert scene_asset.reference_label == "图片2"
+
+
+def test_s9_scene_dedup_merges_base_and_derived_variant_without_sending_four_images(tmp_path):
+    import json
+    from PIL import Image
+
+    from novelvideo.seedance2_i2v.assets import build_seedance2_project_assets
+
+    project_dir = tmp_path / "output" / "alice" / "project"
+    for scene_name in ("艾莉森公寓客厅", "艾莉森公寓客厅_狼藉版"):
+        for fname in ("master.png", "reverse_master.png"):
+            p = project_dir / "assets" / "scenes" / scene_name / fname
+            p.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (640, 360), color=(40, 50, 60)).save(p)
+
+    beat = {
+        "beat_number": 4,
+        "scene_ref": {"scene_id": "艾莉森公寓客厅", "variant_id": ""},
+        "s9_subshots_json": json.dumps(
+            [
+                {
+                    "shot_number": 1,
+                    "scene_id": "艾莉森公寓客厅_狼藉版",
+                    "scene_variant_id": "狼藉版",
+                    "content": "防盗门被破门撞开。",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        "s9_segment_meta_json": json.dumps(
+            {
+                "segment_number": 4,
+                "segment_asset_slots": [
+                    {
+                        "slot": 1,
+                        "media_type": "image",
+                        "asset_kind": "scene",
+                        "name": "艾莉森公寓客厅",
+                        "asset_id": "艾莉森公寓客厅",
+                    },
+                    {
+                        "slot": 2,
+                        "media_type": "image",
+                        "asset_kind": "scene",
+                        "name": "艾莉森公寓客厅_狼藉版",
+                        "asset_id": "艾莉森公寓客厅_狼藉版",
+                        "variant_id": "狼藉版",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    assets = build_seedance2_project_assets(
+        project_output=project_dir,
+        state_dir=tmp_path / "state" / "alice" / "project",
+        episode=3,
+        beat=beat,
+        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+    )
+    scene_keys = [a.key for a in assets if a.key.startswith(("scene:", "scene_reverse:"))]
+    assert scene_keys == [
+        "scene:艾莉森公寓客厅_狼藉版",
+        "scene_reverse:艾莉森公寓客厅_狼藉版",
+    ]
+
+
+def test_s9_passive_closed_door_in_scene_layout_does_not_attach_reverse_master(tmp_path):
+    import json
+    from PIL import Image
+
+    from novelvideo.seedance2_i2v.assets import build_seedance2_project_assets
+
+    project_dir = tmp_path / "output" / "alice" / "project"
+    for fname in ("master.png", "reverse_master.png"):
+        p = project_dir / "assets" / "scenes" / "艾莉森公寓客厅_狼藉版" / fname
+        p.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (640, 360), color=(40, 50, 60)).save(p)
+
+    beat = {
+        "beat_number": 4,
+        "scene_ref": {"scene_id": "艾莉森公寓客厅_狼藉版", "variant_id": ""},
+        "visual_description": "两人站在茶几右侧对峙争吵。",
+        "s9_subshots_json": json.dumps(
+            [
+                {
+                    "shot_number": 1,
+                    "scene_id": "艾莉森公寓客厅_狼藉版",
+                    "content": "达里尔挥臂暴怒反驳艾莉森。",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        "s9_segment_meta_json": json.dumps(
+            {
+                "segment_number": 4,
+                "scene_layout": "客厅入户门在参考图既有位置，本段不开启。",
+                "segment_asset_slots": [
+                    {
+                        "slot": 1,
+                        "media_type": "image",
+                        "asset_kind": "scene",
+                        "name": "艾莉森公寓客厅_狼藉版",
+                        "asset_id": "艾莉森公寓客厅_狼藉版",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    assets = build_seedance2_project_assets(
+        project_output=project_dir,
+        state_dir=tmp_path / "state" / "alice" / "project",
+        episode=3,
+        beat=beat,
+        mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+    )
+    scene_keys = [a.key for a in assets if a.key.startswith(("scene:", "scene_reverse:"))]
+    assert scene_keys == ["scene:艾莉森公寓客厅_狼藉版"]
+
+

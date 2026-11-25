@@ -188,6 +188,16 @@ class Seedance2PromptGenerateRequest(BaseModel):
     s9_include_first_frame: Optional[bool] = None
 
 
+class BatchSeedance2PromptsRequest(BaseModel):
+    """Request body for asynchronous episode-level batch Seedance2.0 prompt generation."""
+
+    only_missing: bool = False
+    beat_numbers: Optional[list[int]] = None
+    prompt_guidance: Optional[str] = None
+    prompt_guidance_template_keys: Optional[list[str]] = None
+    s9_tail_anchor: Optional[bool] = None
+
+
 class Seedance2AssetDeleteRequest(BaseModel):
     media_kind: Literal["images", "audios"]
     path: str

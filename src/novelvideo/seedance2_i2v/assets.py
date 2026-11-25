@@ -371,7 +371,7 @@ def _scene_asset_path(project_output: Path, beat: dict[str, Any]) -> Path:
 
 
 _REVERSE_SCENE_CUE_RE = re.compile(
-    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框)",
+    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框|大门|破门|门槛|房门|防盗门|撞开)",
     re.IGNORECASE,
 )
 
@@ -387,12 +387,16 @@ def _beat_uses_reverse_scene_view(
         for slot in getattr(s9_meta, "segment_asset_slots", []) or []:
             if getattr(slot, "asset_kind", "") == "scene_reverse":
                 return True
+    # Only inspect active visual/shot action text (not passive scene_layout landmarks
+    # like "客厅入户门在参考图既有位置，本段不开启") so non-door beats never get an
+    # unbound trailing reverse_master.png attached.
+    from novelvideo.s9_storyboard import text_uses_reverse_scene_view
+
     text_parts = [
         _text(beat.get("visual_description")),
         _text(getattr(s9_meta, "story_beat", "") if s9_meta else ""),
         _text(getattr(s9_meta, "entry_state", "") if s9_meta else ""),
         _text(getattr(s9_meta, "exit_state", "") if s9_meta else ""),
-        _text(getattr(s9_meta, "scene_layout", "") if s9_meta else ""),
     ]
     for shot in s9_subshots or []:
         if isinstance(shot, dict):
@@ -410,7 +414,7 @@ def _beat_uses_reverse_scene_view(
                 getattr(shot, "transition_note", ""),
             )
         text_parts.extend(_text(f) for f in fields if _text(f))
-    return bool(_REVERSE_SCENE_CUE_RE.search("\n".join(p for p in text_parts if p)))
+    return text_uses_reverse_scene_view("\n".join(p for p in text_parts if p))
 
 
 def _resolve_scene_reverse_path(
@@ -1269,9 +1273,13 @@ def build_seedance2_project_assets(
             preferred_variant_by_sid: dict[str, str] = {}
             ordered_sids: list[str] = []
 
+            def _normalize_sid_vid(sid: str, vid: str) -> tuple[str, str]:
+                from novelvideo.s9_storyboard import _normalize_scene_id_variant
+
+                return _normalize_scene_id_variant(_text(sid), _text(vid))
+
             def _record_scene_candidate(sid: str, vid: str) -> None:
-                clean_sid = _text(sid)
-                clean_vid = _text(vid)
+                clean_sid, clean_vid = _normalize_sid_vid(sid, vid)
                 if not clean_sid:
                     return
                 if clean_sid not in ordered_sids:
@@ -1305,7 +1313,10 @@ def build_seedance2_project_assets(
                         )
 
             if ordered_sids:
-                seen_plates: set[str] = set()
+                # Merge base scene + derived variant of the same physical scene
+                # (e.g. "艾莉森公寓客厅" vs "艾莉森公寓客厅_狼藉版") into a single plate,
+                # preferring the variant unless beat.scene_ref explicitly chose a variant.
+                resolved_candidates: list[tuple[str, str, str]] = []
                 for sid in ordered_sids:
                     vid = preferred_variant_by_sid.get(sid, "")
                     resolved_plate, _time_baked = resolve_scene_plate(
@@ -1315,6 +1326,39 @@ def build_seedance2_project_assets(
                         existing_scene_names,
                     )
                     label_key = resolved_plate or (f"{sid}_{vid}" if vid else sid)
+                    resolved_candidates.append((sid, vid, label_key))
+
+                explicit_beat_plate = ""
+                if beat_scene_ref_obj and beat_scene_ref_obj.scene_id:
+                    b_sid, b_vid = _normalize_sid_vid(
+                        beat_scene_ref_obj.scene_id,
+                        beat_scene_ref_obj.variant_id or "",
+                    )
+                    if b_vid or any(
+                        b_sid.startswith(f"{other_sid}_")
+                        for other_sid, _ov, _ol in resolved_candidates
+                        if other_sid != b_sid
+                    ):
+                        b_plate, _ = resolve_scene_plate(
+                            b_sid, b_vid, desired_time, existing_scene_names
+                        )
+                        explicit_beat_plate = b_plate or (f"{b_sid}_{b_vid}" if b_vid else b_sid)
+
+                deduped_candidates: list[tuple[str, str, str]] = []
+                for sid, vid, label_key in resolved_candidates:
+                    # Skip bare base scene when a derived variant of the same base is present
+                    has_more_specific_variant = any(
+                        other_label != label_key
+                        and other_label.startswith(f"{label_key}_")
+                        for _os, _ov, other_label in resolved_candidates
+                    )
+                    if has_more_specific_variant and (not explicit_beat_plate or explicit_beat_plate != label_key):
+                        continue
+                    deduped_candidates.append((sid, vid, label_key))
+
+                seen_plates: set[str] = set()
+                seen_master_paths: set[str] = set()
+                for sid, vid, label_key in deduped_candidates:
                     if label_key in seen_plates:
                         continue
                     seen_plates.add(label_key)
@@ -1328,6 +1372,10 @@ def build_seedance2_project_assets(
                         base_candidate = canonical_scene_master_path(project_output, base_sid)
                         if base_candidate.exists():
                             candidate = base_candidate
+                    resolved_master_str = str(candidate)
+                    if resolved_master_str in seen_master_paths:
+                        continue
+                    seen_master_paths.add(resolved_master_str)
                     add_image(
                         key=f"scene:{label_key}",
                         label=f"场景锚点 · {label_key}",

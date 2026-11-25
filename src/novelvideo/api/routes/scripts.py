@@ -20,6 +20,7 @@ from novelvideo.api.deps import (
     resolve_project_scope,
 )
 from novelvideo.api.schemas import (
+    BatchSeedance2PromptsRequest,
     BeatUpdate,
     Seedance2PromptGenerateRequest,
     ScriptGenerateRequest,
@@ -159,6 +160,89 @@ async def generate_script(
         }
 
     return {"ok": False, "error": "剧本生成需要 project context"}
+
+
+@router.post("/projects/{project}/episodes/{episode_num}/seedance2-prompts/batch-generate")
+async def batch_generate_seedance2_prompts(
+    project: str,
+    episode_num: int,
+    body: BatchSeedance2PromptsRequest | None = None,
+    user: dict = Depends(get_api_user),
+):
+    """后台并发批量生成或补全本集分镜的 Seedance2.0 主体提示词。"""
+    logger.info("[%s] EP%d batch_generate_seedance2_prompts", project, episode_num)
+    resolved = await resolve_project_scope(project, user, required_role="editor")
+    ctx = resolved.ctx
+    body = body or BatchSeedance2PromptsRequest()
+
+    store = (
+        await make_sqlite_store_for_context(ctx)
+        if ctx
+        else await make_sqlite_store(resolved.username, resolved.project_name)
+    )
+    script_data = await store.get_script_as_dict(episode_num)
+    beats = list((script_data or {}).get("beats") or [])
+    if not script_data or not beats:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    requested_nums = {int(n) for n in (body.beat_numbers or []) if int(n) > 0}
+    from novelvideo.seedance2_i2v.models import parse_seedance2_config
+
+    target_beats: list[int] = []
+    for beat in beats:
+        beat_num = int(beat.get("beat_number") or 0)
+        if beat_num <= 0:
+            continue
+        if requested_nums and beat_num not in requested_nums:
+            continue
+        if body.only_missing:
+            cfg = parse_seedance2_config(beat.get("seedance2_config_json"))
+            if str(cfg.final_prompt or "").strip():
+                continue
+        target_beats.append(beat_num)
+
+    if not target_beats:
+        return {
+            "ok": True,
+            "task_type": "seedance2_prompt_batch",
+            "skipped": True,
+            "target_beats": [],
+            "message": "所有分镜已有完整视频提示词，无需重新生成",
+        }
+
+    if ctx is not None:
+        queued = await get_task_backend().enqueue_project_task(
+            ctx,
+            product_surface="mainline",
+            task_type="seedance2_prompt_batch",
+            queue_kind="default",
+            episode=episode_num,
+            payload={
+                "episode": episode_num,
+                "beat_numbers": target_beats,
+                "only_missing": bool(body.only_missing),
+                "prompt_guidance": str(body.prompt_guidance or ""),
+                "prompt_guidance_template_keys": list(
+                    body.prompt_guidance_template_keys or []
+                ),
+                "s9_tail_anchor": body.s9_tail_anchor,
+                "output_dir": resolved.output_dir,
+            },
+        )
+        return {
+            "ok": True,
+            "task_type": "seedance2_prompt_batch",
+            "task_id": queued.task_state.task_id,
+            "task_key": project_task_state_key(
+                "seedance2_prompt_batch", ctx.project_id, episode_num
+            ),
+            "target_beats": target_beats,
+            "backend": queued.backend,
+            "queue": queued.queue,
+            "message": f"第 {episode_num} 集 {len(target_beats)} 个分镜提示词生成任务已进入队列",
+        }
+
+    return {"ok": False, "error": "批量更新视频提示词需要 project context"}
 
 
 @router.patch("/projects/{project}/episodes/{episode_num}/beats/{beat_num}")

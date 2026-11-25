@@ -10,6 +10,9 @@ import type { ErrorResponse, OkResponse, TaskResponse } from "@/types/api";
 import type { Beat } from "@/types/episode";
 
 export const DEFAULT_VIDEO_BACKEND = "huimeng_seedance-1.0-pro-fast";
+// Single-beat Seedance2.0 prompt generation may call LLM with full continuity context;
+// exceed default 30s ky timeout so valid long responses don't abort client-side.
+const LONG_SEEDANCE2_PROMPT_TIMEOUT_MS = 600_000;
 
 export type VideoPromptStyle =
   | "seedance_2_0"
@@ -632,6 +635,7 @@ export function useGenerateSeedance2Prompt(project: string, episode: number) {
                 : {}),
             },
             throwHttpErrors: false,
+            timeout: LONG_SEEDANCE2_PROMPT_TIMEOUT_MS,
           },
         ),
       ),

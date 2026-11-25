@@ -320,8 +320,16 @@ def _newapi_text_http_client_factory(
         )
         from novelvideo.brainclaw_outcome_runtime import capture_brainclaw_receipt
 
+        resolved_timeout = (
+            httpx.Timeout(
+                float(timeout_seconds),
+                connect=min(30.0, float(timeout_seconds)),
+            )
+            if isinstance(timeout_seconds, (int, float))
+            else timeout_seconds
+        )
         kwargs: dict[str, Any] = {
-            "timeout": timeout_seconds,
+            "timeout": resolved_timeout,
             # The request hook signs the serialised body; it is the last point
             # where the exact bytes BrainClaw will digest are still visible.
             "event_hooks": {

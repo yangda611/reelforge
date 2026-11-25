@@ -7,6 +7,7 @@ Seedance 2.0/2.5 prompts in one pass, and persists 1 segment = 1 Beat cleanly.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -23,7 +24,9 @@ from novelvideo.s9_storyboard import (
     S9_PROMPT_STYLE,
     aggregate_segment_narration,
     aggregate_segment_visual_summary,
+    build_s9_context_slice_from_episode_text,
     build_s9_scene_prop_consistency_notes,
+    enrich_s9_continuity_bible,
     generate_all_s9_segment_prompts,
     normalize_max_segment_seconds,
     normalize_s9_storyboard_plan,
@@ -133,7 +136,15 @@ class S9ScriptWritingWorkflow:
         effective_style = visual_style or str(proj_cfg.get("visual_style") or "chinese_period_drama")
         effective_ratio = aspect_ratio or str(proj_cfg.get("aspect_ratio") or "2:3")
         effective_backend = video_backend or str(proj_cfg.get("video_backend") or "")
-        effective_output_dir = self.output_dir or (str(Path(state_dir).parent) if state_dir else "")
+        effective_output_dir = (
+            self.output_dir
+            or str(
+                getattr(self.sqlite_store, "output_dir", "")
+                or getattr(self.cognee_store, "output_dir", "")
+                or ""
+            ).strip()
+            or (str(Path(state_dir).parent) if state_dir else "")
+        )
 
         report_progress(0.08, f"YD 分镜：准备第 {episode_num} 集正文与资产清单")
         episode = self.cognee_store.get_episode(episode_num)
@@ -155,10 +166,15 @@ class S9ScriptWritingWorkflow:
         if not characters and hasattr(self.cognee_store, "list_characters"):
             characters = list(await self.cognee_store.list_characters() or [])
 
+        raw_sqlite = getattr(self.sqlite_store, "sqlite_store", self.sqlite_store)
+        raw_cognee_sqlite = getattr(self.cognee_store, "sqlite_store", self.cognee_store)
+
         scenes: list[Any] = []
         try:
-            if hasattr(self.sqlite_store, "list_scenes"):
-                scenes = list(await self.sqlite_store.list_scenes() or [])
+            if hasattr(raw_sqlite, "list_scenes"):
+                scenes = list(await raw_sqlite.list_scenes() or [])
+            elif hasattr(raw_cognee_sqlite, "list_scenes"):
+                scenes = list(await raw_cognee_sqlite.list_scenes() or [])
             elif hasattr(self.cognee_store, "get_all_scenes"):
                 scenes = list(self.cognee_store.get_all_scenes() or [])
         except Exception:
@@ -166,8 +182,10 @@ class S9ScriptWritingWorkflow:
 
         props: list[Any] = []
         try:
-            if hasattr(self.sqlite_store, "list_props"):
-                props = list(await self.sqlite_store.list_props() or [])
+            if hasattr(raw_sqlite, "list_props"):
+                props = list(await raw_sqlite.list_props() or [])
+            elif hasattr(raw_cognee_sqlite, "list_props"):
+                props = list(await raw_cognee_sqlite.list_props() or [])
             elif hasattr(self.cognee_store, "get_all_props"):
                 props = list(self.cognee_store.get_all_props() or [])
         except Exception:
@@ -210,6 +228,7 @@ class S9ScriptWritingWorkflow:
             episode=episode,
             voice_available_names=voice_names,
             scenes=scenes,
+            props=props,
             output_dir=effective_output_dir or None,
             max_segment_seconds=cap,
             spine_template=effective_spine,
@@ -221,6 +240,8 @@ class S9ScriptWritingWorkflow:
             max_segment_seconds=cap,
             characters=characters,
             episode=episode,
+            scenes=scenes,
+            props=props,
             output_dir=effective_output_dir or None,
             max_images_per_segment=max_images,
             max_audios_per_segment=max_audios,
@@ -232,43 +253,47 @@ class S9ScriptWritingWorkflow:
             f"Stage 1 完成：共 {len(plan.segments)} 大段，"
             f"预计成片总长 {plan.duration_assessment.estimated_total_seconds} 秒"
         )
-        report_progress(
-            0.55,
-            f"Stage 2：为 {len(plan.segments)} 个大段生成完整 Seedance2.0 主体提示词",
-        )
-        prop_menu = list(getattr(episode, "prop_menu", []) or [])
-        has_multi_segments = len(plan.segments) > 1
-        scene_context_notes_by_segment = [
-            build_s9_scene_prop_consistency_notes(
-                slots=per_segment_slots[idx],
-                scenes=scenes,
-                prop_menu=prop_menu,
-                props=props,
-                has_multiple_segments=has_multi_segments,
-            )
-            for idx in range(len(plan.segments))
-        ]
-        stage2_prompts = await generate_all_s9_segment_prompts(
-            plan=plan,
+        plan.continuity_bible = enrich_s9_continuity_bible(
+            plan.continuity_bible,
+            segments=plan.segments,
             per_segment_slots=per_segment_slots,
             style_context=style_context,
-            prev_episode_context=prev_episode_context,
-            tail_anchor=bool(tail_anchor),
-            include_first_frame=False,
-            source_text=resolved_text,
-            scene_context_notes_by_segment=scene_context_notes_by_segment,
+            scenes=scenes,
         )
 
-        report_progress(0.85, "持久化 YD 分镜预览与 Seedance2.0 主体提示词")
+        from novelvideo.seedance2_i2v.panel_service import (
+            mark_seedance2_prompt_references_for_editor,
+        )
+
+        def _make_sd_cfg(planned_dur: int, final_prompt: str) -> Seedance2VideoConfig:
+            return Seedance2VideoConfig(
+                mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
+                mode_user_set=True,
+                duration=planned_dur,
+                duration_user_set=False,
+                resolution="720p",
+                ratio=style_context.aspect_ratio,
+                ratio_user_set=False,
+                generate_audio=True,
+                generate_audio_user_set=True,
+                return_last_frame=False,
+                human_review=True,
+                prompt_style=S9_PROMPT_STYLE,
+                prompt_source=S9_PROMPT_SOURCE,
+                final_prompt=final_prompt,
+                s9_tail_anchor=bool(tail_anchor),
+                s9_include_first_frame=False,
+            )
+
         beats: list[VisualBeat] = []
+        segment_configs: list[Seedance2VideoConfig] = []
         for idx, segment in enumerate(plan.segments):
             slots: list[S9SegmentAssetSlot] = per_segment_slots[idx]
-            full_prompt = stage2_prompts[idx] if idx < len(stage2_prompts) else ""
             audio_type, speaker, narration_summary = aggregate_segment_narration(segment.shots)
             visual_summary = aggregate_segment_visual_summary(segment)
 
             identities: list[str] = []
-            props: list[str] = []
+            props_ids: list[str] = []
             first_scene_id = ""
             first_scene_var = ""
             for s in segment.shots:
@@ -276,16 +301,16 @@ class S9ScriptWritingWorkflow:
                     if iid and iid not in identities:
                         identities.append(iid)
                 for pid in s.prop_ids:
-                    if pid and pid not in props:
-                        props.append(pid)
+                    if pid and pid not in props_ids:
+                        props_ids.append(pid)
                 if not first_scene_id and s.scene_id:
                     first_scene_id = s.scene_id
                     first_scene_var = s.scene_variant_id
             for slot in slots:
                 if slot.asset_kind == "identity" and slot.asset_id and slot.asset_id not in identities:
                     identities.append(slot.asset_id)
-                elif slot.asset_kind == "prop" and slot.asset_id and slot.asset_id not in props:
-                    props.append(slot.asset_id)
+                elif slot.asset_kind == "prop" and slot.asset_id and slot.asset_id not in props_ids:
+                    props_ids.append(slot.asset_id)
                 elif slot.asset_kind == "scene" and not first_scene_id and slot.asset_id:
                     first_scene_id = slot.asset_id
                     first_scene_var = slot.variant_id
@@ -301,28 +326,13 @@ class S9ScriptWritingWorkflow:
                 entry_state=segment.entry_state,
                 exit_state=segment.exit_state,
                 scene_layout=segment.scene_layout,
+                source_excerpt=segment.source_excerpt,
                 tail_anchor=bool(tail_anchor),
                 include_first_frame=False,
                 segment_asset_slots=slots,
             )
-            sd_cfg = Seedance2VideoConfig(
-                mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
-                mode_user_set=True,
-                duration=planned_dur,
-                duration_user_set=False,
-                resolution="720p",
-                ratio=style_context.aspect_ratio,
-                ratio_user_set=False,
-                generate_audio=True,
-                generate_audio_user_set=True,
-                return_last_frame=False,
-                human_review=True,
-                prompt_style=S9_PROMPT_STYLE,
-                prompt_source=S9_PROMPT_SOURCE,
-                final_prompt=full_prompt,
-                s9_tail_anchor=bool(tail_anchor),
-                s9_include_first_frame=False,
-            )
+            sd_cfg = _make_sd_cfg(planned_dur, "")
+            segment_configs.append(sd_cfg)
             beats.append(
                 VisualBeat(
                     beat_number=segment.segment_number,
@@ -334,7 +344,7 @@ class S9ScriptWritingWorkflow:
                         else None
                     ),
                     detected_identities=identities,
-                    detected_props=props,
+                    detected_props=props_ids,
                     audio_type=audio_type,
                     speaker=speaker,
                     speaker_kind="character" if speaker else "non_character",
@@ -365,6 +375,7 @@ class S9ScriptWritingWorkflow:
             aspect_ratio=style_context.aspect_ratio,
             duration_assessment=plan.duration_assessment,
             asset_manifest=plan.asset_manifest,
+            continuity_bible=plan.continuity_bible,
         )
         script = NarrationScript(
             episode_number=episode_num,
@@ -376,7 +387,113 @@ class S9ScriptWritingWorkflow:
                 ensure_ascii=False,
             ),
         )
+        # Option B: persist Stage 1 beats + continuity bible immediately so UI can preview while Stage 2 runs
         await self.cognee_store.persist_narration_script(script)
+        report_progress(
+            0.50,
+            f"Stage 1 完成：已保存 {len(plan.segments)} 个大段预览，正在并发生成视频提示词",
+        )
+
+        prop_menu = list(getattr(episode, "prop_menu", []) or [])
+        has_multi_segments = len(plan.segments) > 1
+        scene_context_notes_by_segment = [
+            build_s9_scene_prop_consistency_notes(
+                slots=per_segment_slots[idx],
+                scenes=scenes,
+                prop_menu=prop_menu,
+                props=props,
+                has_multiple_segments=has_multi_segments,
+            )
+            for idx in range(len(plan.segments))
+        ]
+        source_slices_by_segment = [
+            build_s9_context_slice_from_episode_text(
+                resolved_text,
+                getattr(seg, "source_excerpt", ""),
+            )
+            for seg in plan.segments
+        ]
+
+        has_update_beat = callable(getattr(self.cognee_store, "update_beat_asset", None))
+        persist_lock = asyncio.Lock()
+        persisted_indices: set[int] = set()
+        total_segments = len(plan.segments)
+
+        async def _on_segment_done(idx: int, prompt_text: str) -> None:
+            if not (0 <= idx < len(beats)):
+                return
+            segment_num = int(beats[idx].beat_number)
+            marked_prompt = mark_seedance2_prompt_references_for_editor(prompt_text or "")
+            updated_cfg = segment_configs[idx].model_copy(
+                update={"final_prompt": marked_prompt}
+            )
+            updated_cfg_json = dump_seedance2_config(updated_cfg)
+            async with persist_lock:
+                segment_configs[idx] = updated_cfg
+                beats[idx] = beats[idx].model_copy(
+                    update={"seedance2_config_json": updated_cfg_json}
+                )
+                if has_update_beat:
+                    await self.cognee_store.update_beat_asset(
+                        episode_number=episode_num,
+                        beat_number=segment_num,
+                        seedance2_config_json=updated_cfg_json,
+                    )
+                    persisted_indices.add(idx)
+                done_count = len(persisted_indices) if has_update_beat else (idx + 1)
+                progress_val = min(0.96, 0.50 + 0.46 * (done_count / max(1, total_segments)))
+                report_progress(
+                    progress_val,
+                    f"Stage 2：已完成 {done_count}/{total_segments} 个大段视频提示词",
+                )
+
+        stage2_prompts = await generate_all_s9_segment_prompts(
+            plan=plan,
+            per_segment_slots=per_segment_slots,
+            style_context=style_context,
+            prev_episode_context=prev_episode_context,
+            tail_anchor=bool(tail_anchor),
+            include_first_frame=False,
+            source_text=resolved_text,
+            source_slices_by_segment=source_slices_by_segment,
+            scene_context_notes_by_segment=scene_context_notes_by_segment,
+            on_segment_done=_on_segment_done,
+        )
+
+        needs_full_repersist = not has_update_beat
+        for idx, segment in enumerate(plan.segments):
+            raw_prompt = stage2_prompts[idx] if idx < len(stage2_prompts) else ""
+            marked_prompt = mark_seedance2_prompt_references_for_editor(raw_prompt or "")
+            if marked_prompt and segment_configs[idx].final_prompt != marked_prompt:
+                updated_cfg = segment_configs[idx].model_copy(
+                    update={"final_prompt": marked_prompt}
+                )
+                updated_cfg_json = dump_seedance2_config(updated_cfg)
+                segment_configs[idx] = updated_cfg
+                beats[idx] = beats[idx].model_copy(
+                    update={"seedance2_config_json": updated_cfg_json}
+                )
+                if has_update_beat and idx not in persisted_indices:
+                    await self.cognee_store.update_beat_asset(
+                        episode_number=episode_num,
+                        beat_number=int(beats[idx].beat_number),
+                        seedance2_config_json=updated_cfg_json,
+                    )
+                    persisted_indices.add(idx)
+
+        if needs_full_repersist:
+            report_progress(0.96, "持久化完整 Seedance2.0 主体提示词")
+            script = NarrationScript(
+                episode_number=episode_num,
+                title=str(getattr(episode, "title", "") or f"第{episode_num}集"),
+                beats=beats,
+                total_duration_seconds=float(plan.duration_assessment.estimated_total_seconds),
+                s9_preview_meta_json=json.dumps(
+                    preview_meta.model_dump(mode="json"),
+                    ensure_ascii=False,
+                ),
+            )
+            await self.cognee_store.persist_narration_script(script)
 
         self.last_review_passed = True
         self.last_review_issues = []

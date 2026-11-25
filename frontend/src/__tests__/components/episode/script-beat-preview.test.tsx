@@ -259,4 +259,64 @@ describe("ScriptBeatPreview", () => {
     fireEvent.click(screen.getByRole("button", { name: "更新视频提示词" }));
     await waitFor(() => expect(onRegenerateSegmentPrompt).toHaveBeenCalledWith(1));
   });
+
+  it("displays prompt readiness badges and triggers batch fill missing prompts", async () => {
+    const onBatchGeneratePrompts = vi.fn();
+    const makeSegmentBeat = (num: number, finalPrompt: string): Beat => ({
+      beat_number: num,
+      narration_segment: "",
+      visual_description: `大段 ${num}`,
+      segment_title: `大段${num} · 测试`,
+      estimated_duration: 10,
+      duration_seconds: 10,
+      seedance2_config_json: JSON.stringify({ final_prompt: finalPrompt }),
+      s9_subshots: [
+        {
+          shot_number: 1,
+          label: `大段${num}-分镜1`,
+          title: "镜头",
+          planned_duration_seconds: 10,
+          start_seconds: 0,
+          end_seconds: 10,
+          shot_scale_movement: "中景",
+          camera_angle: "平视",
+          camera_motion: "固定机位",
+          content: "镜头推进",
+          audio_type: "silence",
+          speaker: "",
+          spoken_text: "",
+          identity_ids: [],
+          scene_id: "scene_store",
+          scene_variant_id: "",
+          prop_ids: [],
+        },
+      ],
+    });
+
+    render(
+      <ScriptBeatPreview
+        labels={{
+          ...labels,
+          batchFillMissingPrompts: (count) => `补全缺失提示词 (${count})`,
+          batchRegenPrompts: "批量更新视频提示词",
+          promptReady: "提示词已就绪",
+          promptPending: "提示词待生成",
+        }}
+        beats={[
+          makeSegmentBeat(1, "完整视频提示词"),
+          makeSegmentBeat(2, ""),
+        ]}
+        onBatchGeneratePrompts={onBatchGeneratePrompts}
+      />,
+    );
+
+    expect(screen.getByText("提示词已就绪")).toBeInTheDocument();
+    expect(screen.getByText("提示词待生成")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /补全缺失提示词 \(1\)/ }));
+    await waitFor(() => expect(onBatchGeneratePrompts).toHaveBeenCalledWith(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "批量更新视频提示词" }));
+    await waitFor(() => expect(onBatchGeneratePrompts).toHaveBeenCalledWith(false));
+  });
 });

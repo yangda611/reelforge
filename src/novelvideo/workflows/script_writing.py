@@ -32,6 +32,7 @@ def create_script_writing_workflow(
     genre: str = "",
     story_setting: str = "",
     spine_template: str = "drama",
+    output_dir: str = "",
 ) -> ScriptWritingWorkflow:
     """创建脚本生成 workflow。
 
@@ -39,11 +40,12 @@ def create_script_writing_workflow(
     """
     del visual_style, genre, story_setting
     audio_type_mode = "narrated" if spine_template == "narrated" else "literal"
+    resolved_output_dir = str(output_dir or getattr(cognee_store, "output_dir", "") or "").strip()
     return ScriptWritingWorkflow(
         cognee_store=cognee_store,
         # 逐行模式最终要调用 persist_narration_script()，该接口在 CogneeStore 上。
         sqlite_store=cognee_store,
-        output_dir=getattr(cognee_store, "output_dir", ""),
+        output_dir=resolved_output_dir,
         audio_type_mode=audio_type_mode,
     )
 

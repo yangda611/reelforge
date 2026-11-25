@@ -2358,6 +2358,14 @@ class CogneeStore:
         """列出所有视觉节拍。"""
         return await self.sqlite_store.list_visual_beats()
 
+    async def list_scenes(self) -> List[Any]:
+        """列出项目所有场景。"""
+        return await self.sqlite_store.list_scenes()
+
+    async def list_props(self) -> List[Any]:
+        """列出项目所有道具。"""
+        return await self.sqlite_store.list_props()
+
     async def list_beat_asset_refs(self) -> List[BeatAssetRefRow]:
         """每个 beat 的资产引用字段（只取六列，不构造 Beat 对象）。"""
         return await self.sqlite_store.list_beat_asset_refs()
@@ -2409,6 +2417,10 @@ class CogneeStore:
         shot_order: int | None = None,
         duration_seconds: float | None = None,
         is_manual_shot: bool | None = None,
+        segment_title: str | None = None,
+        s9_subshots_json: str | None = None,
+        s9_segment_meta_json: str | None = None,
+        estimated_duration: float | None = None,
     ) -> bool:
         """更新 Beat 的资源字段。"""
         return await self.sqlite_store.update_beat_asset(
@@ -2429,6 +2441,10 @@ class CogneeStore:
             shot_order=shot_order,
             duration_seconds=duration_seconds,
             is_manual_shot=is_manual_shot,
+            segment_title=segment_title,
+            s9_subshots_json=s9_subshots_json,
+            s9_segment_meta_json=s9_segment_meta_json,
+            estimated_duration=estimated_duration,
         )
 
     async def delete_manual_beat(self, episode_number: int, beat_number: int) -> bool:

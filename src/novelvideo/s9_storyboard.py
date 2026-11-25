@@ -19,6 +19,7 @@ import dataclasses
 import inspect
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,12 +112,51 @@ class S9SubShot(BaseModel):
     prop_ids: list[str] = Field(default_factory=list)
 
 
+class S9SceneLightingAnchor(BaseModel):
+    """Unified per-scene lighting & visual style anchor shared across segments."""
+
+    scene_id: str = Field(default="", description="场景 ID（与场景菜单一致）")
+    time_of_day: str = Field(default="", description="锁定时段（日/夜/黄昏等）")
+    visual_style_summary: str = Field(default="", description="本场景成像媒介与渲染基调")
+    key_lighting: str = Field(default="", description="主光来源、场内固定方向与明暗软硬")
+    color_and_material: str = Field(default="", description="统一色温色彩基调与核心材质")
+
+
+class S9SceneLayoutAnchor(BaseModel):
+    """Unified per-scene world geometry & working-side anchor across segments."""
+
+    scene_id: str = Field(default="", description="场景 ID")
+    primary_view_direction: str = Field(default="", description="世界几何主视方向")
+    landmarks: str = Field(default="", description="2~4 个固定地标及其左右方位")
+    camera_working_side: str = Field(default="", description="主关系轴及允许机位工作侧与同场光向")
+
+
+class S9VoiceProfileAnchor(BaseModel):
+    """Unified character voice profile locked across all episode segments."""
+
+    speaker: str = Field(default="", description="说话角色名或身份ID")
+    voice_design: str = Field(
+        default="",
+        description="稳定音色特征（音高、质地、共鸣/气息、常态吐字节奏与唯一特征）",
+    )
+
+
+class S9EpisodeContinuityBible(BaseModel):
+    """Episode-wide continuity rules locked in Pass 1A and shared across parallel workers."""
+
+    scene_lighting_rules: list[S9SceneLightingAnchor] = Field(default_factory=list)
+    scene_layout_rules: list[S9SceneLayoutAnchor] = Field(default_factory=list)
+    prop_state_chain: list[str] = Field(default_factory=list)
+    voice_profiles: list[S9VoiceProfileAnchor] = Field(default_factory=list)
+
+
 class S9SegmentPlan(BaseModel):
     """LLM Stage 1 output for one 大段."""
 
     segment_number: int = Field(default=1, ge=1)
     title: str = Field(default="", description="大段叙事小标题")
     planned_duration_seconds: int = Field(default=15, ge=1, description="本大段计划整数秒数（按剧情自然长度，不强凑上限）")
+    source_excerpt: str = Field(default="", description="本大段对应的原稿连续原文切片")
     story_beat: str = Field(default="", description="本大段内必须100%讲完的叙事闭环（起势→推进→收束落点）")
     entry_state: str = Field(default="", description="本大段第0秒起始状态：人物站位、姿态、持物、视线与未完动作")
     exit_state: str = Field(default="", description="本大段结束瞬间必达落点状态，供下一大段第0秒无缝承接")
@@ -129,7 +169,46 @@ class S9StoryboardPlan(BaseModel):
 
     duration_assessment: S9DurationAssessment = Field(default_factory=S9DurationAssessment)
     asset_manifest: list[S9AssetManifestItem] = Field(default_factory=list)
+    continuity_bible: S9EpisodeContinuityBible | None = Field(default=None)
     segments: list[S9SegmentPlan] = Field(default_factory=list)
+
+
+class S9Stage1SkeletonSegment(BaseModel):
+    """Lightweight Pass 1A segment skeleton with source slice & boundary contract."""
+
+    segment_number: int = Field(default=1, ge=1)
+    title: str = Field(default="", description="大段叙事小标题")
+    planned_duration_seconds: int = Field(default=15, ge=1, description="本大段自然时长整数秒（<= 单段上限）")
+    source_excerpt: str = Field(default="", description="原样复制自本集完整原文的对应连续文本段落")
+    story_beat: str = Field(default="", description="本大段内100%讲完的叙事闭环（起势→推进→收束落点）")
+    entry_state: str = Field(default="", description="本大段第0秒起始状态：站位、姿态、持物、视线、未完动作")
+    exit_state: str = Field(default="", description="本大段结束瞬间必达落点状态，供下一大段第0秒衔接")
+    opening_shot_direction: str = Field(default="", description="本大段第1镜开场景别/机位与动作起势方向")
+    closing_shot_direction: str = Field(default="", description="本大段末镜收束景别/机位与余势方向")
+    scene_layout: str = Field(default="", description="本大段【场景布局】要点（多人同场/走位必填）")
+    identity_ids: list[str] = Field(default_factory=list)
+    scene_ids: list[str] = Field(default_factory=list)
+    prop_ids: list[str] = Field(default_factory=list)
+
+
+class S9Stage1SkeletonPlan(BaseModel):
+    """Pass 1A output: global timing, manifest, continuity bible, and segment skeletons."""
+
+    duration_assessment: S9DurationAssessment = Field(default_factory=S9DurationAssessment)
+    asset_manifest: list[S9AssetManifestItem] = Field(default_factory=list)
+    continuity_bible: S9EpisodeContinuityBible = Field(default_factory=S9EpisodeContinuityBible)
+    segments: list[S9Stage1SkeletonSegment] = Field(default_factory=list)
+
+
+class S9SegmentExpansionOutput(BaseModel):
+    """Pass 1B output: detailed shots & layout for one segment."""
+
+    planned_duration_seconds: int = Field(default=15, ge=1, description="本大段整数秒数（自然长度，严禁凑满上限）")
+    story_beat: str = Field(default="", description="本大段完整叙事闭环")
+    entry_state: str = Field(default="", description="本大段第0秒起始状态")
+    exit_state: str = Field(default="", description="本大段结束瞬间必达收束状态")
+    scene_layout: str = Field(default="", description="本大段【场景布局】（多人同场/走位/正反打必填）")
+    shots: list[S9SubShot] = Field(default_factory=list)
 
 
 class S9EpisodePreviewMeta(BaseModel):
@@ -144,6 +223,7 @@ class S9EpisodePreviewMeta(BaseModel):
     aspect_ratio: str = "9:16"
     duration_assessment: S9DurationAssessment | None = None
     asset_manifest: list[S9AssetManifestItem] = Field(default_factory=list)
+    continuity_bible: S9EpisodeContinuityBible | None = None
 
 
 class S9SegmentMeta(BaseModel):
@@ -157,6 +237,7 @@ class S9SegmentMeta(BaseModel):
     entry_state: str = ""
     exit_state: str = ""
     scene_layout: str = ""
+    source_excerpt: str = ""
     tail_anchor: bool = False
     include_first_frame: bool = False
     segment_asset_slots: list[S9SegmentAssetSlot] = Field(default_factory=list)
@@ -276,9 +357,47 @@ def resolve_s9_style_context(
 
 
 _REVERSE_SCENE_CUE_RE = re.compile(
-    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框)",
+    r"(背面|反面|reverse|入户门|玄关|门铃|门外|开门|门口|门后|推门|门框|大门|破门|门槛|房门|防盗门|撞开)",
     re.IGNORECASE,
 )
+_REVERSE_NEGATED_CLAUSE_RE = re.compile(
+    r"[^。；;\n]*(?:不开启|未开启|不开门|紧闭|不拍门|背对大门|远离大门|严禁开启|门未开)[^。；;\n]*",
+    re.IGNORECASE,
+)
+_HALLUCINATED_REVERSE_SUFFIX_RE = re.compile(
+    r"(?:_scene_reverse|_scene_back|_reverse|_scene|背面|反面)$",
+    re.IGNORECASE,
+)
+_HALLUCINATED_REVERSE_VARIANTS = frozenset({"reverse", "scene_reverse", "back", "背面", "反面"})
+
+
+def text_uses_reverse_scene_view(text: str) -> bool:
+    """Return True when active visual prose calls for the scene's reverse/door angle."""
+
+    cleaned = _REVERSE_NEGATED_CLAUSE_RE.sub("", str(text or ""))
+    return bool(_REVERSE_SCENE_CUE_RE.search(cleaned))
+
+
+def _normalize_scene_id_variant(scene_id: str, variant_id: str = "") -> tuple[str, str]:
+    sid = str(scene_id or "").strip()
+    vid = str(variant_id or "").strip()
+    if vid.lower() in _HALLUCINATED_REVERSE_VARIANTS:
+        vid = ""
+    while sid and _HALLUCINATED_REVERSE_SUFFIX_RE.search(sid):
+        stripped = _HALLUCINATED_REVERSE_SUFFIX_RE.sub("", sid).strip(" _")
+        if not stripped or stripped == sid:
+            break
+        sid = stripped
+    # Collapse accidental full-name duplication like "艾莉森公寓客厅_狼藉版_艾莉森公寓客厅_狼藉版"
+    if sid and "_" in sid:
+        parts = sid.split("_")
+        if len(parts) % 2 == 0:
+            half = len(parts) // 2
+            if parts[:half] == parts[half:]:
+                sid = "_".join(parts[:half])
+    if sid and vid and (vid == sid or sid.endswith(f"_{vid}")):
+        vid = ""
+    return sid, vid
 
 
 def _scene_record_lookup(scenes: list[Any] | None) -> dict[str, Any]:
@@ -290,6 +409,34 @@ def _scene_record_lookup(scenes: list[Any] | None) -> dict[str, Any]:
     return lookup
 
 
+def _resolve_scene_and_base(
+    scene_lookup: dict[str, Any],
+    scene_id: str,
+    variant_id: str = "",
+) -> tuple[str, Any | None, Any | None]:
+    """Resolve (plate_key, scene_obj, base_obj) including base_scene_id inheritance."""
+
+    sid, vid = _normalize_scene_id_variant(scene_id, variant_id)
+    plate_key = f"{sid}_{vid}" if vid else sid
+    scene_obj = scene_lookup.get(plate_key) or scene_lookup.get(sid)
+    base_obj = None
+    if scene_obj is not None:
+        base_id = str(getattr(scene_obj, "base_scene_id", "") or "").strip()
+        if base_id:
+            cand = scene_lookup.get(base_id)
+            if cand is not None and cand is not scene_obj:
+                base_obj = cand
+        if base_obj is None and vid:
+            cand = scene_lookup.get(sid)
+            if cand is not None and cand is not scene_obj:
+                base_obj = cand
+        if base_obj is None and "_" in sid:
+            cand = scene_lookup.get(sid.split("_", 1)[0])
+            if cand is not None and cand is not scene_obj:
+                base_obj = cand
+    return plate_key, scene_obj, base_obj
+
+
 def _scene_has_reverse_master_on_disk(
     output_dir: str | Path | None,
     scene_id: str,
@@ -299,13 +446,14 @@ def _scene_has_reverse_master_on_disk(
         return False
     from novelvideo.utils.path_resolver import canonical_scene_reverse_master_path
 
+    sid, vid = _normalize_scene_id_variant(scene_id, variant_id)
     root = Path(output_dir)
     candidates = []
-    if variant_id:
-        candidates.append(canonical_scene_reverse_master_path(root, f"{scene_id}_{variant_id}"))
-    candidates.append(canonical_scene_reverse_master_path(root, scene_id))
-    if "_" in scene_id:
-        candidates.append(canonical_scene_reverse_master_path(root, scene_id.split("_", 1)[0]))
+    if vid:
+        candidates.append(canonical_scene_reverse_master_path(root, f"{sid}_{vid}"))
+    candidates.append(canonical_scene_reverse_master_path(root, sid))
+    if "_" in sid:
+        candidates.append(canonical_scene_reverse_master_path(root, sid.split("_", 1)[0]))
     return any(p.exists() for p in candidates)
 
 
@@ -315,6 +463,7 @@ def _format_planned_assets_summary(
     episode: Any,
     voice_available_names: set[str],
     scenes: list[Any] | None = None,
+    props: list[Any] | None = None,
     output_dir: str | Path | None = None,
 ) -> str:
     """Format episode cast, scenes, props, and voices for LLM grounding."""
@@ -359,19 +508,22 @@ def _format_planned_assets_summary(
 
     scene_lookup = _scene_record_lookup(scenes)
     scene_items = list(getattr(episode, "scene_menu", []) or []) if episode else []
+    seen_scene_plates: set[str] = set()
     if scene_items:
         from novelvideo.models import build_scene_effective_prompt
 
         scene_lines = []
         for item in scene_items:
-            sid = str(getattr(item, "scene_id", "") or "").strip()
+            sid, vid = _normalize_scene_id_variant(
+                str(getattr(item, "scene_id", "") or "").strip(),
+                str(getattr(item, "variant_id", "") or "").strip(),
+            )
             if not sid:
                 continue
-            vid = str(getattr(item, "variant_id", "") or "").strip()
             desc = str(getattr(item, "description", "") or getattr(item, "notes", "") or "").strip()
-            plate_key = f"{sid}_{vid}" if vid else sid
-            scene_obj = scene_lookup.get(plate_key) or scene_lookup.get(sid)
-            base_obj = scene_lookup.get(sid) if scene_obj is not None and scene_obj is not scene_lookup.get(sid) else None
+            plate_key, scene_obj, base_obj = _resolve_scene_and_base(scene_lookup, sid, vid)
+            seen_scene_plates.add(plate_key)
+            seen_scene_plates.add(sid)
             env_detail = ""
             time_note = ""
             if scene_obj is not None:
@@ -383,7 +535,11 @@ def _format_planned_assets_summary(
                 if notes and notes not in env_detail:
                     env_detail = f"{env_detail}\n  空间/设定补充：{notes}" if env_detail else notes
             has_reverse = _scene_has_reverse_master_on_disk(output_dir, sid, vid)
-            reverse_note = " | 已有背面参考图(reverse_master.png，需拍背面/入户门侧时请选用 scene_reverse)" if has_reverse else ""
+            reverse_note = (
+                " | 已有背面参考图(reverse_master.png，拍入户门/背面反打时系统会自动附带；scene_id 必须严格填写原值，严禁自行拼接 _reverse 或 _scene_reverse)"
+                if has_reverse
+                else ""
+            )
             detail_parts = [p for p in [desc, env_detail] if p]
             combined_desc = "；".join(dict.fromkeys(detail_parts))
             scene_lines.append(
@@ -396,17 +552,62 @@ def _format_planned_assets_summary(
         if scene_lines:
             lines.append("【已规划场景菜单】\n" + "\n".join(scene_lines))
 
-    prop_items = list(getattr(episode, "prop_menu", []) or []) if episode else []
-    if prop_items:
-        prop_lines = []
-        for item in prop_items:
-            pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
-            if not pid:
+    if scenes:
+        from novelvideo.models import build_scene_effective_prompt
+
+        extra_scene_lines: list[str] = []
+        for sc in scenes:
+            sc_name = str(getattr(sc, "name", "") or "").strip()
+            if not sc_name or sc_name in seen_scene_plates:
                 continue
-            desc = str(getattr(item, "description", "") or getattr(item, "visual_prompt", "") or "").strip()
-            prop_lines.append(f"- prop_id=`{pid}`" + (f" — {desc}" if desc else ""))
-        if prop_lines:
-            lines.append("【已规划道具菜单】\n" + "\n".join(prop_lines))
+            # Avoid cluttering with base scenes whose derived variant is already planned for this episode
+            if any(
+                planned.startswith(f"{sc_name}_")
+                for planned in seen_scene_plates
+            ):
+                continue
+            seen_scene_plates.add(sc_name)
+            _pk, _so, base_obj = _resolve_scene_and_base(scene_lookup, sc_name, "")
+            env_detail = build_scene_effective_prompt(sc, base_obj).strip()
+            extra_scene_lines.append(
+                f"- scene_id=`{sc_name}`" + (f" — {env_detail}" if env_detail else "")
+            )
+        if extra_scene_lines:
+            lines.append(
+                "【项目已有场景库（跨集复用：仅当本集画面实际切到该地点时选用对应 scene_id）】\n"
+                + "\n".join(extra_scene_lines)
+            )
+
+    prop_items = list(getattr(episode, "prop_menu", []) or []) if episode else []
+    prop_lines: list[str] = []
+    seen_prop_ids: set[str] = set()
+    for item in prop_items:
+        pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
+        if not pid or pid in seen_prop_ids:
+            continue
+        seen_prop_ids.add(pid)
+        desc = str(getattr(item, "description", "") or getattr(item, "visual_prompt", "") or "").strip()
+        prop_lines.append(f"- prop_id=`{pid}`" + (f" — {desc}" if desc else ""))
+    if prop_lines:
+        lines.append("【已规划道具菜单】\n" + "\n".join(prop_lines))
+
+    extra_prop_lines: list[str] = []
+    for prop_obj in props or []:
+        pid = str(getattr(prop_obj, "name", "") or "").strip()
+        if not pid or pid in seen_prop_ids:
+            continue
+        seen_prop_ids.add(pid)
+        desc = str(
+            getattr(prop_obj, "description", "")
+            or getattr(prop_obj, "visual_prompt", "")
+            or ""
+        ).strip()
+        extra_prop_lines.append(f"- prop_id=`{pid}`" + (f" — {desc}" if desc else ""))
+    if extra_prop_lines:
+        lines.append(
+            "【项目已有道具库（跨集复用：仅当本集画面实际出现/携带时选用对应 prop_id）】\n"
+            + "\n".join(extra_prop_lines)
+        )
 
     return "\n\n".join(lines) if lines else "（本集暂无预设资产清单，请从正文提取所需角色、场景、道具并填写名称）"
 
@@ -573,25 +774,59 @@ def _match_identity_id(
     return clean
 
 
-def _match_scene_id(raw_scene: str, episode: Any) -> tuple[str, str]:
-    clean = str(raw_scene or "").strip()
+def _match_scene_id(
+    raw_scene: str,
+    episode: Any,
+    scenes: list[Any] | None = None,
+) -> tuple[str, str]:
+    clean, _ = _normalize_scene_id_variant(str(raw_scene or "").strip(), "")
     if not clean:
         return "", ""
     scene_menu = list(getattr(episode, "scene_menu", []) or []) if episode else []
     for item in scene_menu:
-        sid = str(getattr(item, "scene_id", "") or "").strip()
-        vid = str(getattr(item, "variant_id", "") or "").strip()
+        sid, vid = _normalize_scene_id_variant(
+            str(getattr(item, "scene_id", "") or "").strip(),
+            str(getattr(item, "variant_id", "") or "").strip(),
+        )
         if sid == clean or (vid and f"{sid}_{vid}" == clean):
             return sid, vid
+    # Prefer the episode's active derived variant of the same base scene (e.g.
+    # "艾莉森公寓客厅" -> "艾莉森公寓客厅_狼藉版") over the un-planned clean base scene.
     for item in scene_menu:
-        sid = str(getattr(item, "scene_id", "") or "").strip()
-        vid = str(getattr(item, "variant_id", "") or "").strip()
+        sid, vid = _normalize_scene_id_variant(
+            str(getattr(item, "scene_id", "") or "").strip(),
+            str(getattr(item, "variant_id", "") or "").strip(),
+        )
+        if sid and sid.startswith(f"{clean}_"):
+            return sid, vid
+    for sc in scenes or []:
+        sc_name = str(getattr(sc, "name", "") or "").strip()
+        if sc_name and sc_name == clean:
+            return sc_name, ""
+    for item in scene_menu:
+        sid, vid = _normalize_scene_id_variant(
+            str(getattr(item, "scene_id", "") or "").strip(),
+            str(getattr(item, "variant_id", "") or "").strip(),
+        )
         if sid and (clean in sid or sid in clean):
             return sid, vid
+    base_clean = clean.split("_", 1)[0]
+    if base_clean and len(base_clean) >= 2:
+        for item in scene_menu:
+            sid, vid = _normalize_scene_id_variant(
+                str(getattr(item, "scene_id", "") or "").strip(),
+                str(getattr(item, "variant_id", "") or "").strip(),
+            )
+            if sid and (sid == base_clean or sid.startswith(f"{base_clean}_")):
+                return sid, vid
     return clean, ""
 
 
-def _match_prop_id(raw_prop: str, episode: Any) -> str:
+def _match_prop_id(
+    raw_prop: str,
+    episode: Any,
+    props: list[Any] | None = None,
+) -> str:
     clean = str(raw_prop or "").strip()
     if not clean:
         return ""
@@ -600,8 +835,16 @@ def _match_prop_id(raw_prop: str, episode: Any) -> str:
         pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
         if pid == clean:
             return pid
+    for p in props or []:
+        pid = str(getattr(p, "name", "") or "").strip()
+        if pid == clean:
+            return pid
     for item in prop_menu:
         pid = str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
+        if pid and (clean in pid or pid in clean):
+            return pid
+    for p in props or []:
+        pid = str(getattr(p, "name", "") or "").strip()
         if pid and (clean in pid or pid in clean):
             return pid
     return clean
@@ -748,8 +991,9 @@ def _infer_props_from_text(
     text: str,
     episode: Any,
     manifest_props: list[str],
+    props: list[Any] | None = None,
 ) -> list[str]:
-    """Recover prop_ids mentioned in shot or segment prose from episode prop_menu."""
+    """Recover prop_ids mentioned in visual shot or segment prose from episode & project props."""
 
     haystack = str(text or "").strip()
     if not haystack:
@@ -767,6 +1011,14 @@ def _infer_props_from_text(
     for pid in manifest_props:
         if pid and pid in haystack and pid not in found:
             found.append(pid)
+    for prop_obj in props or []:
+        pid = str(getattr(prop_obj, "name", "") or "").strip()
+        if not pid or pid in found:
+            continue
+        aliases = [str(a or "").strip() for a in (getattr(prop_obj, "aliases", []) or []) if str(a or "").strip()]
+        tokens = [pid, *aliases]
+        if any(tok and tok in haystack for tok in tokens):
+            found.append(pid)
     return found
 
 
@@ -776,6 +1028,8 @@ def normalize_s9_storyboard_plan(
     max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
     characters: list[Any] | None = None,
     episode: Any = None,
+    scenes: list[Any] | None = None,
+    props: list[Any] | None = None,
     output_dir: str | Path | None = None,
     max_images_per_segment: int = 9,
     max_audios_per_segment: int = 3,
@@ -799,13 +1053,14 @@ def normalize_s9_storyboard_plan(
             if resolved and resolved not in manifest_identities:
                 manifest_identities.append(resolved)
         elif item.asset_kind in {"scene", "scene_reverse"}:
-            sid, vid = _match_scene_id(item.asset_id or item.name, episode)
-            if sid and (sid, item.variant_id or vid) not in manifest_scenes:
-                manifest_scenes.append((sid, item.variant_id or vid))
+            sid, vid = _match_scene_id(item.asset_id or item.name, episode, scenes=scenes)
+            sid, vid = _normalize_scene_id_variant(sid, item.variant_id or vid)
+            if sid and (sid, vid) not in manifest_scenes:
+                manifest_scenes.append((sid, vid))
             if item.asset_kind == "scene_reverse" and sid:
                 manifest_reverse_scenes.add(sid)
         elif item.asset_kind == "prop":
-            pid = _match_prop_id(item.asset_id or item.name, episode)
+            pid = _match_prop_id(item.asset_id or item.name, episode, props=props)
             if pid and pid not in manifest_props:
                 manifest_props.append(pid)
 
@@ -837,6 +1092,15 @@ def normalize_s9_storyboard_plan(
                 prev.story_beat = " ".join(
                     part for part in [prev.story_beat.strip(), last.story_beat.strip()] if part
                 )
+                if str(getattr(last, "source_excerpt", "") or "").strip():
+                    prev.source_excerpt = "\n".join(
+                        part
+                        for part in [
+                            str(getattr(prev, "source_excerpt", "") or "").strip(),
+                            str(last.source_excerpt).strip(),
+                        ]
+                        if part
+                    )
                 if str(getattr(last, "exit_state", "") or "").strip():
                     prev.exit_state = last.exit_state
                 segments.pop()
@@ -874,8 +1138,10 @@ def normalize_s9_storyboard_plan(
         cleaned_shots: list[S9SubShot] = []
         for shot in fixed_shots:
             label = shot.label.strip() or f"大段{seg_idx}-分镜{shot.shot_number}"
-            shot_prose = " ".join(
-                part for part in [shot.title, shot.content, shot.speaker, shot.spoken_text] if part
+            # Keep visual/speaker prose separate from spoken dialogue text so characters
+            # merely mentioned in dialogue (e.g. "我叔叔") are not dragged into visual slots.
+            shot_visual_prose = " ".join(
+                part for part in [shot.title, shot.content, shot.speaker] if part
             )
             mapped_identities: list[str] = []
             for raw_id in shot.identity_ids:
@@ -884,23 +1150,27 @@ def normalize_s9_storyboard_plan(
                     mapped_identities.append(resolved)
                 if resolved and resolved not in seg_identity_ids:
                     seg_identity_ids.append(resolved)
-            for inferred_id in _infer_identities_from_text(
-                shot_prose, char_list, valid_identities, char_to_default
-            ):
-                if inferred_id not in mapped_identities:
-                    mapped_identities.append(inferred_id)
-                if inferred_id not in seg_identity_ids:
-                    seg_identity_ids.append(inferred_id)
+            if not mapped_identities:
+                for inferred_id in _infer_identities_from_text(
+                    shot_visual_prose, char_list, valid_identities, char_to_default
+                ):
+                    if inferred_id not in mapped_identities:
+                        mapped_identities.append(inferred_id)
+                    if inferred_id not in seg_identity_ids:
+                        seg_identity_ids.append(inferred_id)
 
-            scene_id, scene_var = _match_scene_id(shot.scene_id, episode)
+            scene_id, scene_var = _match_scene_id(shot.scene_id, episode, scenes=scenes)
             if not scene_id:
                 scene_id, scene_var = _infer_scene_from_text(
-                    shot_prose or seg_prose, episode, manifest_scenes
+                    shot_visual_prose or seg_prose, episode, manifest_scenes
                 )
             if not scene_id:
                 scene_id, scene_var = _infer_scene_from_text(
                     seg_prose, episode, manifest_scenes
                 )
+            scene_id, scene_var = _normalize_scene_id_variant(
+                scene_id, scene_var or shot.scene_variant_id
+            )
             if scene_id:
                 pair = (scene_id, scene_var)
                 if pair not in seg_scene_keys:
@@ -908,12 +1178,14 @@ def normalize_s9_storyboard_plan(
 
             mapped_props: list[str] = []
             for raw_prop in shot.prop_ids:
-                pid = _match_prop_id(raw_prop, episode)
+                pid = _match_prop_id(raw_prop, episode, props=props)
                 if pid and pid not in mapped_props:
                     mapped_props.append(pid)
                 if pid and pid not in seg_prop_ids:
                     seg_prop_ids.append(pid)
-            for inferred_pid in _infer_props_from_text(shot_prose, episode, manifest_props):
+            for inferred_pid in _infer_props_from_text(
+                shot_visual_prose, episode, manifest_props, props=props
+            ):
                 if inferred_pid not in mapped_props:
                     mapped_props.append(inferred_pid)
                 if inferred_pid not in seg_prop_ids:
@@ -946,7 +1218,7 @@ def normalize_s9_storyboard_plan(
                         "label": label,
                         "identity_ids": mapped_identities,
                         "scene_id": scene_id,
-                        "scene_variant_id": scene_var or shot.scene_variant_id,
+                        "scene_variant_id": scene_var,
                         "prop_ids": mapped_props,
                     }
                 )
@@ -964,7 +1236,9 @@ def normalize_s9_storyboard_plan(
                     update={"identity_ids": list(seg_identity_ids)}
                 )
         if not seg_prop_ids:
-            for inferred_pid in _infer_props_from_text(seg_prose, episode, manifest_props):
+            for inferred_pid in _infer_props_from_text(
+                seg_prose, episode, manifest_props, props=props
+            ):
                 if inferred_pid not in seg_prop_ids:
                     seg_prop_ids.append(inferred_pid)
             if seg_prop_ids and cleaned_shots:
@@ -972,16 +1246,31 @@ def normalize_s9_storyboard_plan(
                     update={"prop_ids": list(seg_prop_ids)}
                 )
 
-        # Deduplicate scene keys by scene_id (prefer variant_id when present)
+        # Deduplicate scene keys by scene_id AND collapse base+variant of the same
+        # physical scene (e.g. "艾莉森公寓客厅" + "艾莉森公寓客厅_狼藉版" -> variant).
         dedup_scene_by_sid: dict[str, str] = {}
         ordered_scene_sids: list[str] = []
-        for sid, vid in seg_scene_keys:
+        for raw_sid, raw_vid in seg_scene_keys:
+            sid, vid = _normalize_scene_id_variant(raw_sid, raw_vid)
             if sid not in dedup_scene_by_sid:
                 dedup_scene_by_sid[sid] = vid
                 ordered_scene_sids.append(sid)
             elif vid and not dedup_scene_by_sid[sid]:
                 dedup_scene_by_sid[sid] = vid
-        seg_scene_keys = [(sid, dedup_scene_by_sid[sid]) for sid in ordered_scene_sids]
+        merged_scene_keys: list[tuple[str, str]] = []
+        plate_keys = [
+            f"{sid}_{dedup_scene_by_sid[sid]}" if dedup_scene_by_sid[sid] else sid
+            for sid in ordered_scene_sids
+        ]
+        for sid, plate in zip(ordered_scene_sids, plate_keys):
+            has_specific_variant = any(
+                other != plate and other.startswith(f"{plate}_")
+                for other in plate_keys
+            )
+            if has_specific_variant:
+                continue
+            merged_scene_keys.append((sid, dedup_scene_by_sid[sid]))
+        seg_scene_keys = merged_scene_keys
 
         # Build local ordered @图片1..P and @音频1..A slots for THIS segment
         image_slots: list[S9SegmentAssetSlot] = []
@@ -997,7 +1286,21 @@ def normalize_s9_storyboard_plan(
                     asset_id=iid,
                 )
             )
-        wants_reverse_scene = bool(_REVERSE_SCENE_CUE_RE.search(seg_prose))
+        seg_action_prose = " ".join(
+            part
+            for part in [
+                seg.title,
+                seg.story_beat,
+                getattr(seg, "entry_state", ""),
+                getattr(seg, "exit_state", ""),
+                *[
+                    f"{sh.title} {sh.content} {getattr(sh, 'camera_angle', '')} {getattr(sh, 'transition_note', '')}"
+                    for sh in fixed_shots
+                ],
+            ]
+            if part
+        )
+        wants_reverse_scene = text_uses_reverse_scene_view(seg_action_prose)
         for sid, vid in seg_scene_keys:
             if len(image_slots) >= max(1, max_images_per_segment):
                 break
@@ -1151,6 +1454,7 @@ def normalize_s9_storyboard_plan(
         S9StoryboardPlan(
             duration_assessment=assessment,
             asset_manifest=numbered_manifest,
+            continuity_bible=plan.continuity_bible,
             segments=normalized_segments,
         ),
         per_segment_slots,
@@ -1254,6 +1558,23 @@ def build_s9_stage2_task_prompt(
             f"- 前一大段（大段{prev_segment.segment_number}·{prev_segment.title}）结尾事件：{prev_segment.story_beat}"
             + (f"｜结尾状态：{prev_tail}" if prev_tail else "")
         )
+        prev_shots = list(getattr(prev_segment, "shots", []) or [])
+        if prev_shots:
+            prev_last = prev_shots[-1]
+            prev_shot_label = prev_last.label or f"大段{prev_segment.segment_number}-分镜{prev_last.shot_number}"
+            prev_shot_parts = [
+                f"{prev_shot_label}｜{prev_last.shot_scale_movement}｜{prev_last.camera_angle}｜{prev_last.camera_motion}",
+                str(prev_last.content or "").strip(),
+            ]
+            if str(getattr(prev_last, "transition_note", "") or "").strip():
+                prev_shot_parts.append(f"切出余势：{prev_last.transition_note.strip()}")
+            if str(getattr(prev_last, "spoken_text", "") or "").strip():
+                prev_shot_parts.append(f"末镜原话：“{prev_last.spoken_text.strip()}”")
+            continuity_parts.append(
+                "- 前段末镜实拍快照："
+                + "；".join(p for p in prev_shot_parts if p)
+                + "\n  衔接指令：本段第1镜必须顺接上述结尾状态与动作余势，除非有明确连续表演依据否则切换景别/机位推进至新动作，严禁复演上段末镜已完成的台词或动作。"
+            )
     elif prev_episode_context.strip():
         continuity_parts.append(f"- 上一集末尾语境：{prev_episode_context.strip()}")
     if getattr(segment, "entry_state", "").strip():
@@ -1268,6 +1589,21 @@ def build_s9_stage2_task_prompt(
             f"- 下一大段（大段{next_segment.segment_number}·{next_segment.title}）即将承接：{next_segment.story_beat}"
             + (f"｜下段起始状态：{next_entry}" if next_entry else "")
         )
+        next_shots = list(getattr(next_segment, "shots", []) or [])
+        if next_shots:
+            next_first = next_shots[0]
+            next_shot_label = next_first.label or f"大段{next_segment.segment_number}-分镜{next_first.shot_number}"
+            next_shot_parts = [
+                f"{next_shot_label}｜{next_first.shot_scale_movement}｜{next_first.camera_angle}｜{next_first.camera_motion}",
+                str(next_first.content or "").strip(),
+            ]
+            if str(getattr(next_first, "spoken_text", "") or "").strip():
+                next_shot_parts.append(f"下段首句：“{next_first.spoken_text.strip()}”")
+            continuity_parts.append(
+                "- 下段首镜待接快照："
+                + "；".join(p for p in next_shot_parts if p)
+                + "\n  边界指令：本段末镜必须完整落定收束状态，严禁提前越界拍出下一大段首镜的内容或台词。"
+            )
     continuity_block = "\n".join(continuity_parts) if continuity_parts else "- 本段独立完成当前闭环"
 
     layout_block = (
@@ -1584,9 +1920,26 @@ def build_s9_stage2_fallback_prompt(
     return "\n\n".join(sections)
 
 
+_STAGE1_DEFAULT_MAX_TOKENS: int | None = None
 _STAGE2_DEFAULT_MAX_TOKENS = 8192
 _STAGE2_MAX_CONTINUATIONS = 2
 _STAGE2_TERMINAL_CHARS = frozenset("。！？.!?'\"”’」』）)]】~…")
+_DEFAULT_S9_LLM_CONCURRENCY = 8
+
+
+def get_s9_llm_concurrency() -> int:
+    """Return bounded LLM concurrency for parallel S9 Stage 1B and Stage 2 compilation."""
+
+    raw = str(os.environ.get("S9_LLM_CONCURRENCY") or "").strip()
+    if raw:
+        try:
+            return max(1, min(16, int(raw)))
+        except ValueError:
+            pass
+    return _DEFAULT_S9_LLM_CONCURRENCY
+
+
+_BACKTICK_MENTION_RE = re.compile(r"`+(@(?:图片|音频)\d+)`+")
 
 
 def _strip_code_fences(text: str) -> str:
@@ -1594,6 +1947,7 @@ def _strip_code_fences(text: str) -> str:
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\s*\n?", "", cleaned)
         cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    cleaned = _BACKTICK_MENTION_RE.sub(r"\1", cleaned)
     return cleaned.strip()
 
 
@@ -1613,8 +1967,9 @@ def _audit_s9_stage2_completeness(
     if not cleaned:
         return [*issues, "输出为空"]
 
-    if cleaned[-1] not in _STAGE2_TERMINAL_CHARS:
-        issues.append(f"输出在句中意外中断（结尾字符：{cleaned[-1]!r}）")
+    terminal_check = cleaned.rstrip("*` \t\r\n") or cleaned
+    if terminal_check[-1] not in _STAGE2_TERMINAL_CHARS:
+        issues.append(f"输出在句中意外中断（结尾字符：{terminal_check[-1]!r}）")
 
     if slots and "【参考职责】" not in cleaned:
         issues.append("缺少【参考职责】说明")
@@ -1666,16 +2021,477 @@ def _merge_stage2_continuation(prefix: str, continuation: str) -> str:
     return f"{head}{tail}"
 
 
-def _s9_stage2_model_settings(model_env: str) -> dict[str, Any]:
-    """Build Stage 2 model settings with an explicit completion token floor."""
+def _s9_model_settings(
+    model_env: str,
+    *,
+    default_max_tokens: int | None,
+    reasoning_override_env: str = "",
+    max_tokens_override_env: str = "",
+) -> dict[str, Any]:
+    """Build S9 model settings with optional max_tokens floor and stage effort override."""
 
     from novelvideo.config import get_newapi_structured_output_model_settings
     from novelvideo.utils.model_context_budget import TextContextBudget
 
     settings = dict(get_newapi_structured_output_model_settings(model_env))
+    if reasoning_override_env:
+        override = str(os.environ.get(reasoning_override_env) or "").strip().lower()
+        if override == "off":
+            settings.pop("openai_reasoning_effort", None)
+        elif override in {"high", "medium", "low", "minimal"}:
+            settings["openai_reasoning_effort"] = override
     if TextContextBudget.from_env() is None:
-        settings.setdefault("max_tokens", _STAGE2_DEFAULT_MAX_TOKENS)
+        env_max_tokens: int | None = None
+        if max_tokens_override_env:
+            raw_mt = str(os.environ.get(max_tokens_override_env) or "").strip()
+            if raw_mt:
+                try:
+                    parsed_mt = int(raw_mt)
+                    if parsed_mt > 0:
+                        env_max_tokens = parsed_mt
+                except ValueError:
+                    pass
+        target_max = env_max_tokens if env_max_tokens is not None else default_max_tokens
+        if target_max is not None:
+            settings.setdefault("max_tokens", target_max)
     return settings
+
+
+def _s9_stage1_model_settings(model_env: str = "LITERAL_BEAT_META_MODEL") -> dict[str, Any]:
+    """Build Stage 1 model settings without imposing an artificial 8192 token ceiling."""
+
+    return _s9_model_settings(
+        model_env,
+        default_max_tokens=_STAGE1_DEFAULT_MAX_TOKENS,
+        reasoning_override_env="S9_STAGE1_REASONING_EFFORT",
+        max_tokens_override_env="S9_STAGE1_MAX_TOKENS",
+    )
+
+
+def _s9_stage2_model_settings(model_env: str) -> dict[str, Any]:
+    """Build Stage 2 model settings with an explicit completion token floor."""
+
+    return _s9_model_settings(
+        model_env,
+        default_max_tokens=_STAGE2_DEFAULT_MAX_TOKENS,
+        reasoning_override_env="S9_STAGE2_REASONING_EFFORT",
+        max_tokens_override_env="S9_STAGE2_MAX_TOKENS",
+    )
+
+
+_SLICE_NORM_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
+_SLICE_ELLIPSIS_RE = re.compile(r"^[.…·\-\s]+$")
+
+
+def _normalize_slice_line(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw or _SLICE_ELLIPSIS_RE.match(raw):
+        return ""
+    return _SLICE_NORM_RE.sub("", raw).lower()
+
+
+def _line_matches_excerpt_token(
+    source_norm: str,
+    excerpt_norm: str,
+    *,
+    allow_fuzzy: bool = True,
+) -> bool:
+    if not source_norm or not excerpt_norm:
+        return False
+    if source_norm == excerpt_norm:
+        return True
+    if len(excerpt_norm) >= 4 and (excerpt_norm in source_norm or source_norm in excerpt_norm):
+        return True
+    if not allow_fuzzy:
+        return False
+    shorter, longer = (
+        (source_norm, excerpt_norm)
+        if len(source_norm) <= len(excerpt_norm)
+        else (excerpt_norm, source_norm)
+    )
+    if len(shorter) >= 6:
+        shared = sum(1 for ch in set(shorter) if ch in longer)
+        if shared / max(1, len(set(shorter))) >= 0.75:
+            return True
+    return False
+
+
+def _find_line_range_in_source(
+    source_norms: list[str],
+    excerpt_norms: list[str],
+    *,
+    search_from: int,
+) -> tuple[int, int] | None:
+    if not excerpt_norms or search_from >= len(source_norms):
+        return None
+    first_tok = excerpt_norms[0]
+    last_tok = excerpt_norms[-1]
+    start_idx: int | None = None
+    for allow_fuzzy in (False, True):
+        for i in range(search_from, len(source_norms)):
+            if _line_matches_excerpt_token(source_norms[i], first_tok, allow_fuzzy=allow_fuzzy):
+                start_idx = i
+                break
+        if start_idx is not None:
+            break
+    if start_idx is None and len(excerpt_norms) > 1:
+        for tok in excerpt_norms[1:]:
+            for allow_fuzzy in (False, True):
+                for i in range(search_from, len(source_norms)):
+                    if _line_matches_excerpt_token(source_norms[i], tok, allow_fuzzy=allow_fuzzy):
+                        start_idx = i
+                        break
+                if start_idx is not None:
+                    break
+            if start_idx is not None:
+                break
+    if start_idx is None:
+        return None
+
+    end_idx = start_idx + 1
+    if len(excerpt_norms) == 1:
+        return start_idx, end_idx
+
+    # When an excerpt uses anchor pairs (<=3 non-ellipsis lines), scan forward after start_idx
+    # prioritizing exact matches before fuzzy matches so multi-line ranges expand cleanly.
+    if len(excerpt_norms) <= 3:
+        min_j = start_idx + 1 if start_idx + 1 < len(source_norms) else start_idx
+        for allow_fuzzy in (False, True):
+            for j in range(min_j, len(source_norms)):
+                if _line_matches_excerpt_token(source_norms[j], last_tok, allow_fuzzy=allow_fuzzy):
+                    return start_idx, j + 1
+
+    search_limit = min(len(source_norms), start_idx + max(len(excerpt_norms) * 3, 24))
+    for allow_fuzzy in (False, True):
+        for j in range(search_limit - 1, start_idx - 1, -1):
+            if _line_matches_excerpt_token(source_norms[j], last_tok, allow_fuzzy=allow_fuzzy):
+                return start_idx, j + 1
+    for tok in reversed(excerpt_norms[:-1]):
+        for allow_fuzzy in (False, True):
+            matched_j = next(
+                (
+                    j
+                    for j in range(search_limit - 1, start_idx - 1, -1)
+                    if _line_matches_excerpt_token(source_norms[j], tok, allow_fuzzy=allow_fuzzy)
+                ),
+                None,
+            )
+            if matched_j is not None:
+                return start_idx, matched_j + 1
+    return start_idx, max(start_idx + 1, end_idx)
+
+
+def _format_contextual_slice(source_lines: list[str], start: int, end: int) -> str:
+    parts: list[str] = []
+    if start > 0:
+        prev_ctx = "\n".join(source_lines[max(0, start - 2) : start])
+        parts.append(f"[前段末尾邻接参考（已拍完，严禁重演）]\n{prev_ctx}")
+    core_text = "\n".join(source_lines[start:end])
+    parts.append(f"[本大段核心原文（必须100%忠实拍完，逐字保留台词）]\n{core_text}")
+    if end < len(source_lines):
+        next_ctx = "\n".join(source_lines[end : min(len(source_lines), end + 2)])
+        parts.append(f"[后段开头邻接参考（属下一大段，严禁提前拍摄）]\n{next_ctx}")
+    return "\n\n".join(parts)
+
+
+def slice_s9_source_text_for_segments(
+    source_text: str,
+    skeletons: list[S9Stage1SkeletonSegment],
+) -> tuple[list[str], list[str]]:
+    """Map Pass 1A segment excerpts onto contiguous non-dropping slices of ``source_text``."""
+
+    raw_text = str(source_text or "").strip()
+    count = len(skeletons)
+    if count == 0:
+        return [], []
+    source_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+    if count == 1 or len(source_lines) <= 6:
+        excerpts = [str(sk.source_excerpt or "").strip() or raw_text for sk in skeletons]
+        return excerpts, [raw_text] * count
+
+    source_norms = [_normalize_slice_line(ln) for ln in source_lines]
+    matched_spans: list[tuple[int, int] | None] = []
+    cursor = 0
+    matched_count = 0
+    for sk in skeletons:
+        raw_excerpt = str(sk.source_excerpt or "").strip()
+        excerpt_lines = [ln.strip() for ln in raw_excerpt.splitlines() if ln.strip()]
+        if not excerpt_lines and sk.story_beat:
+            excerpt_lines = [sk.story_beat]
+        excerpt_norms = [n for ln in excerpt_lines if (n := _normalize_slice_line(ln))]
+        span = _find_line_range_in_source(source_norms, excerpt_norms, search_from=cursor)
+        matched_spans.append(span)
+        if span is not None:
+            matched_count += 1
+            cursor = min(len(source_lines), span[1])
+
+    if matched_count * 2 < count:
+        excerpts = [str(sk.source_excerpt or "").strip() or raw_text for sk in skeletons]
+        return excerpts, [raw_text] * count
+
+    # Repair spans into a strictly contiguous partition covering 100% of [0, len(source_lines)).
+    resolved_starts: list[int] = [0] * count
+    resolved_ends: list[int] = [len(source_lines)] * count
+    for idx, span in enumerate(matched_spans):
+        if span is not None:
+            resolved_starts[idx], resolved_ends[idx] = span
+        else:
+            prev_end = resolved_ends[idx - 1] if idx > 0 else 0
+            next_start = next(
+                (matched_spans[j][0] for j in range(idx + 1, count) if matched_spans[j] is not None),
+                len(source_lines),
+            )
+            resolved_starts[idx] = prev_end
+            resolved_ends[idx] = max(prev_end, next_start)
+
+    resolved_starts[0] = 0
+    for idx in range(count - 1):
+        cur_end = max(resolved_starts[idx] + 1 if resolved_starts[idx] < len(source_lines) else resolved_starts[idx], resolved_ends[idx])
+        next_start = resolved_starts[idx + 1]
+        if cur_end < next_start:
+            # Absorb unmapped gap lines into current segment so nothing is lost.
+            cur_end = next_start
+        elif cur_end > next_start:
+            next_start = cur_end
+        resolved_ends[idx] = min(len(source_lines), cur_end)
+        resolved_starts[idx + 1] = min(len(source_lines), next_start)
+    resolved_ends[-1] = len(source_lines)
+
+    # Guarantee non-empty slices where lines exist.
+    clean_excerpts: list[str] = []
+    context_slices: list[str] = []
+    for idx in range(count):
+        s, e = resolved_starts[idx], resolved_ends[idx]
+        if s >= e:
+            clean_excerpts.append(str(skeletons[idx].source_excerpt or "").strip() or raw_text)
+            context_slices.append(raw_text)
+        else:
+            clean_excerpts.append("\n".join(source_lines[s:e]))
+            context_slices.append(_format_contextual_slice(source_lines, s, e))
+    return clean_excerpts, context_slices
+
+
+def build_s9_context_slice_from_episode_text(
+    episode_source_text: str,
+    segment_excerpt: str,
+) -> str:
+    """Extract contextual slice for one segment from full episode text when available."""
+
+    full_text = str(episode_source_text or "").strip()
+    excerpt = str(segment_excerpt or "").strip()
+    if not full_text or not excerpt or len(full_text) <= 300:
+        return full_text
+    source_lines = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
+    if len(source_lines) <= 6:
+        return full_text
+    excerpt_lines = [ln.strip() for ln in excerpt.splitlines() if ln.strip()]
+    excerpt_norms = [n for ln in excerpt_lines if (n := _normalize_slice_line(ln))]
+    source_norms = [_normalize_slice_line(ln) for ln in source_lines]
+    span = _find_line_range_in_source(source_norms, excerpt_norms, search_from=0)
+    if span is None:
+        return full_text
+    return _format_contextual_slice(source_lines, span[0], span[1])
+
+
+def enrich_s9_continuity_bible(
+    bible: S9EpisodeContinuityBible | None,
+    *,
+    segments: list[S9SegmentPlan],
+    per_segment_slots: list[list[S9SegmentAssetSlot]],
+    style_context: S9StyleContext,
+    scenes: list[Any] | None = None,
+) -> S9EpisodeContinuityBible:
+    """Fill missing per-scene lighting/layout rules deterministically from scene cards."""
+
+    from novelvideo.models import build_scene_effective_prompt
+
+    result = (bible or S9EpisodeContinuityBible()).model_copy(deep=True)
+    scene_lookup = _scene_record_lookup(scenes)
+
+    lighting_by_sid: dict[str, S9SceneLightingAnchor] = {}
+    for item in result.scene_lighting_rules:
+        sid, vid = _normalize_scene_id_variant(item.scene_id, "")
+        key = f"{sid}_{vid}" if vid else sid
+        if key:
+            lighting_by_sid[key] = item
+
+    layout_by_sid: dict[str, S9SceneLayoutAnchor] = {}
+    for item in result.scene_layout_rules:
+        sid, vid = _normalize_scene_id_variant(item.scene_id, "")
+        key = f"{sid}_{vid}" if vid else sid
+        if key:
+            layout_by_sid[key] = item
+
+    scene_usage_counts: dict[str, int] = {}
+    ordered_plates: list[tuple[str, str, str]] = []
+    for slots in per_segment_slots:
+        seg_plates: set[str] = set()
+        for slot in slots or []:
+            if slot.asset_kind == "scene" and slot.asset_id:
+                sid, vid = _normalize_scene_id_variant(slot.asset_id, slot.variant_id)
+                plate = f"{sid}_{vid}" if vid else sid
+                if plate not in seg_plates:
+                    seg_plates.add(plate)
+                    scene_usage_counts[plate] = scene_usage_counts.get(plate, 0) + 1
+                if all(p != plate for p, _, _ in ordered_plates):
+                    ordered_plates.append((plate, sid, vid))
+
+    for plate, sid, vid in ordered_plates:
+        _pk, scene_obj, base_obj = _resolve_scene_and_base(scene_lookup, sid, vid)
+        if plate not in lighting_by_sid and sid not in lighting_by_sid:
+            env_prompt = (
+                build_scene_effective_prompt(scene_obj, base_obj).strip()
+                if scene_obj is not None
+                else ""
+            )
+            sc_time = str(getattr(scene_obj, "time_of_day", "") or "").strip() if scene_obj else ""
+            rule = S9SceneLightingAnchor(
+                scene_id=plate,
+                time_of_day=sc_time,
+                visual_style_summary=style_context.s9_style_anchor,
+                key_lighting=(
+                    f"严格锁定场景「{plate}」参考图原有主光方向与时段"
+                    + (f"（{sc_time}）" if sc_time else "")
+                    + (f"，空间光照参考：{env_prompt[:140]}" if env_prompt else "")
+                ),
+                color_and_material=f"保持 {style_context.aspect_ratio} {style_context.style_label} 统一色温与材质质感，跨段严禁改变主光色温",
+            )
+            result.scene_lighting_rules.append(rule)
+            lighting_by_sid[plate] = rule
+
+        if plate not in layout_by_sid and sid not in layout_by_sid:
+            env_prompt = (
+                build_scene_effective_prompt(scene_obj, base_obj).strip()
+                if scene_obj is not None
+                else ""
+            )
+            notes = str(getattr(scene_obj, "notes", "") or "").strip() if scene_obj else ""
+            first_seg_layout = ""
+            for seg_idx, seg in enumerate(segments):
+                seg_slots = per_segment_slots[seg_idx] if seg_idx < len(per_segment_slots) else []
+                if any(
+                    s.asset_kind == "scene" and s.asset_id and (
+                        f"{_normalize_scene_id_variant(s.asset_id, s.variant_id)[0]}" in plate
+                    )
+                    for s in seg_slots
+                ):
+                    if str(getattr(seg, "scene_layout", "") or "").strip():
+                        first_seg_layout = seg.scene_layout.strip()
+                        break
+            if env_prompt or notes or first_seg_layout or scene_usage_counts.get(plate, 0) > 1:
+                layout_rule = S9SceneLayoutAnchor(
+                    scene_id=plate,
+                    primary_view_direction=notes or first_seg_layout or "保持同场景统一主视方向",
+                    landmarks=env_prompt or first_seg_layout or "严格沿用场景参考图固定门窗与家具地标",
+                    camera_working_side="同场多段摄影机保持在主关系轴同一工作侧，反打不越轴、左右坐标不镜像翻转",
+                )
+                result.scene_layout_rules.append(layout_rule)
+                layout_by_sid[plate] = layout_rule
+
+    return result
+
+
+def format_s9_continuity_bible_for_segment(
+    bible: S9EpisodeContinuityBible | None,
+    *,
+    segment: S9SegmentPlan,
+    slots: list[S9SegmentAssetSlot],
+) -> str:
+    """Format relevant Continuity Bible locks for a specific segment."""
+
+    if bible is None:
+        return ""
+
+    seg_scene_keys: list[str] = []
+    for slot in slots or []:
+        if slot.asset_kind in {"scene", "scene_reverse"} and slot.asset_id:
+            sid, vid = _normalize_scene_id_variant(slot.asset_id, slot.variant_id)
+            plate = f"{sid}_{vid}" if vid else sid
+            if plate not in seg_scene_keys:
+                seg_scene_keys.append(plate)
+    for shot in segment.shots or []:
+        if shot.scene_id:
+            sid, vid = _normalize_scene_id_variant(shot.scene_id, shot.scene_variant_id)
+            plate = f"{sid}_{vid}" if vid else sid
+            if plate not in seg_scene_keys:
+                seg_scene_keys.append(plate)
+
+    def _matches_scene(rule_sid: str) -> bool:
+        if not seg_scene_keys:
+            return True
+        norm_rule, _ = _normalize_scene_id_variant(rule_sid, "")
+        for key in seg_scene_keys:
+            if (
+                norm_rule == key
+                or key.startswith(f"{norm_rule}_")
+                or norm_rule.startswith(f"{key}_")
+            ):
+                return True
+        return False
+
+    parts: list[str] = []
+    matched_lighting = [r for r in bible.scene_lighting_rules if r.scene_id and _matches_scene(r.scene_id)]
+    if matched_lighting:
+        lines = ["【全集锁定的同场景光影画风铁律（所有同场景大段必须严格一致，禁止改时段/主光/色温）】"]
+        for r in matched_lighting:
+            t_note = f"（时段：{r.time_of_day}）" if r.time_of_day else ""
+            lines.append(f"- 场景 `{r.scene_id}`{t_note}：")
+            if r.visual_style_summary:
+                lines.append(f"  - 视觉风格：{r.visual_style_summary}")
+            if r.key_lighting:
+                lines.append(f"  - 全局主光：{r.key_lighting}")
+            if r.color_and_material:
+                lines.append(f"  - 色彩与材质：{r.color_and_material}")
+        parts.append("\n".join(lines))
+
+    matched_layout = [r for r in bible.scene_layout_rules if r.scene_id and _matches_scene(r.scene_id)]
+    if matched_layout:
+        lines = ["【全集锁定的同场景空间坐标铁律（固定地标与机位工作侧严禁跨段跳轴）】"]
+        for r in matched_layout:
+            segs = [
+                p
+                for p in (
+                    f"主视方向={r.primary_view_direction}" if r.primary_view_direction else "",
+                    f"固定地标={r.landmarks}" if r.landmarks else "",
+                    f"机位工作侧={r.camera_working_side}" if r.camera_working_side else "",
+                )
+                if p
+            ]
+            if segs:
+                lines.append(f"- 场景 `{r.scene_id}`：{'｜'.join(segs)}")
+        if len(lines) > 1:
+            parts.append("\n".join(lines))
+
+    if bible.prop_state_chain:
+        lines = ["【跨大段道具流转与可见性状态链（严禁道具跨段凭空消失或瞬移）】"]
+        lines.extend(f"- {item}" for item in bible.prop_state_chain if str(item).strip())
+        if len(lines) > 1:
+            parts.append("\n".join(lines))
+
+    seg_speakers = {
+        str(sh.speaker or "").replace("OS", "").replace("os", "").strip().lower()
+        for sh in (segment.shots or [])
+        if str(sh.speaker or "").strip()
+    }
+    matched_voices = [
+        vp
+        for vp in bible.voice_profiles
+        if vp.speaker
+        and (
+            not seg_speakers
+            or any(
+                vp.speaker.lower() in spk or spk in vp.speaker.lower()
+                for spk in seg_speakers
+            )
+        )
+    ]
+    if matched_voices:
+        lines = ["【全集锁定的角色稳定声线档案（跨段必须保持同一声线设定）】"]
+        for vp in matched_voices:
+            lines.append(f"- {vp.speaker}：{vp.voice_design}")
+        parts.append("\n".join(lines))
+
+    return "\n\n".join(parts)
 
 
 def _estimate_spoken_seconds(spoken_text: str) -> float:
@@ -1692,6 +2508,121 @@ def _estimate_spoken_seconds(spoken_text: str) -> float:
     return (latin_words / 2.8) + min(0.8, digits_punct * 0.06)
 
 
+def audit_s9_segment_pacing(
+    seg: S9SegmentPlan,
+    *,
+    max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
+    require_exit_state: bool = False,
+) -> list[str]:
+    """Audit one segment for YD compact-pacing, shot overload, and clip-closure issues."""
+
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    issues: list[str] = []
+    seg_num = seg.segment_number
+    if seg.planned_duration_seconds > cap:
+        issues.append(f"大段{seg_num} 计划时长 {seg.planned_duration_seconds}s 超出上限 {cap}s")
+    shots = list(seg.shots or [])
+    if not shots:
+        issues.append(f"大段{seg_num} 缺少分镜列表")
+        return issues
+
+    # Check opening filler silence shots (e.g., 4s empty door + 3s monitor before action starts)
+    opening_silence_count = 0
+    opening_silence_sec = 0.0
+    for s in shots:
+        if s.audio_type == "silence" and not str(s.spoken_text or "").strip():
+            opening_silence_count += 1
+            opening_silence_sec += float(s.planned_duration_seconds or 0.0)
+        else:
+            break
+    if opening_silence_count >= 2 and opening_silence_sec > 5.0:
+        issues.append(
+            f"大段{seg_num} 段首连续 {opening_silence_count} 个无声铺垫镜共 {opening_silence_sec:.1f}s，涉嫌废镜头拖节奏，应合并进首镜与核心动作并行"
+        )
+
+    for s in shots:
+        dur = float(s.planned_duration_seconds or 0.0)
+        spoken = str(s.spoken_text or "").strip()
+        speaker_raw = str(s.speaker or "").strip()
+        turns = [t.strip() for t in spoken.split("|") if t.strip()] if spoken else []
+        multi_speaker = len(turns) >= 2 or len(
+            [p for p in re.split(r"[;；、/]+", speaker_raw) if p.strip()]
+        ) >= 2
+        prop_count = len(list(getattr(s, "prop_ids", []) or []))
+        exchange_hits = re.findall(
+            r"(扫码|装袋|找零|掏钱|拍在|递给|接过|拿烟|取烟|拿冰美式|打包)",
+            str(getattr(s, "content", "") or ""),
+        )
+
+        if s.audio_type == "silence" and not spoken:
+            if dur > 4.5:
+                issues.append(
+                    f"大段{seg_num}-分镜{s.shot_number} 无声镜头长达 {dur:.1f}s（紧凑档应 <= 4s），请压缩空等或合并"
+                )
+        elif spoken:
+            est_speech = _estimate_spoken_seconds(spoken)
+            allowed_ceil = max(4.5, est_speech * 1.25 + 1.5)
+            if dur > allowed_ceil:
+                issues.append(
+                    f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却分配了 {dur:.1f}s（存在严重空尾/注水），应压至约 {max(2, round(est_speech + 1.0))}s 并与动作并行"
+                )
+            if est_speech >= 2.0 and dur < est_speech * 0.8:
+                issues.append(
+                    f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却仅分配 {dur:.1f}s（语速过赶/吞词风险），请适当加长或拆分台词"
+                )
+
+        if multi_speaker:
+            est_multi = _estimate_spoken_seconds(spoken) + 0.6 * max(1, len(turns) - 1)
+            if dur < est_multi + 2.0 or prop_count >= 3 or len(exchange_hits) >= 2:
+                issues.append(
+                    f"大段{seg_num}-分镜{s.shot_number} 单镜内含多人轮流开口与多步动作（仅 {dur:.1f}s），极易动作快进和道具穿帮，请按说话轮次拆分为独立分镜"
+                )
+        elif prop_count >= 4 or (len(exchange_hits) >= 3 and dur < max(7.0, _estimate_spoken_seconds(spoken) + len(exchange_hits) * 1.5)):
+            issues.append(
+                f"大段{seg_num}-分镜{s.shot_number} 单镜塞入过多连续道具交接（{max(prop_count, len(exchange_hits))} 项操作仅 {dur:.1f}s），极易导致道具分裂/漏装，请拆分成多个分镜或精简冗余过程"
+            )
+
+    if require_exit_state and not str(getattr(seg, "exit_state", "") or "").strip():
+        issues.append(
+            f"大段{seg_num} 缺少 `exit_state` 段尾落点状态，可能导致下一大段无法衔接"
+        )
+
+    return issues
+
+
+def _audit_s9_segment_boundary(
+    prev_seg: S9SegmentPlan | None,
+    seg: S9SegmentPlan,
+) -> list[str]:
+    """Detect duplicated framing/dialogue right across adjacent clip boundaries."""
+
+    if prev_seg is None or not prev_seg.shots or not seg.shots:
+        return []
+    prev_last = prev_seg.shots[-1]
+    cur_first = seg.shots[0]
+    issues: list[str] = []
+    prev_spoken = _normalize_slice_line(prev_last.spoken_text)
+    cur_spoken = _normalize_slice_line(cur_first.spoken_text)
+    if prev_spoken and prev_spoken == cur_spoken:
+        issues.append(
+            f"大段{seg.segment_number}-分镜1 重复了上段末镜台词“{cur_first.spoken_text}”，应直接承接上段尾态推进新动作"
+        )
+    same_camera = (
+        str(prev_last.shot_scale_movement or "").strip()
+        and str(prev_last.shot_scale_movement or "").strip() == str(cur_first.shot_scale_movement or "").strip()
+        and str(prev_last.camera_angle or "").strip() == str(cur_first.camera_angle or "").strip()
+        and str(prev_last.camera_motion or "").strip() == str(cur_first.camera_motion or "").strip()
+    )
+    if same_camera:
+        prev_content = _normalize_slice_line(prev_last.content)
+        cur_content = _normalize_slice_line(cur_first.content)
+        if prev_content and cur_content and (prev_content in cur_content or cur_content in prev_content):
+            issues.append(
+                f"大段{seg.segment_number}-分镜1 与大段{prev_seg.segment_number} 末镜同构重复（相同景别机位且动作内容重合），请切换景别或机位推进新事件"
+            )
+    return issues
+
+
 def audit_s9_plan_pacing(
     plan: S9StoryboardPlan,
     *,
@@ -1705,76 +2636,14 @@ def audit_s9_plan_pacing(
     if not segments:
         return ["未生成任何大段分镜"]
 
-    for seg in segments:
-        seg_num = seg.segment_number
-        if seg.planned_duration_seconds > cap:
-            issues.append(f"大段{seg_num} 计划时长 {seg.planned_duration_seconds}s 超出上限 {cap}s")
-        shots = list(seg.shots or [])
-        if not shots:
-            issues.append(f"大段{seg_num} 缺少分镜列表")
-            continue
-
-        # Check opening filler silence shots (e.g., 4s empty door + 3s monitor before action starts)
-        opening_silence_count = 0
-        opening_silence_sec = 0.0
-        for s in shots:
-            if s.audio_type == "silence" and not str(s.spoken_text or "").strip():
-                opening_silence_count += 1
-                opening_silence_sec += float(s.planned_duration_seconds or 0.0)
-            else:
-                break
-        if opening_silence_count >= 2 and opening_silence_sec > 5.0:
-            issues.append(
-                f"大段{seg_num} 段首连续 {opening_silence_count} 个无声铺垫镜共 {opening_silence_sec:.1f}s，涉嫌废镜头拖节奏，应合并进首镜与核心动作并行"
+    for idx, seg in enumerate(segments):
+        issues.extend(
+            audit_s9_segment_pacing(
+                seg,
+                max_segment_seconds=cap,
+                require_exit_state=(len(segments) >= 2 and idx < len(segments) - 1),
             )
-
-        for s in shots:
-            dur = float(s.planned_duration_seconds or 0.0)
-            spoken = str(s.spoken_text or "").strip()
-            speaker_raw = str(s.speaker or "").strip()
-            turns = [t.strip() for t in spoken.split("|") if t.strip()] if spoken else []
-            multi_speaker = len(turns) >= 2 or len(
-                [p for p in re.split(r"[;；、/]+", speaker_raw) if p.strip()]
-            ) >= 2
-            prop_count = len(list(getattr(s, "prop_ids", []) or []))
-            exchange_hits = re.findall(
-                r"(扫码|装袋|找零|掏钱|拍在|递给|接过|拿烟|取烟|拿冰美式|打包)",
-                str(getattr(s, "content", "") or ""),
-            )
-
-            if s.audio_type == "silence" and not spoken:
-                if dur > 4.5:
-                    issues.append(
-                        f"大段{seg_num}-分镜{s.shot_number} 无声镜头长达 {dur:.1f}s（紧凑档应 <= 4s），请压缩空等或合并"
-                    )
-            elif spoken:
-                est_speech = _estimate_spoken_seconds(spoken)
-                allowed_ceil = max(4.5, est_speech * 1.25 + 1.5)
-                if dur > allowed_ceil:
-                    issues.append(
-                        f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却分配了 {dur:.1f}s（存在严重空尾/注水），应压至约 {max(2, round(est_speech + 1.0))}s 并与动作并行"
-                    )
-                if est_speech >= 2.0 and dur < est_speech * 0.8:
-                    issues.append(
-                        f"大段{seg_num}-分镜{s.shot_number} 台词约需 {est_speech:.1f}s 却仅分配 {dur:.1f}s（语速过赶/吞词风险），请适当加长或拆分台词"
-                    )
-
-            if multi_speaker:
-                est_multi = _estimate_spoken_seconds(spoken) + 0.6 * max(1, len(turns) - 1)
-                if dur < est_multi + 2.0 or prop_count >= 3 or len(exchange_hits) >= 2:
-                    issues.append(
-                        f"大段{seg_num}-分镜{s.shot_number} 单镜内含多人轮流开口与多步动作（仅 {dur:.1f}s），极易动作快进和道具穿帮，请按说话轮次拆分为独立分镜"
-                    )
-            elif prop_count >= 4 or (len(exchange_hits) >= 3 and dur < max(7.0, _estimate_spoken_seconds(spoken) + len(exchange_hits) * 1.5)):
-                issues.append(
-                    f"大段{seg_num}-分镜{s.shot_number} 单镜塞入过多连续道具交接（{max(prop_count, len(exchange_hits))} 项操作仅 {dur:.1f}s），极易导致道具分裂/漏装，请拆分成多个分镜或精简冗余过程"
-                )
-
-        if len(segments) >= 2 and seg_num < len(segments):
-            if not str(getattr(seg, "exit_state", "") or "").strip():
-                issues.append(
-                    f"大段{seg_num} 缺少 `exit_state` 段尾落点状态，可能导致下一大段无法衔接"
-                )
+        )
 
     return issues
 
@@ -1785,18 +2654,88 @@ async def _drain_agent_event_stream(_ctx: Any, event_stream: Any) -> None:
         pass
 
 
-def _agent_run_supports_event_stream_handler(agent: Any) -> bool:
-    """Return True when ``agent.run`` accepts ``event_stream_handler``."""
-    run_fn = getattr(agent, "run", None)
-    if not callable(run_fn):
+def _agent_method_supports_param(agent: Any, method_name: str, param_name: str) -> bool:
+    method = getattr(agent, method_name, None)
+    if not callable(method):
         return False
     try:
-        sig = inspect.signature(run_fn)
+        sig = inspect.signature(method)
     except (TypeError, ValueError):
         return False
-    return "event_stream_handler" in sig.parameters or any(
+    return param_name in sig.parameters or any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     )
+
+
+def _agent_run_supports_event_stream_handler(agent: Any) -> bool:
+    """Return True when ``agent.run`` accepts ``event_stream_handler``."""
+    return _agent_method_supports_param(agent, "run", "event_stream_handler")
+
+
+def _is_token_limit_exhausted_error(exc: BaseException) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "model token limit" in msg
+        or "exceeded before any response was generated" in msg
+        or "exceeded while generating a tool call" in msg
+    )
+
+
+def _build_token_limit_retry_settings(agent: Any) -> dict[str, Any]:
+    from novelvideo.utils.model_context_budget import TextContextBudget
+
+    base = dict(getattr(agent, "model_settings", None) or {})
+    retry = dict(base)
+    effort = str(retry.get("openai_reasoning_effort") or "").strip().lower()
+    if effort in {"high", "medium", ""}:
+        retry["openai_reasoning_effort"] = "low"
+    elif effort == "low":
+        retry["openai_reasoning_effort"] = "minimal"
+
+    if TextContextBudget.from_env() is None:
+        cur_max = retry.get("max_tokens")
+        if cur_max is None:
+            retry["max_tokens"] = 32768
+        elif isinstance(cur_max, int) and cur_max < 16384:
+            retry["max_tokens"] = 16384
+        elif isinstance(cur_max, int) and cur_max < 32768:
+            retry["max_tokens"] = 32768
+    return retry
+
+
+async def _run_s9_agent_streaming_once(
+    agent: Any,
+    prompt: Any,
+    *,
+    message_history: Any = None,
+    model_settings_override: dict[str, Any] | None = None,
+) -> Any:
+    run_kwargs: dict[str, Any] = {}
+    if message_history is not None:
+        run_kwargs["message_history"] = message_history
+    if _agent_run_supports_event_stream_handler(agent):
+        if model_settings_override is not None and _agent_method_supports_param(agent, "run", "model_settings"):
+            run_kwargs["model_settings"] = model_settings_override
+        run_kwargs["event_stream_handler"] = _drain_agent_event_stream
+        return await agent.run(prompt, **run_kwargs)
+    if callable(getattr(agent, "run_stream", None)):
+        if model_settings_override is not None and _agent_method_supports_param(agent, "run_stream", "model_settings"):
+            run_kwargs["model_settings"] = model_settings_override
+        async with agent.run_stream(prompt, **run_kwargs) as stream_result:
+            output = await stream_result.get_output()
+            response = getattr(stream_result, "response", None)
+            all_messages_fn = getattr(stream_result, "all_messages", None)
+            all_messages = all_messages_fn() if callable(all_messages_fn) else None
+            return SimpleNamespace(
+                output=output,
+                response=response,
+                all_messages=(
+                    (lambda msgs=all_messages: msgs) if all_messages is not None else None
+                ),
+            )
+    if model_settings_override is not None and _agent_method_supports_param(agent, "run", "model_settings"):
+        run_kwargs["model_settings"] = model_settings_override
+    return await agent.run(prompt, **run_kwargs)
 
 
 async def _run_s9_agent_streaming(
@@ -1811,28 +2750,379 @@ async def _run_s9_agent_streaming(
     ``model.request_stream()`` instead of buffering the entire completion in a
     single non-streaming HTTP response (which triggers Cloudflare's 120s 524
     Proxy Read Timeout on long Stage 1/Stage 2 generations), while keeping
-    PydanticAI's structured-output validation retries intact.
+    PydanticAI's structured-output validation retries intact. Also retries once
+    with lower reasoning effort / higher output budget when thinking tokens
+    exhaust ``max_tokens`` before generating output.
     """
-    run_kwargs: dict[str, Any] = {}
-    if message_history is not None:
-        run_kwargs["message_history"] = message_history
-    if _agent_run_supports_event_stream_handler(agent):
-        run_kwargs["event_stream_handler"] = _drain_agent_event_stream
-        return await agent.run(prompt, **run_kwargs)
-    if callable(getattr(agent, "run_stream", None)):
-        async with agent.run_stream(prompt, **run_kwargs) as stream_result:
-            output = await stream_result.get_output()
-            response = getattr(stream_result, "response", None)
-            all_messages_fn = getattr(stream_result, "all_messages", None)
-            all_messages = all_messages_fn() if callable(all_messages_fn) else None
-            return SimpleNamespace(
-                output=output,
-                response=response,
-                all_messages=(
-                    (lambda msgs=all_messages: msgs) if all_messages is not None else None
-                ),
+    try:
+        return await _run_s9_agent_streaming_once(
+            agent, prompt, message_history=message_history
+        )
+    except Exception as exc:
+        if not _is_token_limit_exhausted_error(exc):
+            raise
+        if not (
+            _agent_method_supports_param(agent, "run", "model_settings")
+            or _agent_method_supports_param(agent, "run_stream", "model_settings")
+        ):
+            raise
+        retry_settings = _build_token_limit_retry_settings(agent)
+        logger.warning(
+            "S9 agent hit completion token limit before emitting response (%s); "
+            "retrying with adjusted settings: %s",
+            exc,
+            {k: v for k, v in retry_settings.items() if k in {"max_tokens", "openai_reasoning_effort"}},
+        )
+        return await _run_s9_agent_streaming_once(
+            agent,
+            prompt,
+            message_history=message_history,
+            model_settings_override=retry_settings,
+        )
+
+
+def _should_use_two_pass_stage1(source_text: str) -> bool:
+    stripped = str(source_text or "").strip()
+    non_empty_lines = [ln for ln in stripped.splitlines() if ln.strip()]
+    return len(stripped) > 220 or len(non_empty_lines) > 4
+
+
+def _build_s9_stage1_skeleton_system_prompt(
+    *,
+    max_segment_seconds: int,
+    spine_template: str = "drama",
+    tail_anchor: bool = False,
+) -> str:
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    short_tail_floor = max(4, round(cap * 0.4))
+    mode_rule = (
+        "当前为解说剧（narrated）：原文旁白、解说词与角色对白必须完整保留进对应大段的 `source_excerpt`。"
+        if spine_template == "narrated"
+        else "当前为精品剧（drama）：原文全部对白、关键 OS 与核心动作必须完整保留进对应大段的 `source_excerpt`。"
+    )
+    anchor_note = (
+        "已开启「尾帧锚点镜」：非全片末段在段末预留 1 秒静止锚点预算。"
+        if tail_anchor
+        else "「尾帧锚点镜」关闭：段末自然落定 `exit_state`，供下一大段第 0 秒直接承接。"
+    )
+    return f"""你是 YD 电影级分镜总导演（Stage 1A：全局定拍、切段规划与跨段连续性圣经锁定）。
+你的任务是通读全集原文与全部资产清单，一次性完成全局时长评估、大段分段规划与跨 Clip 连续性锁定，输出轻量结构化 `S9Stage1SkeletonPlan` JSON（本步**不展开**逐镜 `shots` 列表，由下一步全并发细化）。
+
+### 核心法则
+1. **先剧情自然长度 → 再按剧情断点切分大段**：
+   - 普通话对白/旁白按 4～5 字/秒，边做边说并行不相加，紧凑动作节点默认约 1 秒。
+   - **单段上限 {cap} 秒只是上限，不是目标**；自然长度 14 秒就规划 14 秒，严禁凑秒或把全片硬塞入超出上限的单段。
+   - 段界必须落在剧情断点（场次切换、节拍转折、完整动作链/交流结束处），不劈开一句对白或一次接触；多段时末段一般不短于 {short_tail_floor} 秒。
+   - {mode_rule}
+   - {anchor_note}
+2. **`source_excerpt` 边界锚点与零遗漏铁律**：
+   - 每个大段的 `source_excerpt` 用于精确标定该段在【本集完整原文】中的起止范围，不得改写或编造。
+   - 若该段对应 <= 3 行原文可直接原样复制；若对应多行长段，推荐简写为 `<本段第1行原句>\n...\n<本段最后1行原句>`（后台会自动展开为 100% 连续完整原文传给下游，从而大幅节省 JSON 输出体积），确保相邻大段起止连续、整集零遗漏。
+3. **跨 Clip 连续性圣经（`continuity_bible`，极重要！）**：
+   - `scene_lighting_rules`：为本集用到的每个物理场景锁定唯一一套【全局光影画风】（时段、视觉风格、主光来源与场内方向、色温与材质），保证后续并发生成时同场景所有 Clip 光影色温 100% 一致。
+   - `scene_layout_rules`：为多人同场或跨段复用场景锁定主视方向、2～4 个固定地标及主关系轴允许机位工作侧，彻底杜绝跨段跳轴或左右镜像翻转。
+   - `prop_state_chain`：列出关键/跨段随身道具在各大段的持握或摆放归属变化（如“公文包：大段1艾莉森右手拎入 -> 大段2放茶几左侧可见区 -> 大段3维持茶几左侧”）。
+   - `voice_profiles`：为每个发声角色锁定稳定声线描述（用于跨段保持声线一致）。
+4. **段界交接契约**：
+   - 每个大段写清 `story_beat`、`entry_state`、`exit_state`、`opening_shot_direction`（确保与上段末镜自然推进而不雷同）、`closing_shot_direction`、`scene_layout` 及涉及的 `identity_ids` / `scene_ids` / `prop_ids`。"""
+
+
+def _build_s9_stage1_skeleton_task_prompt(
+    *,
+    source_text: str,
+    episode_num: int,
+    episode_title: str,
+    style_context: S9StyleContext,
+    planned_assets_summary: str,
+    max_segment_seconds: int,
+    prev_episode_context: str = "",
+) -> str:
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    prev_block = (
+        f"\n【上一集末尾衔接上下文（第一大段须顺畅承接）】\n{prev_episode_context.strip()}\n"
+        if prev_episode_context.strip()
+        else ""
+    )
+    return f"""请为第 {episode_num} 集《{episode_title or f'EP{episode_num}'}》输出轻量全局切段骨架与连续性圣经（`S9Stage1SkeletonPlan`，单大段上限 **{cap} 秒**）。
+
+【项目视觉规格】
+- {style_context.s9_style_anchor}
+{prev_block}
+【本集已有资产与音色】
+{planned_assets_summary}
+
+【本集完整原文 / 工作稿】
+{source_text.strip()}
+
+请输出完整的 `S9Stage1SkeletonPlan` JSON（每段 `source_excerpt` 保持与原文一致的起止锚点，长段可用首行+`...`+末行表达以精简 JSON）。"""
+
+
+def _build_s9_stage1_expand_task_prompt(
+    *,
+    skeleton: S9Stage1SkeletonSegment,
+    episode_overview: str,
+    bible_summary: str,
+    prev_skeleton: S9Stage1SkeletonSegment | None,
+    next_skeleton: S9Stage1SkeletonSegment | None,
+    prev_episode_context: str,
+    style_context: S9StyleContext,
+    planned_assets_summary: str,
+    source_slice: str,
+    episode_num: int,
+    episode_title: str,
+    max_segment_seconds: int,
+) -> str:
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    handoff_lines: list[str] = []
+    if prev_skeleton is not None:
+        handoff_lines.append(
+            f"- 前一大段（大段{prev_skeleton.segment_number}·{prev_skeleton.title}）闭环：{prev_skeleton.story_beat}\n"
+            f"  上段结尾状态：{prev_skeleton.exit_state}\n"
+            f"  上段末镜方向：{prev_skeleton.closing_shot_direction or '自然落定尾态'}"
+        )
+    elif prev_episode_context.strip():
+        handoff_lines.append(f"- 上一集末尾语境：{prev_episode_context.strip()}")
+    if next_skeleton is not None:
+        handoff_lines.append(
+            f"- 下一大段（大段{next_skeleton.segment_number}·{next_skeleton.title}）将承接：{next_skeleton.story_beat}\n"
+            f"  下段第0秒起态：{next_skeleton.entry_state}\n"
+            f"  下段首镜方向：{next_skeleton.opening_shot_direction or '切换景别推进新动作'}"
+        )
+    handoff_block = "\n".join(handoff_lines) if handoff_lines else "- 本段为全集唯一大段，独立完成完整闭环"
+
+    bible_block = f"\n【全集连续性圣经（必须严格遵守）】\n{bible_summary}\n" if bible_summary else ""
+    return f"""请为第 {episode_num} 集《{episode_title or f'EP{episode_num}'}》**第 {skeleton.segment_number} 大段《{skeleton.title}》**规划详细分镜（单段上限 **{cap} 秒**，初步预算 **{skeleton.planned_duration_seconds} 秒**，按真实紧凑节奏排镜，严禁凑秒或超载）。
+
+【全集大段总览（保持全局视野）】
+{episode_overview}
+{bible_block}
+【本大段边界交接契约】
+{handoff_block}
+- 本大段起始画面状态目标：{skeleton.entry_state}
+- 本大段结尾落定状态目标：{skeleton.exit_state}
+- 本大段首镜开场方向：{skeleton.opening_shot_direction}
+- 本大段末镜收束方向：{skeleton.closing_shot_direction}
+- 本大段预拟空间布局：{skeleton.scene_layout or '按圣经与场景卡保持工作侧一致'}
+- 预设资产线索：角色={skeleton.identity_ids}｜场景={skeleton.scene_ids}｜道具={skeleton.prop_ids}
+
+【项目视觉规格】
+- {style_context.s9_style_anchor}
+
+【本集已有资产与音色（仅允许精确引用其中 ID）】
+{planned_assets_summary}
+
+【本大段原文切片与前后边界】
+{source_slice}
+
+请严格按 YD分镜skills 输出本大段的 `S9SegmentExpansionOutput` JSON（`shots` 时间轴从 `0` 连续整数秒拼接到 `planned_duration_seconds`，台词逐字保留，每镜填全 `identity_ids`、`scene_id`、`prop_ids`）。"""
+
+
+async def _revise_s9_segment_local(
+    *,
+    segment: S9SegmentPlan,
+    issues: list[str],
+    prev_segment: S9SegmentPlan | None,
+    next_segment: S9SegmentPlan | None,
+    source_slice: str,
+    planned_assets_summary: str,
+    style_context: S9StyleContext,
+    max_segment_seconds: int,
+    spine_template: str,
+    tail_anchor: bool,
+) -> S9SegmentPlan:
+    from pydantic_ai import Agent
+
+    from novelvideo.config import get_newapi_text_pydantic_model
+
+    cap = normalize_max_segment_seconds(max_segment_seconds)
+    system_prompt = build_s9_stage1_system_prompt(
+        max_segment_seconds=cap,
+        spine_template=spine_template,
+        tail_anchor=tail_anchor,
+    )
+    agent = Agent(
+        get_newapi_text_pydantic_model(
+            "LITERAL_BEAT_META_MODEL",
+            brainclaw_profile=BrainClawProfile.LITERAL_BEAT_METADATA,
+            capability="text.generate.agent",
+        ),
+        system_prompt=system_prompt,
+        output_type=S9SegmentExpansionOutput,
+        model_settings=_s9_stage1_model_settings("LITERAL_BEAT_META_MODEL"),
+        retries=2,
+        name="YD Stage1 Local Segment Reviser",
+    )
+    neighbor_lines: list[str] = []
+    if prev_segment is not None:
+        prev_last_desc = ""
+        if prev_segment.shots:
+            pl = prev_segment.shots[-1]
+            prev_last_desc = f"；末镜={pl.shot_scale_movement}|{pl.camera_angle}|{pl.camera_motion}|{pl.content[:60]}"
+        neighbor_lines.append(
+            f"- 上一段结尾：{prev_segment.exit_state}{prev_last_desc}"
+        )
+    if next_segment is not None:
+        next_first_desc = ""
+        if next_segment.shots:
+            nf = next_segment.shots[0]
+            next_first_desc = f"；首镜={nf.shot_scale_movement}|{nf.camera_angle}|{nf.camera_motion}|{nf.content[:60]}"
+        neighbor_lines.append(
+            f"- 下一段开头：{next_segment.entry_state}{next_first_desc}"
+        )
+    neighbor_block = "\n".join(neighbor_lines) or "- 无邻接大段"
+
+    revision_prompt = (
+        f"请局部修订「大段{segment.segment_number}：{segment.title}」（单段上限 {cap} 秒），"
+        "修复下列节奏/负荷/衔接问题，输出修订后的 `S9SegmentExpansionOutput` JSON：\n\n"
+        "【待修复问题】\n"
+        + "\n".join(f"- {item}" for item in issues)
+        + f"\n\n【邻接段边界】\n{neighbor_block}\n\n"
+        f"【项目视觉规格】\n- {style_context.s9_style_anchor}\n\n"
+        f"【本集已有资产与音色】\n{planned_assets_summary}\n\n"
+        f"【本大段原文切片】\n{source_slice}\n\n"
+        f"【待修订当前大段 JSON】\n{segment.model_dump_json(ensure_ascii=False)}\n\n"
+        "要求：保留全部台词原字与关键事件，砍掉无效空镜/空尾、拆分超载镜头、确保段尾落定 `exit_state` 且不与邻段首尾镜同构重复。"
+    )
+    try:
+        res = await _run_s9_agent_streaming(agent, revision_prompt)
+        out = res.output
+        if out and out.shots:
+            candidate = segment.model_copy(
+                update={
+                    "planned_duration_seconds": max(
+                        MIN_S9_SEGMENT_SECONDS,
+                        min(cap, int(out.planned_duration_seconds or segment.planned_duration_seconds)),
+                    ),
+                    "story_beat": out.story_beat or segment.story_beat,
+                    "entry_state": out.entry_state or segment.entry_state,
+                    "exit_state": out.exit_state or segment.exit_state,
+                    "scene_layout": out.scene_layout or segment.scene_layout,
+                    "shots": out.shots,
+                }
             )
-    return await agent.run(prompt, **run_kwargs)
+            new_issues = audit_s9_segment_pacing(
+                candidate,
+                max_segment_seconds=cap,
+                require_exit_state=(next_segment is not None),
+            ) + _audit_s9_segment_boundary(prev_segment, candidate)
+            if len(new_issues) <= len(issues):
+                return candidate
+    except Exception as exc:
+        logger.warning(
+            "YD Stage 1 local revision failed for segment %s, keeping initial expansion: %s",
+            segment.segment_number,
+            exc,
+        )
+    return segment
+
+
+async def _run_s9_stage1_monolithic(
+    *,
+    source_text: str,
+    episode_num: int,
+    episode_title: str,
+    style_context: S9StyleContext,
+    planned_summary: str,
+    cap: int,
+    spine_template: str,
+    tail_anchor: bool,
+    prev_episode_context: str,
+) -> S9StoryboardPlan:
+    """Single-pass Stage 1 planner for very short scripts or skeleton fallback."""
+
+    from pydantic_ai import Agent
+
+    from novelvideo.config import get_newapi_text_pydantic_model
+
+    system_prompt = build_s9_stage1_system_prompt(
+        max_segment_seconds=cap,
+        spine_template=spine_template,
+        tail_anchor=tail_anchor,
+    )
+    task_prompt = build_s9_stage1_task_prompt(
+        source_text=source_text,
+        episode_num=episode_num,
+        episode_title=episode_title,
+        style_context=style_context,
+        planned_assets_summary=planned_summary,
+        max_segment_seconds=cap,
+        prev_episode_context=prev_episode_context,
+    )
+    agent = Agent(
+        get_newapi_text_pydantic_model(
+            "LITERAL_BEAT_META_MODEL",
+            brainclaw_profile=BrainClawProfile.LITERAL_BEAT_METADATA,
+            capability="text.generate.agent",
+        ),
+        system_prompt=system_prompt,
+        output_type=S9StoryboardPlan,
+        model_settings=_s9_stage1_model_settings("LITERAL_BEAT_META_MODEL"),
+        retries=3,
+        name="YD Stage1 Storyboard Planner",
+    )
+    result = await _run_s9_agent_streaming(agent, task_prompt)
+    plan = result.output
+
+    issues = audit_s9_plan_pacing(plan, max_segment_seconds=cap)
+    if issues and plan.segments:
+        if len(plan.segments) == 1:
+            logger.warning(
+                "YD Stage 1 pacing/closure audit found %d issue(s); running compact revision: %s",
+                len(issues),
+                "; ".join(issues[:5]),
+            )
+            revision_prompt = (
+                f"{task_prompt}\n\n"
+                "【初稿节奏与段尾衔接审校未通过，请按 YD分镜skills 紧凑档立即精简修订】\n"
+                "发现以下具体问题：\n"
+                + "\n".join(f"- {item}" for item in issues)
+                + "\n\n【待修订初稿 JSON】\n"
+                + plan.model_dump_json(ensure_ascii=False)
+                + "\n\n要求：\n"
+                "1. 保留原文全部台词与必要事件，绝对不要删减对白原字；\n"
+                "2. 砍掉无用段首空镜、压缩话少时多的空尾秒数、让动作与台词并行；\n"
+                "3. 严禁单镜超载：把多人轮流开口或 3 项以上连续道具交接拆成多个独立分镜（必要时多拆一个短 Clip），给每个动作留足物理时间；\n"
+                "4. 确保每个大段完整讲完自己的 story_beat 并在末镜落定清晰的 exit_state，且下一大段第 1 镜必须切换景别/机位推进到新动作，严禁与上段末镜拍成同构重复画面；\n"
+                f"5. 单段时长 <= {cap} 秒（整数秒），不为了凑满 {cap} 秒硬塞或拉长镜头。"
+            )
+            try:
+                revised = await _run_s9_agent_streaming(agent, revision_prompt)
+                if revised.output and revised.output.segments:
+                    revised_issues = audit_s9_plan_pacing(revised.output, max_segment_seconds=cap)
+                    if len(revised_issues) <= len(issues):
+                        plan = revised.output
+            except Exception as exc:
+                logger.warning("YD Stage 1 compact revision failed, keeping initial plan: %s", exc)
+        else:
+            # Multi-segment monolithic result: revise only flagged segments in parallel.
+            segments = list(plan.segments)
+            semaphore = asyncio.Semaphore(get_s9_llm_concurrency())
+
+            async def _fix(idx: int) -> S9SegmentPlan:
+                seg_issues = audit_s9_segment_pacing(
+                    segments[idx],
+                    max_segment_seconds=cap,
+                    require_exit_state=(idx < len(segments) - 1),
+                ) + _audit_s9_segment_boundary(segments[idx - 1] if idx > 0 else None, segments[idx])
+                if not seg_issues:
+                    return segments[idx]
+                async with semaphore:
+                    return await _revise_s9_segment_local(
+                        segment=segments[idx],
+                        issues=seg_issues,
+                        prev_segment=segments[idx - 1] if idx > 0 else None,
+                        next_segment=segments[idx + 1] if idx + 1 < len(segments) else None,
+                        source_slice=segments[idx].source_excerpt or source_text,
+                        planned_assets_summary=planned_summary,
+                        style_context=style_context,
+                        max_segment_seconds=cap,
+                        spine_template=spine_template,
+                        tail_anchor=tail_anchor,
+                    )
+
+            revised_segments = await asyncio.gather(*(_fix(i) for i in range(len(segments))))
+            plan = plan.model_copy(update={"segments": list(revised_segments)})
+    return plan
 
 
 async def run_s9_stage1_plan(
@@ -1845,35 +3135,66 @@ async def run_s9_stage1_plan(
     episode: Any,
     voice_available_names: set[str],
     scenes: list[Any] | None = None,
+    props: list[Any] | None = None,
     output_dir: str | Path | None = None,
     max_segment_seconds: int = DEFAULT_S9_MAX_SEGMENT_SECONDS,
     spine_template: str = "drama",
     tail_anchor: bool = False,
     prev_episode_context: str = "",
 ) -> S9StoryboardPlan:
-    """Invoke LLM to compute Stage 1 S9StoryboardPlan with YD compact pacing audit."""
+    """Invoke LLM to compute Stage 1 S9StoryboardPlan.
+
+    Uses Pass 1A (lightweight global skeleton + Continuity Bible) followed by
+    parallel Pass 1B (per-segment shot expansion + local selective revision) for
+    multi-line/longer episodes, falling back cleanly to a single-pass plan for
+    very short inputs.
+    """
 
     from pydantic_ai import Agent
 
-    from novelvideo.config import (
-        get_newapi_structured_output_model_settings,
-        get_newapi_text_pydantic_model,
-    )
+    from novelvideo.config import get_newapi_text_pydantic_model
 
     cap = normalize_max_segment_seconds(max_segment_seconds)
-    system_prompt = build_s9_stage1_system_prompt(
-        max_segment_seconds=cap,
-        spine_template=spine_template,
-        tail_anchor=tail_anchor,
-    )
     planned_summary = _format_planned_assets_summary(
         characters=characters,
         episode=episode,
         voice_available_names=voice_available_names,
         scenes=scenes,
+        props=props,
         output_dir=output_dir,
     )
-    task_prompt = build_s9_stage1_task_prompt(
+
+    if not _should_use_two_pass_stage1(source_text):
+        return await _run_s9_stage1_monolithic(
+            source_text=source_text,
+            episode_num=episode_num,
+            episode_title=episode_title,
+            style_context=style_context,
+            planned_summary=planned_summary,
+            cap=cap,
+            spine_template=spine_template,
+            tail_anchor=tail_anchor,
+            prev_episode_context=prev_episode_context,
+        )
+
+    # Pass 1A: Lightweight global skeleton + Continuity Bible
+    skeleton_agent = Agent(
+        get_newapi_text_pydantic_model(
+            "LITERAL_BEAT_META_MODEL",
+            brainclaw_profile=BrainClawProfile.LITERAL_BEAT_METADATA,
+            capability="text.generate.agent",
+        ),
+        system_prompt=_build_s9_stage1_skeleton_system_prompt(
+            max_segment_seconds=cap,
+            spine_template=spine_template,
+            tail_anchor=tail_anchor,
+        ),
+        output_type=S9Stage1SkeletonPlan,
+        model_settings=_s9_stage1_model_settings("LITERAL_BEAT_META_MODEL"),
+        retries=3,
+        name="YD Stage1A Skeleton Planner",
+    )
+    skeleton_task_prompt = _build_s9_stage1_skeleton_task_prompt(
         source_text=source_text,
         episode_num=episode_num,
         episode_title=episode_title,
@@ -1882,53 +3203,181 @@ async def run_s9_stage1_plan(
         max_segment_seconds=cap,
         prev_episode_context=prev_episode_context,
     )
+    skeleton_res = await _run_s9_agent_streaming(skeleton_agent, skeleton_task_prompt)
+    skeleton_plan: S9Stage1SkeletonPlan = skeleton_res.output
+    skeletons = list(skeleton_plan.segments or [])
+    if not skeletons:
+        logger.warning("Stage 1A returned empty segments; falling back to monolithic Stage 1")
+        return await _run_s9_stage1_monolithic(
+            source_text=source_text,
+            episode_num=episode_num,
+            episode_title=episode_title,
+            style_context=style_context,
+            planned_summary=planned_summary,
+            cap=cap,
+            spine_template=spine_template,
+            tail_anchor=tail_anchor,
+            prev_episode_context=prev_episode_context,
+        )
 
-    agent = Agent(
+    clean_excerpts, context_slices = slice_s9_source_text_for_segments(source_text, skeletons)
+    episode_overview = "\n".join(
+        f"- 大段{sk.segment_number}《{sk.title}》（约{sk.planned_duration_seconds}秒）：{sk.story_beat} "
+        f"[起态：{sk.entry_state or '承接前态'} → 终态：{sk.exit_state or '自然收束'}]"
+        for sk in skeletons
+    )
+
+    bible_summary_parts: list[str] = []
+    bible = skeleton_plan.continuity_bible
+    for lr in bible.scene_lighting_rules:
+        bible_summary_parts.append(
+            f"- 场景光影 `{lr.scene_id}`（{lr.time_of_day or '固定时段'}）：{lr.key_lighting}｜{lr.color_and_material}"
+        )
+    for sr in bible.scene_layout_rules:
+        bible_summary_parts.append(
+            f"- 场景坐标 `{sr.scene_id}`：主视={sr.primary_view_direction}｜地标={sr.landmarks}｜工作侧={sr.camera_working_side}"
+        )
+    for pc in bible.prop_state_chain:
+        if str(pc).strip():
+            bible_summary_parts.append(f"- 道具链：{pc}")
+    for vp in bible.voice_profiles:
+        if vp.speaker:
+            bible_summary_parts.append(f"- 声线 `{vp.speaker}`：{vp.voice_design}")
+    bible_summary = "\n".join(bible_summary_parts)
+
+    expand_system_prompt = build_s9_stage1_system_prompt(
+        max_segment_seconds=cap,
+        spine_template=spine_template,
+        tail_anchor=tail_anchor,
+    )
+    expand_agent = Agent(
         get_newapi_text_pydantic_model(
             "LITERAL_BEAT_META_MODEL",
             brainclaw_profile=BrainClawProfile.LITERAL_BEAT_METADATA,
             capability="text.generate.agent",
         ),
-        system_prompt=system_prompt,
-        output_type=S9StoryboardPlan,
-        model_settings=get_newapi_structured_output_model_settings(),
-        retries=3,
-        name="YD Stage1 Storyboard Planner",
+        system_prompt=expand_system_prompt,
+        output_type=S9SegmentExpansionOutput,
+        model_settings=_s9_stage1_model_settings("LITERAL_BEAT_META_MODEL"),
+        retries=2,
+        name="YD Stage1B Segment Expander",
     )
-    result = await _run_s9_agent_streaming(agent, task_prompt)
-    plan = result.output
+    semaphore = asyncio.Semaphore(get_s9_llm_concurrency())
 
-    issues = audit_s9_plan_pacing(plan, max_segment_seconds=cap)
-    if issues and plan.segments:
+    async def _expand_one(idx: int) -> S9SegmentPlan:
+        sk = skeletons[idx]
+        task_prompt = _build_s9_stage1_expand_task_prompt(
+            skeleton=sk,
+            episode_overview=episode_overview,
+            bible_summary=bible_summary,
+            prev_skeleton=skeletons[idx - 1] if idx > 0 else None,
+            next_skeleton=skeletons[idx + 1] if idx + 1 < len(skeletons) else None,
+            prev_episode_context=prev_episode_context if idx == 0 else "",
+            style_context=style_context,
+            planned_assets_summary=planned_summary,
+            source_slice=context_slices[idx],
+            episode_num=episode_num,
+            episode_title=episode_title,
+            max_segment_seconds=cap,
+        )
+        async with semaphore:
+            try:
+                res = await _run_s9_agent_streaming(expand_agent, task_prompt)
+                out: S9SegmentExpansionOutput = res.output
+                if out and out.shots:
+                    seg_dur = max(
+                        MIN_S9_SEGMENT_SECONDS,
+                        min(cap, int(out.planned_duration_seconds or sk.planned_duration_seconds or 15)),
+                    )
+                    return S9SegmentPlan(
+                        segment_number=idx + 1,
+                        title=sk.title or f"第{idx + 1}幕",
+                        planned_duration_seconds=seg_dur,
+                        source_excerpt=clean_excerpts[idx],
+                        story_beat=out.story_beat or sk.story_beat,
+                        entry_state=out.entry_state or sk.entry_state,
+                        exit_state=out.exit_state or sk.exit_state,
+                        scene_layout=out.scene_layout or sk.scene_layout,
+                        shots=out.shots,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Stage 1B segment %s expansion failed, creating fallback shot from skeleton: %s",
+                    idx + 1,
+                    exc,
+                )
+        fallback_dur = max(
+            MIN_S9_SEGMENT_SECONDS,
+            min(cap, int(sk.planned_duration_seconds or 15)),
+        )
+        return S9SegmentPlan(
+            segment_number=idx + 1,
+            title=sk.title or f"第{idx + 1}幕",
+            planned_duration_seconds=fallback_dur,
+            source_excerpt=clean_excerpts[idx],
+            story_beat=sk.story_beat,
+            entry_state=sk.entry_state,
+            exit_state=sk.exit_state,
+            scene_layout=sk.scene_layout,
+            shots=[
+                S9SubShot(
+                    shot_number=1,
+                    planned_duration_seconds=float(fallback_dur),
+                    start_seconds=0.0,
+                    end_seconds=float(fallback_dur),
+                    content=sk.story_beat or clean_excerpts[idx][:180] or "主体画面推进。",
+                    identity_ids=list(sk.identity_ids),
+                    scene_id=sk.scene_ids[0] if sk.scene_ids else "",
+                    prop_ids=list(sk.prop_ids),
+                )
+            ],
+        )
+
+    expanded_segments = list(
+        await asyncio.gather(*(_expand_one(i) for i in range(len(skeletons))))
+    )
+
+    # Selective local pacing & boundary repair (concurrent only on flagged segments)
+    async def _maybe_repair(idx: int) -> S9SegmentPlan:
+        seg = expanded_segments[idx]
+        prev_seg = expanded_segments[idx - 1] if idx > 0 else None
+        next_seg = expanded_segments[idx + 1] if idx + 1 < len(expanded_segments) else None
+        issues = audit_s9_segment_pacing(
+            seg,
+            max_segment_seconds=cap,
+            require_exit_state=(len(expanded_segments) >= 2 and idx < len(expanded_segments) - 1),
+        ) + _audit_s9_segment_boundary(prev_seg, seg)
+        if not issues:
+            return seg
         logger.warning(
-            "YD Stage 1 pacing/closure audit found %d issue(s); running compact revision: %s",
+            "YD Stage 1B segment %d audit found %d issue(s); running local repair: %s",
+            seg.segment_number,
             len(issues),
-            "; ".join(issues[:5]),
+            "; ".join(issues[:4]),
         )
-        revision_prompt = (
-            f"{task_prompt}\n\n"
-            "【初稿节奏与段尾衔接审校未通过，请按 YD分镜skills 紧凑档立即精简修订】\n"
-            "发现以下具体问题：\n"
-            + "\n".join(f"- {item}" for item in issues)
-            + "\n\n【待修订初稿 JSON】\n"
-            + plan.model_dump_json(ensure_ascii=False)
-            + "\n\n要求：\n"
-            "1. 保留原文全部台词与必要事件，绝对不要删减对白原字；\n"
-            "2. 砍掉无用段首空镜、压缩话少时多的空尾秒数、让动作与台词并行；\n"
-            "3. 严禁单镜超载：把多人轮流开口或 3 项以上连续道具交接拆成多个独立分镜（必要时多拆一个短 Clip），给每个动作留足物理时间；\n"
-            "4. 确保每个大段完整讲完自己的 story_beat 并在末镜落定清晰的 exit_state，且下一大段第 1 镜必须切换景别/机位推进到新动作，严禁与上段末镜拍成同构重复画面；\n"
-            f"5. 单段时长 <= {cap} 秒（整数秒），不为了凑满 {cap} 秒硬塞或拉长镜头。"
-        )
-        try:
-            revised = await _run_s9_agent_streaming(agent, revision_prompt)
-            if revised.output and revised.output.segments:
-                revised_issues = audit_s9_plan_pacing(revised.output, max_segment_seconds=cap)
-                if len(revised_issues) <= len(issues):
-                    plan = revised.output
-        except Exception as exc:
-            logger.warning("YD Stage 1 compact revision failed, keeping initial plan: %s", exc)
+        async with semaphore:
+            return await _revise_s9_segment_local(
+                segment=seg,
+                issues=issues,
+                prev_segment=prev_seg,
+                next_segment=next_seg,
+                source_slice=context_slices[idx],
+                planned_assets_summary=planned_summary,
+                style_context=style_context,
+                max_segment_seconds=cap,
+                spine_template=spine_template,
+                tail_anchor=tail_anchor,
+            )
 
-    return plan
+    repaired_segments = list(
+        await asyncio.gather(*(_maybe_repair(i) for i in range(len(expanded_segments))))
+    )
+    return S9StoryboardPlan(
+        duration_assessment=skeleton_plan.duration_assessment,
+        asset_manifest=skeleton_plan.asset_manifest,
+        continuity_bible=skeleton_plan.continuity_bible,
+        segments=repaired_segments,
+    )
 
 
 def _has_stage2_truncation_issue(issues: list[str]) -> bool:
@@ -2107,11 +3556,42 @@ def extract_s9_lighting_style_block(prompt: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+_LIGHTING_IMAGE_MENTION_GROUP_RE = re.compile(
+    r"@图片\d+(?:[、,，/与和及\s]+@图片\d+)*"
+)
+
+
+def sanitize_s9_lighting_anchor(lighting_block: str) -> str:
+    """Strip segment-specific @图片N indices before reusing 【全局光影画风】 across segments."""
+
+    text = str(lighting_block or "").strip()
+    if not text:
+        return ""
+    return _LIGHTING_IMAGE_MENTION_GROUP_RE.sub("本段场景参考图", text)
+
+
 def _primary_scene_key_for_slots(slots: list[S9SegmentAssetSlot]) -> str:
     for slot in slots or []:
         if slot.asset_kind == "scene" and slot.asset_id:
-            return f"{slot.asset_id}|{slot.variant_id}"
+            sid, vid = _normalize_scene_id_variant(slot.asset_id, slot.variant_id)
+            return f"{sid}_{vid}" if vid else sid
     return ""
+
+
+def _resolve_scene_lighting_group_key(
+    plate_key: str,
+    known_keys: dict[str, int],
+) -> str:
+    """Match exact plate or base/variant sibling so same physical room shares lighting."""
+
+    if not plate_key:
+        return ""
+    if plate_key in known_keys:
+        return plate_key
+    for existing in known_keys:
+        if plate_key.startswith(f"{existing}_") or existing.startswith(f"{plate_key}_"):
+            return existing
+    return plate_key
 
 
 async def generate_all_s9_segment_prompts(
@@ -2122,88 +3602,135 @@ async def generate_all_s9_segment_prompts(
     prev_episode_context: str = "",
     tail_anchor: bool = False,
     include_first_frame: bool = False,
-    max_concurrency: int = 4,
+    max_concurrency: int | None = None,
     source_text: str = "",
+    source_slices_by_segment: list[str] | None = None,
     scene_context_notes_by_segment: list[str] | None = None,
     continuity_anchor: str = "",
+    on_segment_done: Any = None,
 ) -> list[str]:
     """Generate Stage 2 continuous prompts across all 大段 with bounded concurrency.
 
-    When multiple segments share the same primary scene, the first segment of
-    each scene compiles in wave 1 so its resolved ``【全局光影画风】`` block can
-    be inherited by subsequent segments in that same scene (wave 2), locking
-    color tone and lighting across clips without sacrificing parallelism.
+    When ``plan.continuity_bible`` carries pre-locked scene lighting/layout rules,
+    every segment receives those shared rules up-front and compiles in a single
+    parallel wave without waiting on wave 1. Otherwise, legacy wave 1 -> wave 2
+    lighting inheritance runs for same-scene segments.
     """
 
-    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+    effective_concurrency = (
+        max(1, int(max_concurrency))
+        if max_concurrency is not None
+        else get_s9_llm_concurrency()
+    )
+    semaphore = asyncio.Semaphore(effective_concurrency)
     segments = plan.segments
     if not segments:
         return []
 
-    scene_keys = [
+    bible = getattr(plan, "continuity_bible", None)
+    has_prelocked_bible = bool(
+        bible is not None
+        and (
+            bible.scene_lighting_rules
+            or bible.scene_layout_rules
+            or bible.prop_state_chain
+            or bible.voice_profiles
+        )
+    )
+
+    raw_scene_keys = [
         _primary_scene_key_for_slots(per_segment_slots[i] if i < len(per_segment_slots) else [])
         for i in range(len(segments))
     ]
+    scene_keys: list[str] = []
     wave1_indices: list[int] = []
     wave2_indices: list[int] = []
     first_idx_by_scene: dict[str, int] = {}
-    for i, skey in enumerate(scene_keys):
-        if skey and skey in first_idx_by_scene:
-            wave2_indices.append(i)
-        else:
-            if skey:
-                first_idx_by_scene[skey] = i
-            wave1_indices.append(i)
+    if has_prelocked_bible:
+        scene_keys = list(raw_scene_keys)
+        wave1_indices = list(range(len(segments)))
+    else:
+        for i, raw_skey in enumerate(raw_scene_keys):
+            skey = _resolve_scene_lighting_group_key(raw_skey, first_idx_by_scene)
+            scene_keys.append(skey)
+            if skey and skey in first_idx_by_scene:
+                wave2_indices.append(i)
+            else:
+                if skey:
+                    first_idx_by_scene[skey] = i
+                wave1_indices.append(i)
 
     results: list[str] = [""] * len(segments)
 
     async def _compile_one(idx: int, extra_anchor: str = "") -> str:
+        seg = segments[idx]
+        slots = per_segment_slots[idx] if idx < len(per_segment_slots) else []
         seg_notes = (
             scene_context_notes_by_segment[idx]
             if scene_context_notes_by_segment and idx < len(scene_context_notes_by_segment)
             else ""
         )
-        combined_anchor = "\n".join(
-            part for part in (continuity_anchor.strip(), extra_anchor.strip()) if part
+        seg_source = (
+            source_slices_by_segment[idx]
+            if source_slices_by_segment and idx < len(source_slices_by_segment)
+            else (seg.source_excerpt or source_text)
+        )
+        bible_anchor = (
+            format_s9_continuity_bible_for_segment(bible, segment=seg, slots=slots)
+            if has_prelocked_bible
+            else ""
+        )
+        combined_anchor = "\n\n".join(
+            part
+            for part in (continuity_anchor.strip(), bible_anchor.strip(), extra_anchor.strip())
+            if part
         )
         async with semaphore:
-            return await run_s9_stage2_segment_prompt(
-                segment=segments[idx],
-                slots=per_segment_slots[idx],
+            rendered = await run_s9_stage2_segment_prompt(
+                segment=seg,
+                slots=slots,
                 style_context=style_context,
                 prev_segment=segments[idx - 1] if idx > 0 else None,
                 next_segment=segments[idx + 1] if idx + 1 < len(segments) else None,
                 prev_episode_context=prev_episode_context if idx == 0 else "",
                 tail_anchor=tail_anchor,
                 include_first_frame=include_first_frame,
-                source_text=source_text,
+                source_text=seg_source,
                 scene_context_notes=seg_notes,
                 continuity_anchor=combined_anchor,
             )
+        results[idx] = rendered
+        if on_segment_done is not None:
+            cb_res = on_segment_done(idx, rendered)
+            if inspect.isawaitable(cb_res):
+                await cb_res
+        return rendered
 
     wave1_outputs = await asyncio.gather(*(_compile_one(i) for i in wave1_indices))
-    scene_lighting_anchor: dict[str, str] = {}
-    for idx, text in zip(wave1_indices, wave1_outputs):
-        results[idx] = text
-        skey = scene_keys[idx]
-        if skey:
-            lighting = extract_s9_lighting_style_block(text)
-            if lighting:
-                scene_lighting_anchor[skey] = (
-                    f"同场景首段（大段{segments[idx].segment_number}）已锁定的光影画风基准"
-                    "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变）：\n"
-                    f"{lighting}"
-                )
-
-    if wave2_indices:
-        wave2_outputs = await asyncio.gather(
-            *(
-                _compile_one(i, extra_anchor=scene_lighting_anchor.get(scene_keys[i], ""))
-                for i in wave2_indices
-            )
-        )
-        for idx, text in zip(wave2_indices, wave2_outputs):
+    if not has_prelocked_bible:
+        scene_lighting_anchor: dict[str, str] = {}
+        for idx, text in zip(wave1_indices, wave1_outputs):
             results[idx] = text
+            skey = scene_keys[idx]
+            if skey:
+                lighting = sanitize_s9_lighting_anchor(extract_s9_lighting_style_block(text))
+                if lighting:
+                    scene_lighting_anchor[skey] = (
+                        f"同场景首段（大段{segments[idx].segment_number}）已锁定的光影画风基准"
+                        "（本段必须严格沿用同一主光来源、方向、时段与色彩基调，禁止改变；"
+                        "引用场景图时请按本段【本大段素材槽位表】的实际 @图片N 编号书写，严禁照抄前段编号）：\n"
+                        f"{lighting}"
+                    )
+
+        if wave2_indices:
+            wave2_outputs = await asyncio.gather(
+                *(
+                    _compile_one(i, extra_anchor=scene_lighting_anchor.get(scene_keys[i], ""))
+                    for i in wave2_indices
+                )
+            )
+            for idx, text in zip(wave2_indices, wave2_outputs):
+                results[idx] = text
 
     return results
 
@@ -2310,22 +3837,50 @@ def _match_resolved_asset_to_slot(
     if want_kind == "first_frame":
         return candidates[0] if candidates else None
 
+    slot_sid, slot_vid = _normalize_scene_id_variant(
+        str(slot.asset_id or "").strip(),
+        str(slot.variant_id or "").strip(),
+    )
+    slot_plate_id = (f"{slot_sid}_{slot_vid}" if slot_vid else slot_sid).lower()
+
+    # Pass 1: exact suffix/key match (prevents base "客厅" from stealing variant "客厅_狼藉版")
+    for asset in candidates:
+        key = str(getattr(asset, "key", "") or "").lower()
+        suffix = key.split(":", 1)[-1] if ":" in key else key
+        if slot_plate_id and (suffix == slot_plate_id or key == slot_plate_id):
+            return asset
+        if slot_id and (suffix == slot_id or key == slot_id):
+            return asset
+
+    # Pass 2: exact label / display suffix match
+    for asset in candidates:
+        label = str(getattr(asset, "label", "") or "").lower()
+        label_tail = label.split("·")[-1].strip() if "·" in label else label
+        if slot_plate_id and (label == slot_plate_id or label_tail == slot_plate_id):
+            return asset
+        if slot_name and (label == slot_name or label_tail == slot_name):
+            return asset
+
+    # Pass 3: substring fallback (prefer longest matching suffix so specific variants win)
+    best_fuzzy: tuple[int, Any] | None = None
     for asset in candidates:
         key = str(getattr(asset, "key", "") or "").lower()
         label = str(getattr(asset, "label", "") or "").lower()
         suffix = key.split(":", 1)[-1] if ":" in key else key
-        if slot_id and (
-            suffix == slot_id
-            or key == slot_id
-            or slot_id in key
-            or slot_id in label
-            or (suffix and suffix in slot_id)
+        if slot_plate_id and (
+            slot_plate_id in key
+            or slot_plate_id in label
+            or (suffix and suffix in slot_plate_id)
         ):
-            return asset
-    for asset in candidates:
-        label = str(getattr(asset, "label", "") or "").lower()
-        if slot_name and (slot_name == label or slot_name in label or label in slot_name):
-            return asset
+            score = len(suffix)
+            if best_fuzzy is None or score > best_fuzzy[0]:
+                best_fuzzy = (score, asset)
+        elif slot_name and (slot_name in label or label in slot_name):
+            score = len(label)
+            if best_fuzzy is None or score > best_fuzzy[0]:
+                best_fuzzy = (score, asset)
+    if best_fuzzy is not None:
+        return best_fuzzy[1]
     return candidates[0] if len(candidates) == 1 and want_kind == "scene" else None
 
 
@@ -2401,21 +3956,32 @@ def rebind_s9_prompt_with_active_assets(
                 ordered_assets.append(matched)
                 seen_paths.add(matched_path)
 
-    # Also include any additional selected assets (e.g. user manual uploads) after manifest slots
+    # Also include any additional selected assets (e.g. user manual uploads) after manifest slots,
+    # keeping all image assets grouped before audio assets so trailing images never land after audios.
+    extra_images: list[Any] = []
+    extra_audios: list[Any] = []
     for asset in assets:
         key = str(getattr(asset, "key", "") or "")
         path = str(getattr(asset, "path", "") or "")
         if key == "first_frame" and not include_first_frame:
             continue
         if path and path not in seen_paths and getattr(asset, "selected", True):
-            ordered_assets.append(asset)
             seen_paths.add(path)
             if str(getattr(asset, "media_type", "")) == "image":
                 image_index += 1
                 path_to_runtime[("image", path)] = image_index
+                extra_images.append(asset)
             elif str(getattr(asset, "media_type", "")) == "audio":
                 audio_index += 1
                 path_to_runtime[("audio", path)] = audio_index
+                extra_audios.append(asset)
+            else:
+                extra_audios.append(asset)
+
+    if extra_images or extra_audios:
+        base_images = [a for a in ordered_assets if str(getattr(a, "media_type", "")) == "image"]
+        base_audios = [a for a in ordered_assets if str(getattr(a, "media_type", "")) != "image"]
+        ordered_assets = [*base_images, *extra_images, *base_audios, *extra_audios]
 
     text = str(prompt or "")
     if slots and text.strip():
@@ -2499,17 +4065,14 @@ def build_s9_scene_prop_consistency_notes(
     for slot in slots:
         if slot.asset_kind not in {"scene", "scene_reverse"} or not slot.asset_id:
             continue
-        key = f"{slot.asset_id}|{slot.variant_id}"
-        if key in seen_scenes:
-            continue
-        seen_scenes.add(key)
-        plate_key = f"{slot.asset_id}_{slot.variant_id}" if slot.variant_id else slot.asset_id
-        scene_obj = scene_lookup.get(plate_key) or scene_lookup.get(slot.asset_id)
-        base_obj = (
-            scene_lookup.get(slot.asset_id)
-            if scene_obj is not None and scene_obj is not scene_lookup.get(slot.asset_id)
-            else None
+        plate_key, scene_obj, base_obj = _resolve_scene_and_base(
+            scene_lookup,
+            slot.asset_id,
+            slot.variant_id,
         )
+        if plate_key in seen_scenes:
+            continue
+        seen_scenes.add(plate_key)
         scene_time = str(getattr(scene_obj, "time_of_day", "") or "").strip() if scene_obj else ""
         effective_time = str(time_of_day or "").strip() or scene_time
         if effective_time:
@@ -3033,13 +4596,20 @@ __all__ = [
     "MIN_S9_SEGMENT_SECONDS",
     "S9AssetManifestItem",
     "S9DurationAssessment",
+    "S9EpisodeContinuityBible",
     "S9EpisodePreviewMeta",
+    "S9SceneLayoutAnchor",
+    "S9SceneLightingAnchor",
     "S9SegmentAssetSlot",
+    "S9SegmentExpansionOutput",
     "S9SegmentMeta",
     "S9SegmentPlan",
+    "S9Stage1SkeletonPlan",
+    "S9Stage1SkeletonSegment",
     "S9StoryboardPlan",
     "S9StyleContext",
     "S9SubShot",
+    "S9VoiceProfileAnchor",
     "S9_PROMPT_SOURCE",
     "S9_PROMPT_STYLE",
     "VALID_S9_MAX_SEGMENT_SECONDS",
@@ -3047,6 +4617,8 @@ __all__ = [
     "aggregate_segment_visual_summary",
     "aspect_ratio_to_video_ratio",
     "audit_s9_plan_pacing",
+    "audit_s9_segment_pacing",
+    "build_s9_context_slice_from_episode_text",
     "build_s9_scene_prop_consistency_notes",
     "build_s9_stage1_system_prompt",
     "build_s9_stage1_task_prompt",
@@ -3055,9 +4627,12 @@ __all__ = [
     "build_s9_stage2_task_prompt",
     "compute_segment_subshots_update",
     "compute_s9_manifest_with_live_status",
+    "enrich_s9_continuity_bible",
     "extract_s9_lighting_style_block",
+    "format_s9_continuity_bible_for_segment",
     "format_slot_table_for_stage2",
     "generate_all_s9_segment_prompts",
+    "get_s9_llm_concurrency",
     "is_s9_segment_beat",
     "normalize_max_segment_seconds",
     "normalize_s9_storyboard_plan",
@@ -3068,4 +4643,7 @@ __all__ = [
     "resolve_s9_style_context",
     "run_s9_stage1_plan",
     "run_s9_stage2_segment_prompt",
+    "sanitize_s9_lighting_anchor",
+    "slice_s9_source_text_for_segments",
+    "text_uses_reverse_scene_view",
 ]

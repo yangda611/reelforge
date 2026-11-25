@@ -47,6 +47,7 @@ _TASK_TYPE_LABELS = {
     "build_episodes": "规划剧集",
     "identity_planner": "规划身份",
     "script_writer": "生成剧本",
+    "seedance2_prompt_batch": "批量更新视频提示词",
     "literal_script_writer": "生成解说稿",
     "director_notes": "导演说明",
     "episode_scene_planner": "规划场景",
