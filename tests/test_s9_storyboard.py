@@ -2091,6 +2091,98 @@ def test_s9_strip_mention_backticks_and_collapse_duplicate_scene_name():
     ) == ("艾莉森公寓客厅_狼藉版", "")
 
 
+@pytest.mark.asyncio
+async def test_s9_workflow_syncs_reused_project_props_into_episode_prop_menu(monkeypatch, tmp_path):
+    from novelvideo.models import NovelProp, PropMenuItem
+    from novelvideo.workflows import s9_script_writing as wf_mod
+
+    patched_calls: list[tuple[int, dict]] = []
+
+    class _StubStore:
+        state_dir = str(tmp_path / "state")
+
+        def get_episode(self, _num):
+            return SimpleNamespace(
+                episode_number=3,
+                title="第3集",
+                identity_ids=["艾莉森_律师时期"],
+                identity_default_map_json="",
+                scene_menu=[SimpleNamespace(scene_id="客厅", variant_id="")],
+                prop_menu=[PropMenuItem(prop_id="啤酒瓶")],
+            )
+
+        def get_all_characters(self):
+            return [
+                SimpleNamespace(
+                    name="艾莉森",
+                    aliases=[],
+                    identities=[SimpleNamespace(identity_id="艾莉森_律师时期")],
+                    reference_audio_path="",
+                )
+            ]
+
+        async def list_scenes(self):
+            return []
+
+        async def list_props(self):
+            return [
+                NovelProp(name="啤酒瓶", description="棕色玻璃瓶"),
+                NovelProp(name="公文包", description="深棕色硬质皮革公文包"),
+            ]
+
+        async def persist_narration_script(self, _script):
+            return None
+
+        async def patch_episode(self, ep_num, **fields):
+            patched_calls.append((ep_num, fields))
+
+    raw_plan = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="推门",
+                planned_duration_seconds=8,
+                story_beat="艾莉森拎着公文包推门进入客厅",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=8,
+                        start_seconds=0,
+                        end_seconds=8,
+                        content="艾莉森左手紧拎公文包跨进门，桌上摆着啤酒瓶。",
+                        identity_ids=["艾莉森_律师时期"],
+                        scene_id="客厅",
+                        prop_ids=["啤酒瓶"],
+                        audio_type="silence",
+                    )
+                ],
+            )
+        ]
+    )
+
+    async def fake_stage1(**_kw):
+        return raw_plan
+
+    async def fake_stage2_all(**_kw):
+        return ["【参考职责】\n- @图片1：艾莉森。\n\n【全局光影画风】\n实拍。\n\n【注意事项】\n无。\n\n分镜1（0秒到8秒）：推门。"]
+
+    monkeypatch.setattr(wf_mod, "run_s9_stage1_plan", fake_stage1)
+    monkeypatch.setattr(wf_mod, "generate_all_s9_segment_prompts", fake_stage2_all)
+
+    wf = wf_mod.S9ScriptWritingWorkflow(
+        cognee_store=_StubStore(),
+        output_dir=str(tmp_path / "output"),
+    )
+    script = await wf.run(episode_num=3, source_text="艾莉森拎着公文包回家。")
+    assert "公文包" in script.beats[0].s9_segment_meta_json
+    assert len(patched_calls) == 1
+    ep_num, fields = patched_calls[0]
+    assert ep_num == 3
+    synced_ids = [item.prop_id for item in fields["prop_menu"]]
+    assert synced_ids == ["啤酒瓶", "公文包"]
+
+
+
 
 
 

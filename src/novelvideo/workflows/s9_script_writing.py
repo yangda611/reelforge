@@ -389,12 +389,61 @@ class S9ScriptWritingWorkflow:
         )
         # Option B: persist Stage 1 beats + continuity bible immediately so UI can preview while Stage 2 runs
         await self.cognee_store.persist_narration_script(script)
+
+        # Sync any cross-episode project props reused by beats into this episode's prop_menu
+        # so the workbench treats them as planned episode props (not stale/removed).
+        prop_menu = list(getattr(episode, "prop_menu", []) or [])
+        existing_menu_prop_ids = {
+            str(getattr(item, "prop_id", "") or getattr(item, "name", "") or "").strip()
+            for item in prop_menu
+        }
+        project_props_by_name = {
+            str(getattr(p, "name", "") or "").strip(): p
+            for p in props or []
+            if str(getattr(p, "name", "") or "").strip()
+        }
+        reused_prop_candidates: list[str] = []
+        for seg_slots in per_segment_slots:
+            for slot in seg_slots:
+                if slot.asset_kind == "prop" and slot.asset_id:
+                    reused_prop_candidates.append(str(slot.asset_id).strip())
+        for seg in plan.segments:
+            for shot in seg.shots:
+                for pid in list(getattr(shot, "prop_ids", []) or []):
+                    if str(pid or "").strip():
+                        reused_prop_candidates.append(str(pid).strip())
+
+        added_prop_items: list[Any] = []
+        for clean_pid in reused_prop_candidates:
+            if not clean_pid or clean_pid in existing_menu_prop_ids:
+                continue
+            proj_prop = project_props_by_name.get(clean_pid)
+            if proj_prop is None:
+                continue
+            from novelvideo.models import PropMenuItem
+
+            existing_menu_prop_ids.add(clean_pid)
+            added_prop_items.append(
+                PropMenuItem(
+                    prop_id=clean_pid,
+                    prop_type=str(getattr(proj_prop, "prop_type", "") or "object"),
+                    visual_prompt=str(getattr(proj_prop, "visual_prompt", "") or ""),
+                    description=str(getattr(proj_prop, "description", "") or ""),
+                )
+            )
+        if added_prop_items:
+            prop_menu = [*prop_menu, *added_prop_items]
+            if callable(getattr(self.cognee_store, "patch_episode", None)):
+                try:
+                    await self.cognee_store.patch_episode(episode_num, prop_menu=prop_menu)
+                except Exception as exc:
+                    logger.warning("同步跨集复用道具到第 %d 集 prop_menu 失败: %s", episode_num, exc)
+
         report_progress(
             0.50,
             f"Stage 1 完成：已保存 {len(plan.segments)} 个大段预览，正在并发生成视频提示词",
         )
 
-        prop_menu = list(getattr(episode, "prop_menu", []) or [])
         has_multi_segments = len(plan.segments) > 1
         scene_context_notes_by_segment = [
             build_s9_scene_prop_consistency_notes(

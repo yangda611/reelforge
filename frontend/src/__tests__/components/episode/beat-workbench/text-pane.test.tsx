@@ -60,6 +60,16 @@ vi.mock("@/lib/queries/episodes", () => ({
   }),
 }));
 
+const projectPropsState: { names: string[] } = { names: [] };
+vi.mock("@/lib/queries/props", () => ({
+  useProps: () => ({
+    data: {
+      ok: true,
+      data: projectPropsState.names.map((name) => ({ name })),
+    },
+  }),
+}));
+
 const scenesState: {
   names: string[];
   records?: Array<{
@@ -137,6 +147,7 @@ beforeEach(() => {
   episodeDetailState.scene_menu = [];
   scenesState.names = [];
   scenesState.records = undefined;
+  projectPropsState.names = [];
 });
 
 describe("TextPane", () => {
@@ -302,6 +313,28 @@ describe("TextPane", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("does not mark cross-episode project props as removed, while keeping truly deleted props stale", () => {
+    episodeDetailState.prop_menu = [{ prop_id: "啤酒瓶" }];
+    projectPropsState.names = ["啤酒瓶", "公文包"];
+    render(
+      <Wrapper>
+        <TextPane
+          beat={makeBeat({ detected_props: ["啤酒瓶", "公文包", "已删道具"] })}
+          project="demo"
+          episode={3}
+        />
+      </Wrapper>,
+    );
+
+    const group = screen.getByRole("group", { name: "出场道具" });
+    const briefcaseBtn = within(group).getByRole("button", { name: "公文包" });
+    expect(briefcaseBtn).toHaveAttribute("aria-pressed", "true");
+    expect(within(briefcaseBtn).queryByText("（已移除）")).not.toBeInTheDocument();
+
+    const deletedBtn = within(group).getByRole("button", { name: /已删道具/ });
+    expect(within(deletedBtn).getByText("（已移除）")).toBeInTheDocument();
   });
 
   it("offers no-prop as a mutually exclusive prop option", () => {

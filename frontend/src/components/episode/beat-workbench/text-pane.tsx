@@ -18,6 +18,7 @@ import { saveScopes, trackSave } from "@/stores/save-status-store";
 import { useNavigateToAsset } from "@/hooks/use-assets-deep-link";
 import { useUpdateBeat } from "@/lib/queries/scripts";
 import { useEpisodeDetail } from "@/lib/queries/episodes";
+import { useProps } from "@/lib/queries/props";
 import { useScenePlatePreview, useScenes } from "@/lib/queries/scenes";
 import {
   extractIdentityMarkers,
@@ -101,6 +102,16 @@ export function TextPane({ beat, project, episode, spineTemplate = "drama" }: Te
   const propOptions = useMemo(
     () => [NO_PROP_MARKER, ...episodePropIds],
     [episodePropIds],
+  );
+  const propsQuery = useProps(project);
+  const projectPropNames = useMemo(
+    () =>
+      new Set(
+        (propsQuery.data?.data ?? [])
+          .map((item) => item.name?.trim())
+          .filter((name): name is string => Boolean(name)),
+      ),
+    [propsQuery.data],
   );
   const scenesQuery = useScenes(project);
   // Scene records drive the split base/variant controls. Beat storage remains
@@ -715,6 +726,7 @@ export function TextPane({ beat, project, episode, spineTemplate = "drama" }: Te
             <IdentityBadgeGroup
               options={propOptions}
               selected={props}
+              knownIds={projectPropNames}
               onToggle={toggleProp}
               onJump={(id) => navigateToAsset("prop", id)}
               noJumpIds={[NO_PROP_MARKER]}
@@ -821,6 +833,7 @@ function Field({
 function IdentityBadgeGroup({
   options,
   selected,
+  knownIds,
   onToggle,
   onJump,
   jumpLabel,
@@ -832,6 +845,7 @@ function IdentityBadgeGroup({
 }: {
   options: string[];
   selected: string[];
+  knownIds?: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onJump?: (id: string) => void;
   jumpLabel?: string;
@@ -863,7 +877,7 @@ function IdentityBadgeGroup({
   }
   for (const id of selected) {
     if (!seen.has(id)) {
-      ordered.push({ id, stale: true });
+      ordered.push({ id, stale: !(knownIds?.has(id) ?? false) });
       seen.add(id);
     }
   }
