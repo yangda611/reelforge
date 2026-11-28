@@ -658,9 +658,10 @@ def build_scene_reference_prompt(
     has_base_reverse_reference: bool = False,
     base_scene: NovelScene | None = None,
     style_family: str = "",
+    content_harmonize: bool = False,
 ) -> str:
     if kind == "master":
-        return _master_prompt(
+        prompt = _master_prompt(
             scene,
             style_name=style_name,
             style_prompt=style_prompt,
@@ -668,14 +669,14 @@ def build_scene_reference_prompt(
             base_scene=base_scene,
             style_family=style_family,
         )
-    if kind == "spatial_layout":
-        return _spatial_layout_prompt(
+    elif kind == "spatial_layout":
+        prompt = _spatial_layout_prompt(
             scene,
             has_master_reference=has_master_reference,
             base_scene=base_scene,
         )
-    if kind == "reverse_master":
-        return _reverse_master_prompt(
+    elif kind == "reverse_master":
+        prompt = _reverse_master_prompt(
             scene,
             style_name=style_name,
             style_prompt=style_prompt,
@@ -685,7 +686,24 @@ def build_scene_reference_prompt(
             base_scene=base_scene,
             style_family=style_family,
         )
-    raise ValueError(f"Unsupported scene reference kind: {kind}")
+    else:
+        raise ValueError(f"Unsupported scene reference kind: {kind}")
+
+    if content_harmonize and kind in {"master", "reverse_master"}:
+        from novelvideo.content_harmonize import build_image_compliance_guard
+
+        guard = build_image_compliance_guard(
+            [
+                getattr(scene, "name", ""),
+                getattr(scene, "environment_prompt", ""),
+                getattr(scene, "variant_prompt", ""),
+                getattr(scene, "description", ""),
+            ],
+            enabled=True,
+        )
+        if guard:
+            prompt = f"{prompt.strip()}\n\n{guard}"
+    return prompt
 
 
 def _output_path(project_dir: Path, scene_name: str, kind: SceneReferenceKind) -> Path:
@@ -797,6 +815,8 @@ async def generate_scene_reference_image(
     style_family: str = "",
     base_scene: NovelScene | None = None,
     egress_context: TrustedEgressContext | None = None,
+    state_dir: str | Path | None = None,
+    content_harmonize: bool | None = None,
 ) -> Path:
     """Generate one canonical scene reference image and return its path."""
 
@@ -835,6 +855,13 @@ async def generate_scene_reference_image(
             scene=scene,
         )
 
+    from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+    harmonize_enabled = (
+        bool(content_harmonize)
+        if content_harmonize is not None
+        else load_content_harmonize_from_state_dir(state_dir)
+    )
     prompt = build_scene_reference_prompt(
         kind,
         scene,
@@ -845,6 +872,7 @@ async def generate_scene_reference_image(
         has_base_reverse_reference=has_base_reverse_reference,
         base_scene=base_scene,
         style_family=style_family,
+        content_harmonize=harmonize_enabled,
     )
     provider = _scene_image_provider(kind, provider)
     selected_model = _scene_image_model(kind, provider, model)

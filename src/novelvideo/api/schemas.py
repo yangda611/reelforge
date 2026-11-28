@@ -105,6 +105,7 @@ class ProjectUpdate(BaseModel):
     use_director_render: Optional[bool] = None
     video_resolution: Optional[str] = None
     add_subtitles: Optional[bool] = None
+    content_harmonize: Optional[bool] = None
 
 
 class BeatBackgroundAnchorUpdate(BaseModel):

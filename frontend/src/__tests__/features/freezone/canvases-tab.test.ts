@@ -630,11 +630,11 @@ describe("freezone preset auto refresh guard", () => {
     expect(patch).toMatchObject({
       imageUrl: "/static/proj/renders/ep001/beat_03.png?v=2",
       previewImageUrl: "/static/proj/renders/ep001/beat_03.png?v=2",
-      displayName: "已提交 · EP1 / Beat 3 / 分镜",
+      displayName: "已提交 · EP1 / Clip 3 / 分镜",
       sourceFileName: "beat_03.png",
       slot_target: { kind: "frame", episode: 1, beat: 3 },
       committed_slot_url: "/static/proj/renders/ep001/beat_03.png?v=2",
-      committed_target_label: "EP1 / Beat 3 / 分镜",
+      committed_target_label: "EP1 / Clip 3 / 分镜",
       mainline_context: undefined,
     });
   });
@@ -649,7 +649,7 @@ describe("freezone preset auto refresh guard", () => {
     )).toMatchObject({
       videoUrl: "/static/video.mp4",
       previewImageUrl: "/static/video.mp4",
-      displayName: "EP2 / Beat 4 / 视频",
+      displayName: "EP2 / Clip 4 / 视频",
       mainline_context: [expect.objectContaining({ kind: "video", episode: 2, beat: 4 })],
     });
 
@@ -662,7 +662,7 @@ describe("freezone preset auto refresh guard", () => {
     )).toMatchObject({
       audioUrl: "/static/audio.wav",
       url: "/static/audio.wav",
-      displayName: "EP2 / Beat 4 / 音频",
+      displayName: "EP2 / Clip 4 / 音频",
       mainline_context: [expect.objectContaining({ kind: "audio", audioRole: "beat_audio" })],
     });
 

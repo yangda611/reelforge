@@ -133,7 +133,7 @@ describe("PanoCaptureSurface controls", () => {
 
     expect(screen.getByText("project demo")).toBeInTheDocument();
     expect(screen.getByText("scene basement")).toBeInTheDocument();
-    expect(screen.getByText("EP 1 / Beat 3")).toBeInTheDocument();
+    expect(screen.getByText("EP 1 / Clip 3")).toBeInTheDocument();
     expect(screen.getByText("canonical pano")).toBeInTheDocument();
     expect(screen.getByText("保存目标 selected_background")).toBeInTheDocument();
     expect(screen.getByText(/yaw 90\.0°/)).toBeInTheDocument();

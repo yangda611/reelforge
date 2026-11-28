@@ -33,6 +33,8 @@ NARRATOR_AUDIO_UPDATED_AT_KEY = "narrator_reference_audio_updated_at"
 DEFAULT_NARRATION_STYLE = "third_person"
 _VALID_NARRATION_STYLES = {"first_person", "third_person"}
 DEFAULT_ASPECT_RATIO = "2:3"
+CONTENT_HARMONIZE_KEY = "content_harmonize"
+DEFAULT_CONTENT_HARMONIZE = True
 
 
 def default_aspect_ratio_for_spine_template(spine_template: str | None) -> str:
@@ -169,6 +171,7 @@ def _default_project_config() -> dict:
         "video_backend": VIDEO_BACKEND,
         "video_resolution": VIDEO_RESOLUTION,
         "use_director_render": False,
+        "content_harmonize": DEFAULT_CONTENT_HARMONIZE,
         "current_episode": 1,
         "user_grid_plan": {},
         "regen_file_map": {},
@@ -568,3 +571,22 @@ def set_narrator_reference_audio_in_state_dir(
         "sha256": str(updated.get(NARRATOR_AUDIO_SHA256_KEY) or ""),
         "updated_at": str(updated.get(NARRATOR_AUDIO_UPDATED_AT_KEY) or ""),
     }
+
+
+def load_content_harmonize_from_state_dir(state_dir: str | Path | None) -> bool:
+    """Return whether selective content harmonization is enabled for the project."""
+    if not state_dir:
+        return DEFAULT_CONTENT_HARMONIZE
+    config = load_project_config_file_from_state_dir(state_dir)
+    if CONTENT_HARMONIZE_KEY not in config:
+        return DEFAULT_CONTENT_HARMONIZE
+    raw = config.get(CONTENT_HARMONIZE_KEY)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in {"0", "false", "no", "off"}:
+            return False
+        if text in {"1", "true", "yes", "on"}:
+            return True
+    return DEFAULT_CONTENT_HARMONIZE

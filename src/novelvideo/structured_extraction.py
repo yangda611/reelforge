@@ -23,6 +23,7 @@ as separate candidates rather than guessed at.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
@@ -191,25 +192,68 @@ def _create_character_extraction_agent(agent: Any = None):
             capability="text.generate.agent",
         ),
         system_prompt=CHARACTER_EXTRACTION_SYSTEM_PROMPT,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=get_newapi_structured_output_model_settings(
+            "CHARACTER_BUILD_MODEL"
+        ),
         output_type=ChunkCharacterOutput,
         retries={"output": model_gateway_output_retries(2)},
         name="Structured Character Extractor",
     )
 
 
-async def _run_structured(agent: Any, prompt: str) -> Any:
-    """Run ``agent`` and turn an exhausted output retry into a diagnosable error."""
-    from pydantic_ai import capture_run_messages
-    from pydantic_ai.exceptions import UnexpectedModelBehavior
+async def _drain_agent_event_stream(_ctx: Any, event_stream: Any) -> None:
+    """Drain streaming model events so SSE chunks keep proxy connections alive."""
+    async for _ in event_stream:
+        pass
 
-    with capture_run_messages() as messages:
-        try:
-            return (await agent.run(prompt)).output
-        except UnexpectedModelBehavior as exc:
-            raise StructuredOutputFailure(
-                describe_output_failure(exc, list(messages))
-            ) from exc
+
+def _supports_event_stream_handler(agent: Any) -> bool:
+    run_fn = getattr(agent, "run", None)
+    if not callable(run_fn):
+        return False
+    try:
+        params = inspect.signature(run_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "event_stream_handler" in params
+
+
+async def _run_structured(agent: Any, prompt: str) -> Any:
+    """Run ``agent`` with streaming transport and PromptedOutput fallback."""
+    from pydantic_ai import Agent, PromptedOutput, capture_run_messages
+    from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+
+    from novelvideo.model_gateway_runtime import current_model_gateway_context
+
+    run_kwargs: dict[str, Any] = {}
+    if _supports_event_stream_handler(agent):
+        run_kwargs["event_stream_handler"] = _drain_agent_event_stream
+
+    async def _invoke(extra_kwargs: dict[str, Any]) -> Any:
+        with capture_run_messages() as messages:
+            try:
+                return (await agent.run(prompt, **extra_kwargs)).output
+            except UnexpectedModelBehavior as exc:
+                raise StructuredOutputFailure(
+                    describe_output_failure(exc, list(messages))
+                ) from exc
+
+    try:
+        return await _invoke(run_kwargs)
+    except (StructuredOutputFailure, ModelHTTPError) as exc:
+        if isinstance(exc, ModelHTTPError) and exc.status_code not in {400, 422}:
+            raise
+        ctx = current_model_gateway_context()
+        if ctx is not None and ctx.is_organization:
+            raise
+        output_type = getattr(agent, "output_type", None)
+        if (
+            not isinstance(agent, Agent)
+            or output_type is None
+            or isinstance(output_type, PromptedOutput)
+        ):
+            raise
+        return await _invoke({**run_kwargs, "output_type": PromptedOutput(output_type)})
 
 
 def normalize_character_name(value: str) -> str:
@@ -853,7 +897,9 @@ def _create_adjudication_agent(agent: Any = None):
             capability="text.generate.agent",
         ),
         system_prompt=ADJUDICATION_SYSTEM_PROMPT,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=get_newapi_structured_output_model_settings(
+            "CHARACTER_BUILD_MODEL"
+        ),
         output_type=CharacterAdjudication,
         name="Structured Character Adjudicator",
     )
@@ -939,9 +985,10 @@ async def adjudicate_characters(
 
     by_name = {item.name: item for item in merged}
     try:
-        result = (await _create_adjudication_agent(agent).run(
-            _adjudication_prompt(merged, source_text)
-        )).output
+        result = await _run_structured(
+            _create_adjudication_agent(agent),
+            _adjudication_prompt(merged, source_text),
+        )
     except Exception as exc:  # noqa: BLE001 - degrade to the rule-only result
         log(f"⚠️ 归一裁决失败，保留规则归一结果: {exc}")
         return merged
@@ -1102,7 +1149,9 @@ def _create_character_appearance_agent(agent: Any = None, *, live_action: bool =
             capability="text.generate.agent",
         ),
         system_prompt=system_prompt,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=get_newapi_structured_output_model_settings(
+            "CHARACTER_BUILD_MODEL"
+        ),
         output_type=CharacterAppearanceList,
         name="Structured Character Appearance",
     )
@@ -1504,7 +1553,7 @@ async def enrich_character_appearances(
         )
         produced: dict[str, CharacterAppearance] = {}
         try:
-            result = (await llm.run(prompt)).output
+            result = await _run_structured(llm, prompt)
             by_name = {
                 normalize_character_name(entry.name): entry
                 for entry in (result.characters or [])
@@ -1624,7 +1673,9 @@ def _create_scene_adjudication_agent(agent: Any = None):
             capability="text.generate.agent",
         ),
         system_prompt=SCENE_ADJUDICATION_SYSTEM_PROMPT,
-        model_settings=get_newapi_structured_output_model_settings(),
+        model_settings=get_newapi_structured_output_model_settings(
+            "SCENE_BUILD_MODEL"
+        ),
         output_type=SceneAdjudication,
         name="Structured Scene Adjudicator",
     )
@@ -1701,9 +1752,10 @@ async def adjudicate_scenes(
 
     if groups is None:
         try:
-            result = (await _create_scene_adjudication_agent(agent).run(
-                "以下是同一部剧本的地点候选：\n" + listing
-            )).output
+            result = await _run_structured(
+                _create_scene_adjudication_agent(agent),
+                "以下是同一部剧本的地点候选：\n" + listing,
+            )
         except Exception as exc:  # noqa: BLE001 - degrade to the unmerged result
             log(f"⚠️ 场景归一裁决失败，保留原始场景: {exc}")
             return scenes

@@ -15,12 +15,14 @@ replacing legacy ``s9`` while preserving storage/API compatibility):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import inspect
 import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -334,14 +336,21 @@ def resolve_s9_style_context(
         anchor_parts.append(f"风格细节：{style_instructions}")
     if style_tag:
         anchor_parts.append(f"氛围标签：{style_tag}")
-    if avoid_instructions:
-        anchor_parts.append(f"规避项：{avoid_instructions}")
+    # Intentionally omit raw T2I ``avoid_instructions`` (e.g. "No extra limbs / plastic skin")
+    # from ``s9_style_anchor`` so Stage 2 does not copy negative visual ban tokens into Seedance 2.5.
     video_ratio = aspect_ratio_to_video_ratio(aspect_ratio)
     anchor_parts.append(f"画面比例：{video_ratio}")
+    subtype_lower = subtype.lower()
     if family == "live_action":
-        anchor_parts.append("媒介规范：严格写实摄影光学成像与物理质感，禁混UE5/CG术语")
-    elif family == "animation" and subtype and "3d" in subtype.lower():
-        anchor_parts.append("媒介规范：三维CG建模与光影渲染质感，禁混胶片/实拍相机型号")
+        anchor_parts.append("媒介规范：严格写实摄影光学成像与物理质感，禁混UE5/CG术语，不写摄影机品牌型号/三脚架/肩扛等器材词")
+    elif family == "animation" and "3d" in subtype_lower:
+        anchor_parts.append("媒介规范：三维CG建模与光影渲染质感，禁混胶片/实拍相机型号及摄影器材词")
+    elif family == "animation" and "2d" in subtype_lower:
+        anchor_parts.append("媒介规范：二维手绘/赛璐璐动画线稿与色块光影，禁混真人实拍、三维CG渲染、胶片颗粒及摄影器材词")
+    elif family == "animation":
+        anchor_parts.append("媒介规范：忠实于当前自定义/混合动画媒介的笔触、线条与光影语言，禁混无关跨媒介术语及摄影器材词")
+    else:
+        anchor_parts.append("媒介规范：严格忠实于当前画风媒介的视觉表达，不写摄影机品牌型号/三脚架/肩扛等器材词")
 
     return S9StyleContext(
         style_id=style_id,
@@ -457,6 +466,13 @@ def _scene_has_reverse_master_on_disk(
     return any(p.exists() for p in candidates)
 
 
+def _compact_library_desc(text: str, max_chars: int = 80) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1].rstrip("，,；;。 ") + "…"
+
+
 def _format_planned_assets_summary(
     *,
     characters: list[Any],
@@ -465,6 +481,9 @@ def _format_planned_assets_summary(
     scenes: list[Any] | None = None,
     props: list[Any] | None = None,
     output_dir: str | Path | None = None,
+    include_cross_episode_library: bool = True,
+    allowed_extra_scene_ids: set[str] | None = None,
+    allowed_extra_prop_ids: set[str] | None = None,
 ) -> str:
     """Format episode cast, scenes, props, and voices for LLM grounding."""
 
@@ -552,13 +571,15 @@ def _format_planned_assets_summary(
         if scene_lines:
             lines.append("【已规划场景菜单】\n" + "\n".join(scene_lines))
 
-    if scenes:
+    if scenes and (include_cross_episode_library or allowed_extra_scene_ids):
         from novelvideo.models import build_scene_effective_prompt
 
         extra_scene_lines: list[str] = []
         for sc in scenes:
             sc_name = str(getattr(sc, "name", "") or "").strip()
             if not sc_name or sc_name in seen_scene_plates:
+                continue
+            if not include_cross_episode_library and sc_name not in (allowed_extra_scene_ids or set()):
                 continue
             # Avoid cluttering with base scenes whose derived variant is already planned for this episode
             if any(
@@ -568,7 +589,10 @@ def _format_planned_assets_summary(
                 continue
             seen_scene_plates.add(sc_name)
             _pk, _so, base_obj = _resolve_scene_and_base(scene_lookup, sc_name, "")
-            env_detail = build_scene_effective_prompt(sc, base_obj).strip()
+            env_detail = _compact_library_desc(
+                build_scene_effective_prompt(sc, base_obj).strip(),
+                max_chars=90,
+            )
             extra_scene_lines.append(
                 f"- scene_id=`{sc_name}`" + (f" — {env_detail}" if env_detail else "")
             )
@@ -591,23 +615,29 @@ def _format_planned_assets_summary(
     if prop_lines:
         lines.append("【已规划道具菜单】\n" + "\n".join(prop_lines))
 
-    extra_prop_lines: list[str] = []
-    for prop_obj in props or []:
-        pid = str(getattr(prop_obj, "name", "") or "").strip()
-        if not pid or pid in seen_prop_ids:
-            continue
-        seen_prop_ids.add(pid)
-        desc = str(
-            getattr(prop_obj, "description", "")
-            or getattr(prop_obj, "visual_prompt", "")
-            or ""
-        ).strip()
-        extra_prop_lines.append(f"- prop_id=`{pid}`" + (f" — {desc}" if desc else ""))
-    if extra_prop_lines:
-        lines.append(
-            "【项目已有道具库（跨集复用：仅当本集画面实际出现/携带时选用对应 prop_id）】\n"
-            + "\n".join(extra_prop_lines)
-        )
+    if include_cross_episode_library or allowed_extra_prop_ids:
+        extra_prop_lines: list[str] = []
+        for prop_obj in props or []:
+            pid = str(getattr(prop_obj, "name", "") or "").strip()
+            if not pid or pid in seen_prop_ids:
+                continue
+            if not include_cross_episode_library and pid not in (allowed_extra_prop_ids or set()):
+                continue
+            seen_prop_ids.add(pid)
+            desc = _compact_library_desc(
+                str(
+                    getattr(prop_obj, "description", "")
+                    or getattr(prop_obj, "visual_prompt", "")
+                    or ""
+                ).strip(),
+                max_chars=80,
+            )
+            extra_prop_lines.append(f"- prop_id=`{pid}`" + (f" — {desc}" if desc else ""))
+        if extra_prop_lines:
+            lines.append(
+                "【项目已有道具库（跨集复用：仅当本集画面实际出现/携带时选用对应 prop_id）】\n"
+                + "\n".join(extra_prop_lines)
+            )
 
     return "\n\n".join(lines) if lines else "（本集暂无预设资产清单，请从正文提取所需角色、场景、道具并填写名称）"
 
@@ -617,6 +647,7 @@ def build_s9_stage1_system_prompt(
     max_segment_seconds: int,
     spine_template: str = "drama",
     tail_anchor: bool = False,
+    content_harmonize: bool = False,
 ) -> str:
     """Build the Stage 1 (Compact Storyboard Preview) system prompt from YD分镜skills."""
 
@@ -646,7 +677,7 @@ def build_s9_stage1_system_prompt(
         else "「尾帧锚点镜」默认关闭：大段末镜结尾须自然落定 `exit_state`（姿态/持物/视线落点），以动作顺延或视线引导无缝承接下一大段。"
     )
 
-    return f"""你是 YD 电影级分镜导演（Stage 1 整片连续模式 · 默认「紧凑」高密度剪辑节奏）。
+    base = f"""你是 YD 电影级分镜导演（Stage 1 整片连续模式 · 默认「紧凑」高密度剪辑节奏）。
 你的任务是严格按 YD分镜skills 把整集剧本拆分为可直接生成连贯视频 Clip 的「大段」（每大段必须在单段上限 {cap} 秒内讲完本段完整故事闭环，确保下一大段能无缝接续），并输出结构化 `S9StoryboardPlan` JSON。
 
 {yd_directives}
@@ -668,6 +699,11 @@ def build_s9_stage1_system_prompt(
     - `prop_ids`：必须填入本镜出现、使用或提及的关键道具ID列表（精确选用【已规划道具菜单】的 `prop_id`，如 `["二手显示器", "机械键盘"]`）；
   - 每个大段填写：`story_beat`（本段从起势到落点的完整故事闭环）、`entry_state`（第0秒起始状态）、`exit_state`（末镜结束瞬间的必达站位/持物/视线落点，供下一段第0秒衔接）、`scene_layout`（多人同场/走位/正反打时写3～5句地标、锚位与机位工作侧）。
   - 每个分镜填写：`content`（景别机位运镜+具体动作交互与可见变化+完整原话+必要拟音）、`spoken_text`（逐字原句）、`sfx_cue`（关键物理拟音）、`transition_note`（切出余势与接续点）。"""
+    if content_harmonize:
+        from novelvideo.content_harmonize import HARMONIZE_STORYBOARD_DIRECTIVE
+
+        return f"{base}\n\n{HARMONIZE_STORYBOARD_DIRECTIVE}"
+    return base
 
 
 def build_s9_stage1_task_prompt(
@@ -928,31 +964,74 @@ def _format_seconds_label(value: float) -> str:
     return f"{rounded:.1f}"
 
 
+def _first_mention_offset(haystack: str, tokens: list[str]) -> int:
+    """Return earliest character offset of any non-empty token in ``haystack``, or ``len(haystack)``."""
+
+    best = len(haystack)
+    for tok in tokens:
+        if not tok:
+            continue
+        pos = haystack.find(tok)
+        if 0 <= pos < best:
+            best = pos
+    return best
+
+
+def _identity_search_tokens(identity_id: str, characters: list[Any]) -> list[str]:
+    """Return text tokens (identity_id, character name, aliases) associated with an identity."""
+
+    tokens: list[str] = []
+    if identity_id:
+        tokens.append(identity_id)
+        base = identity_id.split("_", 1)[0].strip()
+        if base and base not in tokens:
+            tokens.append(base)
+    for char in characters or []:
+        char_name = str(getattr(char, "name", "") or "").strip()
+        char_iids = {
+            str(getattr(ident, "identity_id", "") or "").strip()
+            for ident in (getattr(char, "identities", []) or [])
+        }
+        if identity_id in char_iids or (char_name and identity_id.split("_", 1)[0] == char_name):
+            if char_name and char_name not in tokens:
+                tokens.append(char_name)
+            for alias in getattr(char, "aliases", []) or []:
+                a = str(alias or "").strip()
+                if a and a not in tokens:
+                    tokens.append(a)
+    return tokens
+
+
 def _infer_identities_from_text(
     text: str,
     characters: list[Any],
     valid_identities: dict[str, str],
     char_to_default: dict[str, str],
 ) -> list[str]:
-    """Recover character identity IDs mentioned in shot or segment prose."""
+    """Recover character identity IDs mentioned in shot or segment prose in first-appearance order."""
 
     haystack = str(text or "").strip()
     if not haystack:
         return []
-    found: list[str] = []
-    # Prefer exact identity_id matches first, then character name / aliases.
+    matched: dict[str, int] = {}
+    # Prefer exact identity_id matches and character name / aliases, ordered by first appearance
+    # so Seedance 2.5 @图片1/@图片2 character slots align with on-screen entry order.
     for iid in dict.fromkeys(valid_identities.values()):
-        if iid and iid in haystack and iid not in found:
-            found.append(iid)
+        if not iid:
+            continue
+        pos = haystack.find(iid)
+        if pos >= 0:
+            matched[iid] = min(pos, matched.get(iid, len(haystack)))
     for char in characters or []:
         char_name = str(getattr(char, "name", "") or "").strip()
         aliases = [str(a or "").strip() for a in (getattr(char, "aliases", []) or []) if str(a or "").strip()]
         candidates = [char_name, *aliases] if char_name else aliases
-        if any(token and token in haystack for token in candidates):
+        pos = _first_mention_offset(haystack, candidates)
+        if pos < len(haystack):
             resolved = char_to_default.get(char_name) or char_to_default.get(char_name.lower(), "")
-            if resolved and resolved not in found:
-                found.append(resolved)
-    return found
+            if resolved:
+                matched[resolved] = min(pos, matched.get(resolved, len(haystack)))
+    return [iid for iid, _ in sorted(matched.items(), key=lambda kv: kv[1])]
 
 
 def _infer_scene_from_text(
@@ -1148,7 +1227,28 @@ def normalize_s9_storyboard_plan(
                 resolved = _match_identity_id(raw_id, valid_identities, char_to_default)
                 if resolved and resolved not in mapped_identities:
                     mapped_identities.append(resolved)
-                if resolved and resolved not in seg_identity_ids:
+            if len(mapped_identities) > 1 and shot_visual_prose:
+                # Seedance 2.5 anti-role-swap rule: order multi-character slots by first appearance
+                # in the shot's visual description, falling back to original order when unmentioned.
+                appearance_text = str(shot.content or "").strip() or shot_visual_prose
+                mapped_identities = [
+                    iid
+                    for _, _, iid in sorted(
+                        (
+                            (
+                                _first_mention_offset(
+                                    appearance_text, _identity_search_tokens(iid, char_list)
+                                ),
+                                idx,
+                                iid,
+                            )
+                            for idx, iid in enumerate(mapped_identities)
+                        ),
+                        key=lambda item: (item[0], item[1]),
+                    )
+                ]
+            for resolved in mapped_identities:
+                if resolved not in seg_identity_ids:
                     seg_identity_ids.append(resolved)
             if not mapped_identities:
                 for inferred_id in _infer_identities_from_text(
@@ -1501,16 +1601,22 @@ def build_s9_stage2_system_prompt(
     tail_anchor: bool = False,
     include_first_frame: bool = False,
     include_scene_layout: bool = False,
+    content_harmonize: bool = False,
 ) -> str:
     """Build Stage 2 full Seedance 2.0/2.5 continuous-mode prompt instructions from YD分镜skills."""
 
     from novelvideo.skills.yd_storyboard_skill import build_yd_stage2_directives
 
-    return build_yd_stage2_directives(
+    base = build_yd_stage2_directives(
         tail_anchor=tail_anchor,
         include_first_frame=include_first_frame,
         include_scene_layout=include_scene_layout,
     )
+    if content_harmonize:
+        from novelvideo.content_harmonize import HARMONIZE_STORYBOARD_DIRECTIVE
+
+        return f"{base}\n\n{HARMONIZE_STORYBOARD_DIRECTIVE}"
+    return base
 
 
 def build_s9_stage2_task_prompt(
@@ -1668,7 +1774,8 @@ def build_s9_stage2_task_prompt(
                 "必须直接按最新索引表与铁律推翻并修正旧稿，严禁沿用旧错误；\n"
                 "2. 若上方存在【用户附加微调要求】，优先落实用户指定维度（主体/场景/光影/镜头/风格/无字幕等）；\n"
                 "3. 细化镜内亚区间动态时间轴中的眼神落点、微表情时程错峰、身体重心传导与道具拿放最终归属；\n"
-                "4. 强化机位动机、景别转换与物理光影/贴动作拟音细节，删去空泛套话，完整输出到最后一镜结束。\n"
+                "4. 强化机位动机、景别转换与物理光影/贴动作拟音细节，删去空泛套话，完整输出到最后一镜结束；\n"
+                "5. **Seedance 2.5 规范纠偏**：删去【角色声音】中重复摘录的台词原句（防硬字幕），将画面/表情的“不要……”负面约束改为正向视觉描写（仅保留禁字幕与无BGM/配乐约束），清除摄影机型号/三脚架/肩扛等器材词与8K/大片感等空泛词，并在末镜音频末尾复锚“无任何配乐或背景音乐”。\n"
             )
 
     return f"""请为「大段{segment.segment_number}：{segment.title}」（计划总时长 **{segment.planned_duration_seconds}秒**，必须在这 {segment.planned_duration_seconds} 秒内讲完本段故事闭环、零空等拖秒）生成完整的 Seedance 2.0/2.5 生成提示词：
@@ -1711,27 +1818,29 @@ def _format_fallback_audio_desc(
     end_s: str,
     voice_slot_by_id: dict[str, str],
     voice_slot_by_name: dict[str, str],
+    is_last_shot: bool = False,
 ) -> str:
     sfx_raw = str(getattr(shot, "sfx_cue", "") or "").strip()
     sfx_part = f"；{sfx_raw}" if sfx_raw else "；伴随贴动作的真实物理拟音与自然环境底噪"
+    tail_bgm_anchor = "；全程纯人声对白与现场物理拟音，无任何配乐或背景音乐" if is_last_shot else ""
     if not shot.spoken_text:
-        return f"纯环境写实拟音与呼吸声{sfx_part if sfx_raw else ''}。"
+        return f"纯环境写实拟音与呼吸声{sfx_part if sfx_raw else ''}{tail_bgm_anchor}。"
 
     speaker_raw = str(shot.speaker or "角色").strip()
     if shot.audio_type == "narration":
         return (
-            f"{start_s}秒到{end_s}秒，{speaker_raw}画外音/内心独白（贴合当下呼吸与节奏）：“{shot.spoken_text}”"
-            f"（画面人物嘴唇闭合，继续既定动作）{sfx_part}。"
+            f"{start_s}秒到{end_s}秒，{speaker_raw}（画外音/内心独白，画面人物嘴唇闭合，贴合当下呼吸与节奏）：“{shot.spoken_text}”"
+            f"{sfx_part}{tail_bgm_anchor}。"
         )
 
     turns = [t.strip() for t in str(shot.spoken_text).split("|") if t.strip()]
     speakers = [s.strip() for s in re.split(r"[;；、/]+", speaker_raw) if s.strip()]
     if len(turns) <= 1:
         voice_ref = _resolve_voice_slot_ref(speaker_raw, voice_slot_by_id, voice_slot_by_name)
-        ref_part = f"（{voice_ref}音色，自然吐字）" if voice_ref else "（自然吐字）"
+        ref_part = f"（画内开口，{voice_ref}音色，自然吐字，唇形同步）" if voice_ref else "（画内开口，自然吐字，唇形同步）"
         return (
-            f"{start_s}秒到{end_s}秒，{speaker_raw}画内开口{ref_part}：“{shot.spoken_text}”"
-            f"，说话者唇形咬字精准同步{sfx_part}。"
+            f"{start_s}秒到{end_s}秒，{speaker_raw}{ref_part}：“{shot.spoken_text}”"
+            f"{sfx_part}{tail_bgm_anchor}。"
         )
 
     # Multi-turn dialogue inside one shot: partition into contiguous integer sub-windows.
@@ -1745,15 +1854,15 @@ def _format_fallback_audio_desc(
     for idx, turn_text in enumerate(turns):
         spk = speakers[idx] if idx < len(speakers) else speakers[-1]
         vref = _resolve_voice_slot_ref(spk, voice_slot_by_id, voice_slot_by_name)
-        ref_part = f"（{vref}音色，自然吐字）" if vref else "（自然吐字）"
+        ref_part = f"（画内开口，{vref}音色，自然吐字，唇形同步）" if vref else "（画内开口，自然吐字，唇形同步）"
         if idx == len(turns) - 1:
             t_end = end_i
         else:
             span = max(1, int(round(total_i * (weights[idx] / weight_sum))))
             t_end = min(end_i - (len(turns) - 1 - idx), cursor + span)
-        turn_parts.append(f"{cursor}秒—{t_end}秒，{spk}画内开口{ref_part}：“{turn_text}”")
+        turn_parts.append(f"{cursor}秒—{t_end}秒，{spk}{ref_part}：“{turn_text}”")
         cursor = t_end
-    return "；".join(turn_parts) + f"，说话者按轮次唇形咬字精准同步{sfx_part}。"
+    return "；".join(turn_parts) + f"{sfx_part}{tail_bgm_anchor}。"
 
 
 def _build_fallback_dynamic_timeline(
@@ -1849,9 +1958,10 @@ def build_s9_stage2_fallback_prompt(
             end_s=end_s,
             voice_slot_by_id=voice_slot_by_id,
             voice_slot_by_name=voice_slot_by_name,
+            is_last_shot=(idx + 1 == len(segment.shots)),
         )
         default_next = (
-            "动作余势自然延续并切入下一分镜，严禁复位或重演。"
+            "动作余势自然延续并顺接至下一分镜，人物姿态与空间关系连贯推进。"
             if idx + 1 < len(segment.shots)
             else (
                 f"末镜结束落定：{segment.exit_state or '人物动作与视线稳妥落点，承接下一大段第0秒起态。'}"
@@ -1869,18 +1979,36 @@ def build_s9_stage2_fallback_prompt(
             f"- 尾帧与转场：{next_hint}"
         )
 
-    is_3d_cg = style_context.style_family == "animation" and "3d" in style_context.animation_subtype.lower()
+    subtype_lower = style_context.animation_subtype.lower()
+    is_3d_cg = style_context.style_family == "animation" and "3d" in subtype_lower
+    is_2d_anim = style_context.style_family == "animation" and "2d" in subtype_lower
     if is_3d_cg:
         visual_style_line = (
             f"- 视觉风格：三维CG，写实渲染，{style_context.style_label}（{style_context.style_instructions or '全局光照与物理反射，扎实的重力形变与织物垂坠，自然景深与真实物理运动反馈'}）。"
         )
+        material_line = (
+            f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一色彩调性，突出三维模型材质反射、织物垂坠与器物细节。"
+        )
+    elif is_2d_anim:
+        visual_style_line = (
+            f"- 视觉风格：二维动画媒介，{style_context.style_label}（{style_context.style_instructions or '清晰手绘线稿与平涂赛璐璐分层阴影，干净色彩分离与流畅动画运动节奏'}）。"
+        )
+        material_line = (
+            f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一动画色板与赛璐璐明暗色块层次，线条与造型全程一致。"
+        )
     elif style_context.style_family == "animation":
         visual_style_line = (
-            f"- 视觉风格：动画媒介，{style_context.style_label}（{style_context.style_instructions or '明确线稿与色块阴影层次，流畅动画运动节奏与受光衰减'}）。"
+            f"- 视觉风格：动画媒介，{style_context.style_label}（{style_context.style_instructions or '明确线稿笔触与色块阴影层次，流畅动画运动节奏与受光衰减'}）。"
+        )
+        material_line = (
+            f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一色彩调性与既有媒介笔触质感，角色造型与器物特征一致。"
         )
     else:
         visual_style_line = (
             f"- 视觉风格：真人电影实拍成像，{style_context.style_label}（{style_context.style_instructions or '场景实际光源自然衰减，皮肤与织物真实纹理，匹配镜距景深与重力惯性反馈'}）。"
+        )
+        material_line = (
+            f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一色彩调性，突出人物皮肤/衣料与器物材质细节。"
         )
 
     stop_clause = (
@@ -1893,7 +2021,7 @@ def build_s9_stage2_fallback_prompt(
         f"【全局光影画风】\n"
         f"{visual_style_line}\n"
         f"- 全局主光：主辅光源方向固定，明暗过渡与物体材质反光符合场景实际照明。\n"
-        f"- 色彩与材质：保持 {style_context.aspect_ratio} 统一色彩调性，突出人物皮肤/衣料与器物材质细节。",
+        f"{material_line}",
     ]
     if _segment_needs_scene_layout(segment):
         layout_text = str(getattr(segment, "scene_layout", "") or "").strip() or (
@@ -1903,9 +2031,9 @@ def build_s9_stage2_fallback_prompt(
     sections.extend(
         [
             "【注意事项】\n"
-            "画面全域禁止生成任何硬字幕、文字条或水印。音轨禁止添加任何BGM音乐，声音仅由角色人声台词配音、物理拟音SFX与环境自然底噪构成。"
+            "画面全域禁止生成任何硬字幕、文字条或水印。音轨全程无音乐、无背景音乐、无BGM、无配乐、无器乐、无旋律、无合成器铺底音、无氛围铺底音，声音仅由角色人声台词配音、物理拟音SFX与环境自然底噪构成。"
             "有画内说话动作的分镜匹配该说者唇形咬字（Lip-sync）。旁白和内心独白不驱动画面人物逐字对口型，人物继续既定动作与自然表演。"
-            "动作与面部变化保持连续，不要表情突变、面部变形、身份漂移或姿态复位。"
+            "人物五官、比例与身份全程稳定，动作与表情过渡自然连贯，焦点锐利，眼神自然贴合当前画风（非超自然剧情设定时瞳孔不异常发光）。"
             + stop_clause,
             "【角色声音】\n"
             + ("\n".join(voice_lines) if voice_lines else "- 本段以画外内心独白与现场真实物理拟音为主，未出场说话人不追加声线。"),
@@ -1924,7 +2052,7 @@ _STAGE1_DEFAULT_MAX_TOKENS: int | None = None
 _STAGE2_DEFAULT_MAX_TOKENS = 8192
 _STAGE2_MAX_CONTINUATIONS = 2
 _STAGE2_TERMINAL_CHARS = frozenset("。！？.!?'\"”’」』）)]】~…")
-_DEFAULT_S9_LLM_CONCURRENCY = 8
+_DEFAULT_S9_LLM_CONCURRENCY = 4
 
 
 def get_s9_llm_concurrency() -> int:
@@ -1940,6 +2068,19 @@ def get_s9_llm_concurrency() -> int:
 
 
 _BACKTICK_MENTION_RE = re.compile(r"`+(@(?:图片|音频)\d+)`+")
+_HR_LINE_RE = re.compile(r"^\s*[-*_]{3,}\s*$")
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:\*{1,2})?(【(?:参考职责|全局光影画风|场景布局|注意事项|角色声音|尾帧锚点镜)】)(?:\*{1,2})?\s*$"
+)
+_SHOT_HEADER_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:\*{1,2})?(分镜\s*\d+)\s*[（(]\s*([^）)]+?)\s*[）)]\s*[:：](.*)$"
+)
+_SHOT_FIELD_RE = re.compile(
+    r"^\s*(?:[-*•]\s*)?(?:\*{1,2})?(空间与主体|动态时间轴|物理与光影|音频与对白|尾帧与转场|局部风险锁)(?:\*{1,2})?\s*[:：]\s*(.*)$"
+)
+_STYLE_FIELD_RE = re.compile(
+    r"^\s*(?:[-*•]\s*)?(?:\*{1,2})?(视觉风格|全局主光|色彩与材质)(?:\*{1,2})?\s*[:：]\s*(.*)$"
+)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -1949,6 +2090,110 @@ def _strip_code_fences(text: str) -> str:
         cleaned = re.sub(r"\n?```\s*$", "", cleaned)
     cleaned = _BACKTICK_MENTION_RE.sub(r"\1", cleaned)
     return cleaned.strip()
+
+
+def normalize_s9_stage2_prompt_structure(text: str) -> str:
+    """Normalize Stage 2 prompt layout so every Clip shares an identical clean structure.
+
+    Removes stray markdown horizontal rules / bold markers on headings, standardizes
+    ``分镜N（a秒到b秒）：`` punctuation, ensures ``【全局光影画风】`` bullets start with
+    ``- ``, and collapses multi-line continuations inside ``- 空间与主体：`` /
+    ``- 动态时间轴：`` etc. into clean single-line bullets with uniform spacing.
+    """
+
+    cleaned = _strip_code_fences(text)
+    if not cleaned:
+        return ""
+
+    raw_lines = cleaned.splitlines()
+    blocks: list[list[str]] = []
+    cur_block: list[str] = []
+    in_section: str = ""
+    in_shot: bool = False
+    open_field_idx: int | None = None
+    open_field_name: str = ""
+
+    def _flush_block() -> None:
+        nonlocal cur_block, open_field_idx, open_field_name
+        if cur_block:
+            blocks.append(cur_block)
+            cur_block = []
+        open_field_idx = None
+        open_field_name = ""
+
+    for raw in raw_lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            # Blank lines inside a shot block between sub-items or timeline lines should not split the shot.
+            if in_shot:
+                continue
+            continue
+        if _HR_LINE_RE.match(stripped):
+            continue
+
+        sec_m = _SECTION_HEADER_RE.match(stripped)
+        if sec_m:
+            _flush_block()
+            in_section = sec_m.group(1)
+            in_shot = False
+            cur_block.append(in_section)
+            continue
+
+        shot_m = _SHOT_HEADER_RE.match(stripped)
+        if shot_m:
+            _flush_block()
+            in_section = ""
+            in_shot = True
+            shot_tag = re.sub(r"\s+", "", shot_m.group(1))
+            time_span = shot_m.group(2).strip()
+            rest = shot_m.group(3).strip()
+            rest = re.sub(r"^\*{1,2}|\*{1,2}$", "", rest).strip()
+            header = f"{shot_tag}（{time_span}）：{rest}" if rest else f"{shot_tag}（{time_span}）："
+            cur_block.append(header)
+            continue
+
+        if in_shot:
+            field_m = _SHOT_FIELD_RE.match(stripped)
+            if field_m:
+                fname = field_m.group(1)
+                fval = field_m.group(2).strip()
+                cur_block.append(f"- {fname}：{fval}" if fval else f"- {fname}：")
+                open_field_idx = len(cur_block) - 1
+                open_field_name = fname
+                continue
+            if open_field_idx is not None:
+                # Continuation line belonging to an open shot field (e.g. multi-line 动态时间轴 / 空间与主体).
+                cont = re.sub(r"^\s*[-*•]\s+", "", stripped)
+                existing = cur_block[open_field_idx]
+                prefix = f"- {open_field_name}："
+                if existing == prefix:
+                    cur_block[open_field_idx] = f"{prefix}{cont}"
+                else:
+                    sep = "" if existing[-1] in "；;。！？!?：" else "；"
+                    cur_block[open_field_idx] = f"{existing}{sep}{cont}"
+                continue
+            cur_block.append(stripped)
+            continue
+
+        if in_section == "【全局光影画风】":
+            style_m = _STYLE_FIELD_RE.match(stripped)
+            if style_m:
+                cur_block.append(f"- {style_m.group(1)}：{style_m.group(2).strip()}")
+                continue
+
+        if in_section == "【场景布局】":
+            # Keep 【场景布局】 as one clean paragraph (except header line at index 0)
+            if len(cur_block) >= 2:
+                prev = cur_block[-1]
+                sep = "" if prev[-1] in "。！？!?；;" else "。"
+                cur_block[-1] = f"{prev}{sep}{stripped}"
+                continue
+
+        cur_block.append(stripped)
+
+    _flush_block()
+    return "\n\n".join("\n".join(blk) for blk in blocks if blk).strip()
 
 
 def _audit_s9_stage2_completeness(
@@ -2069,14 +2314,25 @@ def _s9_stage1_model_settings(model_env: str = "LITERAL_BEAT_META_MODEL") -> dic
 
 
 def _s9_stage2_model_settings(model_env: str) -> dict[str, Any]:
-    """Build Stage 2 model settings with an explicit completion token floor."""
+    """Build Stage 2 model settings with an explicit completion token floor.
 
-    return _s9_model_settings(
+    Stage 2 compiles already-planned shots into prompt prose rather than doing
+    deep global planning, so when ``S9_STAGE2_REASONING_EFFORT`` is unset we cap
+    inherited ``high``/``medium`` reasoning effort down to ``low`` to prevent
+    thinking tokens from starving the completion budget or causing mid-stream drops.
+    """
+
+    settings = _s9_model_settings(
         model_env,
         default_max_tokens=_STAGE2_DEFAULT_MAX_TOKENS,
         reasoning_override_env="S9_STAGE2_REASONING_EFFORT",
         max_tokens_override_env="S9_STAGE2_MAX_TOKENS",
     )
+    if not str(os.environ.get("S9_STAGE2_REASONING_EFFORT") or "").strip():
+        effort = str(settings.get("openai_reasoning_effort") or "").strip().lower()
+        if effort in {"high", "medium"}:
+            settings["openai_reasoning_effort"] = "low"
+    return settings
 
 
 _SLICE_NORM_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
@@ -2703,39 +2959,136 @@ def _build_token_limit_retry_settings(agent: Any) -> dict[str, Any]:
     return retry
 
 
+def _is_transient_stream_error(exc: BaseException) -> bool:
+    """Return True for transient relay/stream drops worth one brief retry."""
+    import httpx
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    if isinstance(
+        exc,
+        (
+            httpx.TimeoutException,
+            httpx.RemoteProtocolError,
+            httpx.ReadError,
+            httpx.ConnectError,
+            ConnectionError,
+            TimeoutError,
+        ),
+    ):
+        return True
+    if isinstance(exc, ModelHTTPError) and exc.status_code in {408, 429, 502, 503, 504, 524}:
+        return True
+    msg = str(exc or "").lower()
+    return any(
+        tok in msg
+        for tok in (
+            "peer closed connection",
+            "incomplete chunked read",
+            "remoteprotocolerror",
+            "server disconnected",
+            "connection reset",
+            "readtimeout",
+        )
+    )
+
+
+_S9_STREAM_HEARTBEAT_SECONDS = 12.0
+
+
+def _emit_s9_log(on_log: Any, message: str) -> None:
+    if not callable(on_log) or not message:
+        return
+    try:
+        on_log(message)
+    except Exception:
+        pass
+
+
+def _emit_s9_progress(on_progress: Any, progress: float, message: str) -> None:
+    if not callable(on_progress):
+        return
+    try:
+        on_progress(progress, message)
+    except Exception:
+        pass
+
+
 async def _run_s9_agent_streaming_once(
     agent: Any,
     prompt: Any,
     *,
     message_history: Any = None,
     model_settings_override: dict[str, Any] | None = None,
+    output_type_override: Any = None,
+    on_log: Any = None,
+    stage_label: str = "",
 ) -> Any:
     run_kwargs: dict[str, Any] = {}
     if message_history is not None:
         run_kwargs["message_history"] = message_history
-    if _agent_run_supports_event_stream_handler(agent):
+    if output_type_override is not None and _agent_method_supports_param(agent, "run", "output_type"):
+        run_kwargs["output_type"] = output_type_override
+
+    stream_state = {"events": 0, "started": time.monotonic()}
+    label = stage_label or str(getattr(agent, "name", "") or "模型生成")
+
+    async def _counting_event_stream_handler(_ctx: Any, event_stream: Any) -> None:
+        async for _ in event_stream:
+            stream_state["events"] += 1
+
+    heartbeat_task: asyncio.Task[None] | None = None
+    if callable(on_log) and _S9_STREAM_HEARTBEAT_SECONDS > 0:
+        async def _heartbeat_loop() -> None:
+            while True:
+                await asyncio.sleep(_S9_STREAM_HEARTBEAT_SECONDS)
+                elapsed = int(round(time.monotonic() - stream_state["started"]))
+                ev_count = stream_state["events"]
+                if ev_count > 0:
+                    _emit_s9_log(
+                        on_log,
+                        f"⏳ [{label}] 模型正在流式生成中（已用时 {elapsed}s，已接收 {ev_count} 个流式片段）...",
+                    )
+                else:
+                    _emit_s9_log(
+                        on_log,
+                        f"⏳ [{label}] 等待模型首包响应中（已用时 {elapsed}s）...",
+                    )
+
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+    try:
+        if _agent_run_supports_event_stream_handler(agent):
+            if model_settings_override is not None and _agent_method_supports_param(agent, "run", "model_settings"):
+                run_kwargs["model_settings"] = model_settings_override
+            run_kwargs["event_stream_handler"] = (
+                _counting_event_stream_handler if callable(on_log) else _drain_agent_event_stream
+            )
+            return await agent.run(prompt, **run_kwargs)
+        if callable(getattr(agent, "run_stream", None)):
+            if output_type_override is not None and _agent_method_supports_param(agent, "run_stream", "output_type"):
+                run_kwargs["output_type"] = output_type_override
+            if model_settings_override is not None and _agent_method_supports_param(agent, "run_stream", "model_settings"):
+                run_kwargs["model_settings"] = model_settings_override
+            async with agent.run_stream(prompt, **run_kwargs) as stream_result:
+                output = await stream_result.get_output()
+                response = getattr(stream_result, "response", None)
+                all_messages_fn = getattr(stream_result, "all_messages", None)
+                all_messages = all_messages_fn() if callable(all_messages_fn) else None
+                return SimpleNamespace(
+                    output=output,
+                    response=response,
+                    all_messages=(
+                        (lambda msgs=all_messages: msgs) if all_messages is not None else None
+                    ),
+                )
         if model_settings_override is not None and _agent_method_supports_param(agent, "run", "model_settings"):
             run_kwargs["model_settings"] = model_settings_override
-        run_kwargs["event_stream_handler"] = _drain_agent_event_stream
         return await agent.run(prompt, **run_kwargs)
-    if callable(getattr(agent, "run_stream", None)):
-        if model_settings_override is not None and _agent_method_supports_param(agent, "run_stream", "model_settings"):
-            run_kwargs["model_settings"] = model_settings_override
-        async with agent.run_stream(prompt, **run_kwargs) as stream_result:
-            output = await stream_result.get_output()
-            response = getattr(stream_result, "response", None)
-            all_messages_fn = getattr(stream_result, "all_messages", None)
-            all_messages = all_messages_fn() if callable(all_messages_fn) else None
-            return SimpleNamespace(
-                output=output,
-                response=response,
-                all_messages=(
-                    (lambda msgs=all_messages: msgs) if all_messages is not None else None
-                ),
-            )
-    if model_settings_override is not None and _agent_method_supports_param(agent, "run", "model_settings"):
-        run_kwargs["model_settings"] = model_settings_override
-    return await agent.run(prompt, **run_kwargs)
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
 
 
 async def _run_s9_agent_streaming(
@@ -2743,41 +3096,125 @@ async def _run_s9_agent_streaming(
     prompt: Any,
     *,
     message_history: Any = None,
+    on_log: Any = None,
+    stage_label: str = "",
 ) -> Any:
-    """Run a PydanticAI agent via streaming transport while preserving output retries.
+    """Run a PydanticAI agent via streaming transport with structured-output & transient fallbacks.
 
-    Passing ``event_stream_handler`` makes ``Agent.run()`` invoke
-    ``model.request_stream()`` instead of buffering the entire completion in a
-    single non-streaming HTTP response (which triggers Cloudflare's 120s 524
-    Proxy Read Timeout on long Stage 1/Stage 2 generations), while keeping
-    PydanticAI's structured-output validation retries intact. Also retries once
-    with lower reasoning effort / higher output budget when thinking tokens
-    exhaust ``max_tokens`` before generating output.
+    1. Passing ``event_stream_handler`` makes ``Agent.run()`` invoke
+       ``model.request_stream()`` so SSE chunks continuously reset proxy read timeouts.
+    2. When thinking tokens exhaust ``max_tokens`` before emitting output, retries once
+       with lower reasoning effort and higher completion budget.
+    3. When a structured-output PydanticAI Agent fails with ``UnexpectedModelBehavior``
+       (e.g. ``Exceeded maximum output retries (3)`` on models/relays that ignore tool
+       calls or fail strict tool validation) or HTTP 400/422, logs the concrete retry
+       diagnosis and automatically falls back to ``PromptedOutput(output_type)``.
+    4. Retries once with brief backoff on transient mid-stream connection/gateway drops.
     """
+    from pydantic_ai import Agent, PromptedOutput, capture_run_messages
+    from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+
+    from novelvideo.model_gateway_runtime import current_model_gateway_context
+    from novelvideo.structured_extraction import (
+        StructuredOutputFailure,
+        describe_output_failure,
+    )
+
+    label = stage_label or str(getattr(agent, "name", "") or "模型生成")
+
+    def _is_org_context() -> bool:
+        ctx = current_model_gateway_context()
+        return ctx is not None and ctx.is_organization
+
+    async def _invoke_with_transient_retry(
+        *,
+        model_settings_override: dict[str, Any] | None = None,
+        output_type_override: Any = None,
+    ) -> Any:
+        for attempt in range(2):
+            with capture_run_messages() as captured_messages:
+                try:
+                    return await _run_s9_agent_streaming_once(
+                        agent,
+                        prompt,
+                        message_history=message_history,
+                        model_settings_override=model_settings_override,
+                        output_type_override=output_type_override,
+                        on_log=on_log,
+                        stage_label=label,
+                    )
+                except UnexpectedModelBehavior as exc:
+                    diagnosis = describe_output_failure(exc, list(captured_messages))
+                    logger.warning("S9 structured output failed: %s", diagnosis)
+                    raise StructuredOutputFailure(diagnosis) from exc
+                except Exception as exc:
+                    if (
+                        attempt == 0
+                        and not _is_org_context()
+                        and _is_transient_stream_error(exc)
+                    ):
+                        logger.warning(
+                            "S9 streaming call interrupted transiently (%s); retrying once",
+                            exc,
+                        )
+                        _emit_s9_log(
+                            on_log,
+                            f"⚠️ [{label}] 流式连接中断（{type(exc).__name__}），1.5秒后自动重试...",
+                        )
+                        await asyncio.sleep(1.5)
+                        continue
+                    raise
+
     try:
-        return await _run_s9_agent_streaming_once(
-            agent, prompt, message_history=message_history
-        )
+        return await _invoke_with_transient_retry()
     except Exception as exc:
-        if not _is_token_limit_exhausted_error(exc):
-            raise
-        if not (
+        if _is_token_limit_exhausted_error(exc) and (
             _agent_method_supports_param(agent, "run", "model_settings")
             or _agent_method_supports_param(agent, "run_stream", "model_settings")
         ):
-            raise
-        retry_settings = _build_token_limit_retry_settings(agent)
-        logger.warning(
-            "S9 agent hit completion token limit before emitting response (%s); "
-            "retrying with adjusted settings: %s",
-            exc,
-            {k: v for k, v in retry_settings.items() if k in {"max_tokens", "openai_reasoning_effort"}},
+            retry_settings = _build_token_limit_retry_settings(agent)
+            logger.warning(
+                "S9 agent hit completion token limit before emitting response (%s); "
+                "retrying with adjusted settings: %s",
+                exc,
+                {k: v for k, v in retry_settings.items() if k in {"max_tokens", "openai_reasoning_effort"}},
+            )
+            _emit_s9_log(
+                on_log,
+                f"⚠️ [{label}] 思考 token 触及上限，自动降低推理档位并提高输出预算重试...",
+            )
+            return await _invoke_with_transient_retry(model_settings_override=retry_settings)
+
+        # Structured output tool-call failure (e.g. Exceeded maximum output retries (3)):
+        # fall back to PromptedOutput(output_type) with lowered reasoning effort.
+        is_schema_rejection = isinstance(exc, StructuredOutputFailure) or (
+            isinstance(exc, ModelHTTPError) and exc.status_code in {400, 422}
         )
-        return await _run_s9_agent_streaming_once(
-            agent,
-            prompt,
-            message_history=message_history,
-            model_settings_override=retry_settings,
+        output_type = getattr(agent, "output_type", None)
+        can_prompted_fallback = (
+            is_schema_rejection
+            and not _is_org_context()
+            and isinstance(agent, Agent)
+            and output_type is not None
+            and output_type is not str
+            and not isinstance(output_type, PromptedOutput)
+        )
+        if not can_prompted_fallback:
+            raise
+
+        fallback_settings = _build_token_limit_retry_settings(agent)
+        logger.warning(
+            "S9 structured tool output failed (%s); falling back to PromptedOutput(%s)",
+            exc,
+            getattr(output_type, "__name__", output_type),
+        )
+        _emit_s9_log(
+            on_log,
+            f"⚠️ [{label}] 工具调用结构化输出校验未通过，自动切换文本 JSON 兼容模式重试...",
+        )
+        return await _invoke_with_transient_retry(
+            model_settings_override=fallback_settings,
+            output_type_override=PromptedOutput(output_type),
         )
 
 
@@ -2792,6 +3229,7 @@ def _build_s9_stage1_skeleton_system_prompt(
     max_segment_seconds: int,
     spine_template: str = "drama",
     tail_anchor: bool = False,
+    content_harmonize: bool = False,
 ) -> str:
     cap = normalize_max_segment_seconds(max_segment_seconds)
     short_tail_floor = max(4, round(cap * 0.4))
@@ -2805,7 +3243,7 @@ def _build_s9_stage1_skeleton_system_prompt(
         if tail_anchor
         else "「尾帧锚点镜」关闭：段末自然落定 `exit_state`，供下一大段第 0 秒直接承接。"
     )
-    return f"""你是 YD 电影级分镜总导演（Stage 1A：全局定拍、切段规划与跨段连续性圣经锁定）。
+    base = f"""你是 YD 电影级分镜总导演（Stage 1A：全局定拍、切段规划与跨段连续性圣经锁定）。
 你的任务是通读全集原文与全部资产清单，一次性完成全局时长评估、大段分段规划与跨 Clip 连续性锁定，输出轻量结构化 `S9Stage1SkeletonPlan` JSON（本步**不展开**逐镜 `shots` 列表，由下一步全并发细化）。
 
 ### 核心法则
@@ -2825,6 +3263,11 @@ def _build_s9_stage1_skeleton_system_prompt(
    - `voice_profiles`：为每个发声角色锁定稳定声线描述（用于跨段保持声线一致）。
 4. **段界交接契约**：
    - 每个大段写清 `story_beat`、`entry_state`、`exit_state`、`opening_shot_direction`（确保与上段末镜自然推进而不雷同）、`closing_shot_direction`、`scene_layout` 及涉及的 `identity_ids` / `scene_ids` / `prop_ids`。"""
+    if content_harmonize:
+        from novelvideo.content_harmonize import HARMONIZE_STORYBOARD_DIRECTIVE
+
+        return f"{base}\n\n{HARMONIZE_STORYBOARD_DIRECTIVE}"
+    return base
 
 
 def _build_s9_stage1_skeleton_task_prompt(
@@ -2929,6 +3372,7 @@ async def _revise_s9_segment_local(
     max_segment_seconds: int,
     spine_template: str,
     tail_anchor: bool,
+    content_harmonize: bool = False,
 ) -> S9SegmentPlan:
     from pydantic_ai import Agent
 
@@ -2939,6 +3383,7 @@ async def _revise_s9_segment_local(
         max_segment_seconds=cap,
         spine_template=spine_template,
         tail_anchor=tail_anchor,
+        content_harmonize=content_harmonize,
     )
     agent = Agent(
         get_newapi_text_pydantic_model(
@@ -3027,6 +3472,9 @@ async def _run_s9_stage1_monolithic(
     spine_template: str,
     tail_anchor: bool,
     prev_episode_context: str,
+    content_harmonize: bool = False,
+    on_log: Any = None,
+    on_progress: Any = None,
 ) -> S9StoryboardPlan:
     """Single-pass Stage 1 planner for very short scripts or skeleton fallback."""
 
@@ -3034,10 +3482,12 @@ async def _run_s9_stage1_monolithic(
 
     from novelvideo.config import get_newapi_text_pydantic_model
 
+    _emit_s9_log(on_log, "Stage 1：正文较短，采用单次全量规划生成分镜预览...")
     system_prompt = build_s9_stage1_system_prompt(
         max_segment_seconds=cap,
         spine_template=spine_template,
         tail_anchor=tail_anchor,
+        content_harmonize=content_harmonize,
     )
     task_prompt = build_s9_stage1_task_prompt(
         source_text=source_text,
@@ -3060,8 +3510,19 @@ async def _run_s9_stage1_monolithic(
         retries=3,
         name="YD Stage1 Storyboard Planner",
     )
-    result = await _run_s9_agent_streaming(agent, task_prompt)
+    t0 = time.monotonic()
+    result = await _run_s9_agent_streaming(
+        agent,
+        task_prompt,
+        on_log=on_log,
+        stage_label="Stage 1 · 分镜规划",
+    )
     plan = result.output
+    _emit_s9_log(
+        on_log,
+        f"Stage 1 初稿产出（耗时 {time.monotonic() - t0:.1f}s）：共 {len(plan.segments or [])} 个 Clip，正在进行节奏与衔接质检...",
+    )
+    _emit_s9_progress(on_progress, 0.38, f"Stage 1：已产出 {len(plan.segments or [])} 个 Clip 初稿，正在质检")
 
     issues = audit_s9_plan_pacing(plan, max_segment_seconds=cap)
     if issues and plan.segments:
@@ -3070,6 +3531,10 @@ async def _run_s9_stage1_monolithic(
                 "YD Stage 1 pacing/closure audit found %d issue(s); running compact revision: %s",
                 len(issues),
                 "; ".join(issues[:5]),
+            )
+            _emit_s9_log(
+                on_log,
+                f"Stage 1 质检发现 {len(issues)} 项节奏问题，正在执行精简修订...",
             )
             revision_prompt = (
                 f"{task_prompt}\n\n"
@@ -3086,13 +3551,24 @@ async def _run_s9_stage1_monolithic(
                 f"5. 单段时长 <= {cap} 秒（整数秒），不为了凑满 {cap} 秒硬塞或拉长镜头。"
             )
             try:
-                revised = await _run_s9_agent_streaming(agent, revision_prompt)
+                rev_t0 = time.monotonic()
+                revised = await _run_s9_agent_streaming(
+                    agent,
+                    revision_prompt,
+                    on_log=on_log,
+                    stage_label="Stage 1 · 节奏修订",
+                )
                 if revised.output and revised.output.segments:
                     revised_issues = audit_s9_plan_pacing(revised.output, max_segment_seconds=cap)
                     if len(revised_issues) <= len(issues):
                         plan = revised.output
+                        _emit_s9_log(
+                            on_log,
+                            f"  ✓ Stage 1 节奏修订完成（耗时 {time.monotonic() - rev_t0:.1f}s）",
+                        )
             except Exception as exc:
                 logger.warning("YD Stage 1 compact revision failed, keeping initial plan: %s", exc)
+                _emit_s9_log(on_log, "  ⚠️ Stage 1 节奏修订异常，已保留初稿规划")
         else:
             # Multi-segment monolithic result: revise only flagged segments in parallel.
             segments = list(plan.segments)
@@ -3106,8 +3582,13 @@ async def _run_s9_stage1_monolithic(
                 ) + _audit_s9_segment_boundary(segments[idx - 1] if idx > 0 else None, segments[idx])
                 if not seg_issues:
                     return segments[idx]
+                _emit_s9_log(
+                    on_log,
+                    f"  → Stage 1 局部修复 Clip {segments[idx].segment_number}（发现 {len(seg_issues)} 项节奏/衔接问题）",
+                )
                 async with semaphore:
-                    return await _revise_s9_segment_local(
+                    t_fix = time.monotonic()
+                    fixed = await _revise_s9_segment_local(
                         segment=segments[idx],
                         issues=seg_issues,
                         prev_segment=segments[idx - 1] if idx > 0 else None,
@@ -3118,10 +3599,18 @@ async def _run_s9_stage1_monolithic(
                         max_segment_seconds=cap,
                         spine_template=spine_template,
                         tail_anchor=tail_anchor,
+                        content_harmonize=content_harmonize,
                     )
+                    _emit_s9_log(
+                        on_log,
+                        f"  ✓ Stage 1 局部修复完成：Clip {segments[idx].segment_number}（耗时 {time.monotonic() - t_fix:.1f}s）",
+                    )
+                    return fixed
 
             revised_segments = await asyncio.gather(*(_fix(i) for i in range(len(segments))))
             plan = plan.model_copy(update={"segments": list(revised_segments)})
+    else:
+        _emit_s9_log(on_log, f"Stage 1 质检通过：全部 {len(plan.segments or [])} 个 Clip 节奏与衔接正常")
     return plan
 
 
@@ -3141,6 +3630,9 @@ async def run_s9_stage1_plan(
     spine_template: str = "drama",
     tail_anchor: bool = False,
     prev_episode_context: str = "",
+    content_harmonize: bool = False,
+    on_log: Any = None,
+    on_progress: Any = None,
 ) -> S9StoryboardPlan:
     """Invoke LLM to compute Stage 1 S9StoryboardPlan.
 
@@ -3175,9 +3667,17 @@ async def run_s9_stage1_plan(
             spine_template=spine_template,
             tail_anchor=tail_anchor,
             prev_episode_context=prev_episode_context,
+            content_harmonize=content_harmonize,
+            on_log=on_log,
+            on_progress=on_progress,
         )
 
     # Pass 1A: Lightweight global skeleton + Continuity Bible
+    _emit_s9_progress(
+        on_progress,
+        0.24,
+        "Stage 1A：正在拆解全集 Clip 骨架与跨段连续性圣经（光影/坐标/道具/声线）...",
+    )
     skeleton_agent = Agent(
         get_newapi_text_pydantic_model(
             "LITERAL_BEAT_META_MODEL",
@@ -3188,6 +3688,7 @@ async def run_s9_stage1_plan(
             max_segment_seconds=cap,
             spine_template=spine_template,
             tail_anchor=tail_anchor,
+            content_harmonize=content_harmonize,
         ),
         output_type=S9Stage1SkeletonPlan,
         model_settings=_s9_stage1_model_settings("LITERAL_BEAT_META_MODEL"),
@@ -3203,11 +3704,18 @@ async def run_s9_stage1_plan(
         max_segment_seconds=cap,
         prev_episode_context=prev_episode_context,
     )
-    skeleton_res = await _run_s9_agent_streaming(skeleton_agent, skeleton_task_prompt)
+    t_1a = time.monotonic()
+    skeleton_res = await _run_s9_agent_streaming(
+        skeleton_agent,
+        skeleton_task_prompt,
+        on_log=on_log,
+        stage_label="Stage 1A · 全局骨架规划",
+    )
     skeleton_plan: S9Stage1SkeletonPlan = skeleton_res.output
     skeletons = list(skeleton_plan.segments or [])
     if not skeletons:
         logger.warning("Stage 1A returned empty segments; falling back to monolithic Stage 1")
+        _emit_s9_log(on_log, "⚠️ Stage 1A 未返回有效分段骨架，自动切换单次全量规划...")
         return await _run_s9_stage1_monolithic(
             source_text=source_text,
             episode_num=episode_num,
@@ -3218,7 +3726,23 @@ async def run_s9_stage1_plan(
             spine_template=spine_template,
             tail_anchor=tail_anchor,
             prev_episode_context=prev_episode_context,
+            content_harmonize=content_harmonize,
+            on_log=on_log,
+            on_progress=on_progress,
         )
+
+    concurrency = get_s9_llm_concurrency()
+    total_clips = len(skeletons)
+    clip_preview = " / ".join(
+        f"Clip {sk.segment_number}《{sk.title or f'第{sk.segment_number}幕'}》({int(sk.planned_duration_seconds or 15)}s)"
+        for sk in skeletons[:8]
+    ) + (f" …等共 {total_clips} 个" if total_clips > 8 else "")
+    _emit_s9_progress(
+        on_progress,
+        0.30,
+        f"Stage 1A 完成（耗时 {time.monotonic() - t_1a:.1f}s）：共拆分 {total_clips} 个 Clip，开始并发细化分镜（并发上限 {concurrency}）",
+    )
+    _emit_s9_log(on_log, f"  骨架概览：{clip_preview}")
 
     clean_excerpts, context_slices = slice_s9_source_text_for_segments(source_text, skeletons)
     episode_overview = "\n".join(
@@ -3249,6 +3773,7 @@ async def run_s9_stage1_plan(
         max_segment_seconds=cap,
         spine_template=spine_template,
         tail_anchor=tail_anchor,
+        content_harmonize=content_harmonize,
     )
     expand_agent = Agent(
         get_newapi_text_pydantic_model(
@@ -3262,10 +3787,24 @@ async def run_s9_stage1_plan(
         retries=2,
         name="YD Stage1B Segment Expander",
     )
-    semaphore = asyncio.Semaphore(get_s9_llm_concurrency())
+    semaphore = asyncio.Semaphore(concurrency)
+    expanded_done = 0
 
     async def _expand_one(idx: int) -> S9SegmentPlan:
+        nonlocal expanded_done
         sk = skeletons[idx]
+        clip_title = sk.title or f"第{idx + 1}幕"
+        seg_assets_summary = _format_planned_assets_summary(
+            characters=characters,
+            episode=episode,
+            voice_available_names=voice_available_names,
+            scenes=scenes,
+            props=props,
+            output_dir=output_dir,
+            include_cross_episode_library=False,
+            allowed_extra_scene_ids={str(s).strip() for s in (sk.scene_ids or []) if str(s).strip()},
+            allowed_extra_prop_ids={str(p).strip() for p in (sk.prop_ids or []) if str(p).strip()},
+        )
         task_prompt = _build_s9_stage1_expand_task_prompt(
             skeleton=sk,
             episode_overview=episode_overview,
@@ -3274,24 +3813,41 @@ async def run_s9_stage1_plan(
             next_skeleton=skeletons[idx + 1] if idx + 1 < len(skeletons) else None,
             prev_episode_context=prev_episode_context if idx == 0 else "",
             style_context=style_context,
-            planned_assets_summary=planned_summary,
+            planned_assets_summary=seg_assets_summary,
             source_slice=context_slices[idx],
             episode_num=episode_num,
             episode_title=episode_title,
             max_segment_seconds=cap,
         )
         async with semaphore:
+            t_seg = time.monotonic()
+            _emit_s9_log(
+                on_log,
+                f"  → Stage 1B：开始细化 Clip {idx + 1}/{total_clips}《{clip_title}》（目标 {int(sk.planned_duration_seconds or 15)}s）",
+            )
             try:
-                res = await _run_s9_agent_streaming(expand_agent, task_prompt)
+                res = await _run_s9_agent_streaming(
+                    expand_agent,
+                    task_prompt,
+                    on_log=on_log,
+                    stage_label=f"Stage 1B · Clip {idx + 1}",
+                )
                 out: S9SegmentExpansionOutput = res.output
                 if out and out.shots:
                     seg_dur = max(
                         MIN_S9_SEGMENT_SECONDS,
                         min(cap, int(out.planned_duration_seconds or sk.planned_duration_seconds or 15)),
                     )
+                    expanded_done += 1
+                    seg_elapsed = time.monotonic() - t_seg
+                    _emit_s9_progress(
+                        on_progress,
+                        0.30 + 0.14 * (expanded_done / max(1, total_clips)),
+                        f"Stage 1B：已完成 {expanded_done}/{total_clips} 个 Clip 细化（最新：Clip {idx + 1}《{clip_title}》，{len(out.shots)} 镜 / {seg_dur}s，耗时 {seg_elapsed:.1f}s）",
+                    )
                     return S9SegmentPlan(
                         segment_number=idx + 1,
-                        title=sk.title or f"第{idx + 1}幕",
+                        title=clip_title,
                         planned_duration_seconds=seg_dur,
                         source_excerpt=clean_excerpts[idx],
                         story_beat=out.story_beat or sk.story_beat,
@@ -3306,13 +3862,23 @@ async def run_s9_stage1_plan(
                     idx + 1,
                     exc,
                 )
+                _emit_s9_log(
+                    on_log,
+                    f"  ⚠️ Stage 1B：Clip {idx + 1}《{clip_title}》细化失败，已自动使用骨架保底",
+                )
         fallback_dur = max(
             MIN_S9_SEGMENT_SECONDS,
             min(cap, int(sk.planned_duration_seconds or 15)),
         )
+        expanded_done += 1
+        _emit_s9_progress(
+            on_progress,
+            0.30 + 0.14 * (expanded_done / max(1, total_clips)),
+            f"Stage 1B：已完成 {expanded_done}/{total_clips} 个 Clip 细化（Clip {idx + 1} 保底）",
+        )
         return S9SegmentPlan(
             segment_number=idx + 1,
-            title=sk.title or f"第{idx + 1}幕",
+            title=clip_title,
             planned_duration_seconds=fallback_dur,
             source_excerpt=clean_excerpts[idx],
             story_beat=sk.story_beat,
@@ -3338,40 +3904,70 @@ async def run_s9_stage1_plan(
     )
 
     # Selective local pacing & boundary repair (concurrent only on flagged segments)
-    async def _maybe_repair(idx: int) -> S9SegmentPlan:
-        seg = expanded_segments[idx]
+    flagged_issues_by_idx: dict[int, list[str]] = {}
+    for idx, seg in enumerate(expanded_segments):
         prev_seg = expanded_segments[idx - 1] if idx > 0 else None
-        next_seg = expanded_segments[idx + 1] if idx + 1 < len(expanded_segments) else None
-        issues = audit_s9_segment_pacing(
+        seg_issues = audit_s9_segment_pacing(
             seg,
             max_segment_seconds=cap,
             require_exit_state=(len(expanded_segments) >= 2 and idx < len(expanded_segments) - 1),
         ) + _audit_s9_segment_boundary(prev_seg, seg)
-        if not issues:
-            return seg
-        logger.warning(
-            "YD Stage 1B segment %d audit found %d issue(s); running local repair: %s",
-            seg.segment_number,
-            len(issues),
-            "; ".join(issues[:4]),
-        )
-        async with semaphore:
-            return await _revise_s9_segment_local(
-                segment=seg,
-                issues=issues,
-                prev_segment=prev_seg,
-                next_segment=next_seg,
-                source_slice=context_slices[idx],
-                planned_assets_summary=planned_summary,
-                style_context=style_context,
-                max_segment_seconds=cap,
-                spine_template=spine_template,
-                tail_anchor=tail_anchor,
-            )
+        if seg_issues:
+            flagged_issues_by_idx[idx] = seg_issues
 
-    repaired_segments = list(
-        await asyncio.gather(*(_maybe_repair(i) for i in range(len(expanded_segments))))
-    )
+    if not flagged_issues_by_idx:
+        _emit_s9_progress(
+            on_progress,
+            0.48,
+            f"Stage 1 质检通过：全部 {total_clips} 个 Clip 节奏与衔接正常",
+        )
+        repaired_segments = expanded_segments
+    else:
+        flagged_labels = "、".join(f"Clip {i + 1}" for i in sorted(flagged_issues_by_idx))
+        _emit_s9_progress(
+            on_progress,
+            0.45,
+            f"Stage 1 质检发现 {len(flagged_issues_by_idx)} 个 Clip 需局部微调（{flagged_labels}），开始局部修复...",
+        )
+
+        async def _maybe_repair(idx: int) -> S9SegmentPlan:
+            seg = expanded_segments[idx]
+            issues = flagged_issues_by_idx.get(idx)
+            if not issues:
+                return seg
+            prev_seg = expanded_segments[idx - 1] if idx > 0 else None
+            next_seg = expanded_segments[idx + 1] if idx + 1 < len(expanded_segments) else None
+            logger.warning(
+                "YD Stage 1B segment %d audit found %d issue(s); running local repair: %s",
+                seg.segment_number,
+                len(issues),
+                "; ".join(issues[:4]),
+            )
+            async with semaphore:
+                t_rep = time.monotonic()
+                repaired = await _revise_s9_segment_local(
+                    segment=seg,
+                    issues=issues,
+                    prev_segment=prev_seg,
+                    next_segment=next_seg,
+                    source_slice=context_slices[idx],
+                    planned_assets_summary=planned_summary,
+                    style_context=style_context,
+                    max_segment_seconds=cap,
+                    spine_template=spine_template,
+                    tail_anchor=tail_anchor,
+                    content_harmonize=content_harmonize,
+                )
+                _emit_s9_log(
+                    on_log,
+                    f"  ✓ Stage 1 局部修复完成：Clip {seg.segment_number}（耗时 {time.monotonic() - t_rep:.1f}s）",
+                )
+                return repaired
+
+        repaired_segments = list(
+            await asyncio.gather(*(_maybe_repair(i) for i in range(len(expanded_segments))))
+        )
+        _emit_s9_progress(on_progress, 0.48, "Stage 1 局部质检修复完成")
     return S9StoryboardPlan(
         duration_assessment=skeleton_plan.duration_assessment,
         asset_manifest=skeleton_plan.asset_manifest,
@@ -3406,6 +4002,8 @@ async def run_s9_stage2_segment_prompt(
     current_prompt: str = "",
     scene_context_notes: str = "",
     continuity_anchor: str = "",
+    content_harmonize: bool = False,
+    on_log: Any = None,
 ) -> str:
     """Invoke LLM to compile Stage 2 full Seedance 2.0/2.5 prompt for one 大段."""
 
@@ -3413,10 +4011,12 @@ async def run_s9_stage2_segment_prompt(
 
     from novelvideo.config import get_newapi_text_pydantic_model
 
+    stage_label = f"Stage 2 · Clip {segment.segment_number}"
     system_prompt = build_s9_stage2_system_prompt(
         tail_anchor=tail_anchor,
         include_first_frame=include_first_frame,
         include_scene_layout=_segment_needs_scene_layout(segment),
+        content_harmonize=content_harmonize,
     )
     task_prompt = build_s9_stage2_task_prompt(
         segment=segment,
@@ -3446,7 +4046,12 @@ async def run_s9_stage2_segment_prompt(
     )
 
     async def _run_with_continuation(initial_prompt: str) -> tuple[str, list[str]]:
-        result = await _run_s9_agent_streaming(agent, initial_prompt)
+        result = await _run_s9_agent_streaming(
+            agent,
+            initial_prompt,
+            on_log=on_log,
+            stage_label=stage_label,
+        )
         rendered = _strip_code_fences(result.output)
         finish_reason = getattr(getattr(result, "response", None), "finish_reason", None)
         issues = _audit_s9_stage2_completeness(
@@ -3466,9 +4071,13 @@ async def run_s9_stage2_segment_prompt(
             return rendered, issues
 
         history = all_messages_fn()
-        for _ in range(_STAGE2_MAX_CONTINUATIONS):
+        for cont_round in range(1, _STAGE2_MAX_CONTINUATIONS + 1):
             if not _has_stage2_truncation_issue(issues):
                 break
+            _emit_s9_log(
+                on_log,
+                f"  ↻ [{stage_label}] 输出触及长度上限，正在无缝续写（第 {cont_round} 轮）...",
+            )
             cont_prompt = (
                 f"你上一条输出未写完整（{'；'.join(issues)}）。"
                 "请紧接着上一条输出最后一个字之后无缝续写剩余内容，补全到最后一个分镜及收束状态，"
@@ -3478,6 +4087,8 @@ async def run_s9_stage2_segment_prompt(
                 agent,
                 cont_prompt,
                 message_history=history,
+                on_log=on_log,
+                stage_label=f"{stage_label} 续写{cont_round}",
             )
             cont_text = _strip_code_fences(cont_result.output)
             if not cont_text:
@@ -3503,12 +4114,16 @@ async def run_s9_stage2_segment_prompt(
     try:
         rendered, issues = await _run_with_continuation(task_prompt)
         if not issues and rendered:
-            return rendered
+            return normalize_s9_stage2_prompt_structure(rendered)
         if issues:
             logger.warning(
                 "S9 Stage 2 prompt incomplete for segment %s (%s); running repair pass",
                 segment.segment_number,
                 "; ".join(issues),
+            )
+            _emit_s9_log(
+                on_log,
+                f"  ↻ [{stage_label}] 检测到提示词缺漏（{'；'.join(issues[:2])}），正在补全修复...",
             )
             repair_prompt = (
                 f"{task_prompt}\n\n"
@@ -3519,15 +4134,19 @@ async def run_s9_stage2_segment_prompt(
             )
             repaired, repair_issues = await _run_with_continuation(repair_prompt)
             if not repair_issues and repaired:
-                return repaired
+                return normalize_s9_stage2_prompt_structure(repaired)
             if repaired and not _has_stage2_truncation_issue(repair_issues):
-                return repaired
+                return normalize_s9_stage2_prompt_structure(repaired)
             if rendered and not _has_stage2_truncation_issue(issues):
-                return rendered
+                return normalize_s9_stage2_prompt_structure(rendered)
             logger.warning(
                 "S9 Stage 2 prompt repair remained truncated for segment %s (%s); falling back",
                 segment.segment_number,
                 "; ".join(repair_issues or issues),
+            )
+            _emit_s9_log(
+                on_log,
+                f"  ⚠️ [{stage_label}] 补全后仍不完整，已自动切换结构化兜底模板",
             )
     except Exception as exc:
         logger.warning(
@@ -3535,11 +4154,17 @@ async def run_s9_stage2_segment_prompt(
             segment.segment_number,
             exc,
         )
-    return build_s9_stage2_fallback_prompt(
-        segment=segment,
-        slots=slots,
-        style_context=style_context,
-        tail_anchor=tail_anchor,
+        _emit_s9_log(
+            on_log,
+            f"  ⚠️ [{stage_label}] 模型编译异常（{type(exc).__name__}），已自动切换结构化兜底模板",
+        )
+    return normalize_s9_stage2_prompt_structure(
+        build_s9_stage2_fallback_prompt(
+            segment=segment,
+            slots=slots,
+            style_context=style_context,
+            tail_anchor=tail_anchor,
+        )
     )
 
 
@@ -3608,6 +4233,8 @@ async def generate_all_s9_segment_prompts(
     scene_context_notes_by_segment: list[str] | None = None,
     continuity_anchor: str = "",
     on_segment_done: Any = None,
+    on_log: Any = None,
+    content_harmonize: bool = False,
 ) -> list[str]:
     """Generate Stage 2 continuous prompts across all 大段 with bounded concurrency.
 
@@ -3637,6 +4264,11 @@ async def generate_all_s9_segment_prompts(
             or bible.voice_profiles
         )
     )
+    _emit_s9_log(
+        on_log,
+        f"Stage 2：开始并发编译 {len(segments)} 个 Clip 的 Seedance 提示词（并发上限 {effective_concurrency}，"
+        f"{'连续性圣经已预锁，单波全并发' if has_prelocked_bible else '同场景分两波继承光影'}）",
+    )
 
     raw_scene_keys = [
         _primary_scene_key_for_slots(per_segment_slots[i] if i < len(per_segment_slots) else [])
@@ -3661,6 +4293,7 @@ async def generate_all_s9_segment_prompts(
                 wave1_indices.append(i)
 
     results: list[str] = [""] * len(segments)
+    total_segs = len(segments)
 
     async def _compile_one(idx: int, extra_anchor: str = "") -> str:
         seg = segments[idx]
@@ -3685,19 +4318,37 @@ async def generate_all_s9_segment_prompts(
             for part in (continuity_anchor.strip(), bible_anchor.strip(), extra_anchor.strip())
             if part
         )
+        img_cnt = sum(1 for s in slots if s.media_type == "image")
+        aud_cnt = sum(1 for s in slots if s.media_type == "audio")
+        clip_title = str(seg.title or f"第{seg.segment_number}幕").strip()
         async with semaphore:
-            rendered = await run_s9_stage2_segment_prompt(
-                segment=seg,
-                slots=slots,
-                style_context=style_context,
-                prev_segment=segments[idx - 1] if idx > 0 else None,
-                next_segment=segments[idx + 1] if idx + 1 < len(segments) else None,
-                prev_episode_context=prev_episode_context if idx == 0 else "",
-                tail_anchor=tail_anchor,
-                include_first_frame=include_first_frame,
-                source_text=seg_source,
-                scene_context_notes=seg_notes,
-                continuity_anchor=combined_anchor,
+            t_seg = time.monotonic()
+            _emit_s9_log(
+                on_log,
+                f"  → Stage 2：开始编译 Clip {seg.segment_number}/{total_segs}《{clip_title}》"
+                f"（{len(seg.shots or [])} 镜 / {int(seg.planned_duration_seconds or 0)}s，绑定 {img_cnt} 图 {aud_cnt} 音）",
+            )
+            stage2_kwargs: dict[str, Any] = {
+                "segment": seg,
+                "slots": slots,
+                "style_context": style_context,
+                "prev_segment": segments[idx - 1] if idx > 0 else None,
+                "next_segment": segments[idx + 1] if idx + 1 < len(segments) else None,
+                "prev_episode_context": prev_episode_context if idx == 0 else "",
+                "tail_anchor": tail_anchor,
+                "include_first_frame": include_first_frame,
+                "source_text": seg_source,
+                "scene_context_notes": seg_notes,
+                "continuity_anchor": combined_anchor,
+                "content_harmonize": content_harmonize,
+            }
+            if on_log is not None:
+                stage2_kwargs["on_log"] = on_log
+            rendered = await run_s9_stage2_segment_prompt(**stage2_kwargs)
+            _emit_s9_log(
+                on_log,
+                f"  ✓ Stage 2：Clip {seg.segment_number}/{total_segs}《{clip_title}》编译完成"
+                f"（{len(rendered or '')} 字，耗时 {time.monotonic() - t_seg:.1f}s）",
             )
         results[idx] = rendered
         if on_segment_done is not None:
@@ -4635,6 +5286,7 @@ __all__ = [
     "get_s9_llm_concurrency",
     "is_s9_segment_beat",
     "normalize_max_segment_seconds",
+    "normalize_s9_stage2_prompt_structure",
     "normalize_s9_storyboard_plan",
     "parse_s9_segment_meta",
     "parse_s9_subshots",

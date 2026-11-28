@@ -126,7 +126,7 @@
         },
         "canvasOverwrite": {
           "question": "Kết quả trong Shrimp Canvas có tự ghi đè asset luồng chính của tôi không?",
-          "answer": "Không. Mọi thứ tạo ra hay tải lên trong Shrimp Canvas mặc định chỉ là bản ứng viên. Nó chỉ vào luồng chính của dự án khi bạn chủ động commit và chọn slot đích — nhân vật, bối cảnh, đạo cụ, khung đầu của beat hay video."
+          "answer": "Không. Mọi thứ tạo ra hay tải lên trong Shrimp Canvas mặc định chỉ là bản ứng viên. Nó chỉ vào luồng chính của dự án khi bạn chủ động commit và chọn slot đích — nhân vật, bối cảnh, đạo cụ, khung đầu của clip hay video."
         },
         "whyAssetsFirst": {
           "question": "Vì sao phải sắp xếp nhân vật, bối cảnh, đạo cụ và giọng trước?",
@@ -844,13 +844,13 @@
       "deleteFailed": "Xoá canvas thất bại: {{message}}",
       "noConflictSnapshot": "Không có bản chụp xung đột cục bộ nào để lưu.",
       "description": {
-        "freeWorkflowBeat": "Quy trình tự do · Tập {{episode}} / Beat {{beat}}",
+        "freeWorkflowBeat": "Quy trình tự do · Tập {{episode}} / Clip {{beat}}",
         "freeWorkflowAsset": "Quy trình tự do · {{asset}}",
         "freeWorkflow": "Quy trình tự do",
         "default": "Canvas mặc định",
         "episode": "Canvas Tập {{episode}}",
         "episodeUnknown": "Canvas tập phim",
-        "beat": "Canvas beat · Tập {{episode}} / Beat {{beat}}{{slot}}",
+        "beat": "Canvas clip · Tập {{episode}} / Clip {{beat}}{{slot}}",
         "asset": "Canvas asset · {{name}} / {{kind}}",
         "assetUnknown": "Canvas asset · {{kind}}",
         "assetFallback": "asset",
@@ -922,9 +922,9 @@
         "director_combined": "Bản render đạo diễn"
       },
       "tabs": {
-        "beatAll": "Mọi beat",
-        "beatEpisode": "Beat trong tập",
-        "beatCurrent": "Beat hiện tại",
+        "beatAll": "Mọi clip",
+        "beatEpisode": "Clip trong tập",
+        "beatCurrent": "Clip hiện tại",
         "characters": "Nhân vật",
         "scenes": "Bối cảnh",
         "props": "Đạo cụ"
@@ -945,7 +945,7 @@
       },
       "episodeTitle": "Tập {{episode}}",
       "episodeUnknown": "Tập ?",
-      "beatUnknown": "Beat ?",
+      "beatUnknown": "Clip ?",
       "expandDrawer": "Mở rộng ngăn asset",
       "collapseDrawer": "Thu gọn ngăn asset",
       "expand": "Mở rộng",
@@ -1024,7 +1024,7 @@
         "ambient_audio": "Tiếng nền",
         "scene": "Bối cảnh",
         "prop": "Đạo cụ",
-        "beat": "Beat",
+        "beat": "Clip",
         "frame": "Khung hình",
         "video": "Video",
         "audio": "Âm thanh",
@@ -1049,8 +1049,8 @@
       "directorWorldState": "Trạng thái thế giới đạo diễn",
       "directorWorldManifestHint": "Commit manifest thế giới đạo diễn hiện tại",
       "modelCommitHint": "Commit thế giới 3D hiện tại vào bối cảnh trong luồng chính",
-      "loadingBeats": "Đang tải beat…",
-      "noBeats": "Không có beat nào",
+      "loadingBeats": "Đang tải clip…",
+      "noBeats": "Không có clip nào",
       "loadingIdentities": "Đang tải identity_id…",
       "noIdentities": "Nhân vật này chưa có identity_id",
       "sceneIdPlaceholder": "scene_id, ví dụ quán mì Lan Châu",
@@ -1124,8 +1124,8 @@
         "scene_3gs_custom_scene": "Thế giới 3D (cảnh tuỳ chỉnh)",
         "scene_3gs_collision_glb": "Khối va chạm của thế giới 3D",
         "prop_ref": "Tham chiếu đạo cụ",
-        "video": "Video (video của beat)",
-        "beat_audio": "Âm thanh (âm thanh của beat)"
+        "video": "Video (video của clip)",
+        "beat_audio": "Âm thanh (âm thanh của clip)"
       },
       "shortKinds": {
         "frame": "Khung đầu",
@@ -2213,7 +2213,7 @@
       "editedAgo": "{{time}}",
       "deletedAgo": "đã xoá {{time}}",
       "episodes": "{{count}} tập",
-      "beats": "{{count}} beat"
+      "beats": "{{count}} clip"
     },
     "view": {
       "toggle": "Hiển thị",
@@ -2338,12 +2338,12 @@
       "delete": "Xoá",
       "generated": "đã tạo",
       "missing": "còn thiếu",
-      "usageCount": "Dùng trong {{count}} beat",
-      "usageNone": "Chưa dùng trong beat nào",
+      "usageCount": "Dùng trong {{count}} clip",
+      "usageNone": "Chưa dùng trong clip nào",
       "copyLink": "Sao chép link asset",
       "linkCopied": "Đã sao chép link",
-      "appearsIn": "Xuất hiện trong các beat",
-      "beatRef": "Tập {{episode}} · Beat {{beat}}",
+      "appearsIn": "Xuất hiện trong các clip",
+      "beatRef": "Tập {{episode}} · Clip {{beat}}",
       "search": "Tìm asset",
       "searchScenes": "Tìm bối cảnh",
       "searchProps": "Tìm đạo cụ",
@@ -2465,7 +2465,7 @@
       "newPropHint": "AI trích xuất đạo cụ theo từng tập trong Studio Tập phim",
       "editProp": "Sửa đạo cụ",
       "emptyTitle": "Chưa có đạo cụ nào",
-      "emptyDescription": "Tạo đạo cụ mới hoặc đưa đạo cụ của tập phim lên từ trang beat.",
+      "emptyDescription": "Tạo đạo cụ mới hoặc đưa đạo cụ của tập phim lên từ trang clip.",
       "confirmDelete": "Xoá đạo cụ \"{{name}}\"?",
       "deleted": "Đã xoá đạo cụ",
       "reference": "Ảnh tham chiếu",
@@ -2563,7 +2563,7 @@
     "preview": "Xem trước",
     "noAudio": "Không có âm thanh",
     "noVideo": "Không có video",
-    "noBeatData": "Không có dữ liệu beat",
+    "noBeatData": "Không có dữ liệu clip",
     "download": "Tải về",
     "use": "Dùng",
     "confirmExecute": "Xác nhận",
@@ -2590,7 +2590,10 @@
     "generationInputContentPolicyBlocked": "Loại lỗi: không vượt qua kiểm duyệt an toàn nội dung (ảnh đầu vào). Nếu ảnh có người thật đã cho phép sử dụng hình ảnh, hãy bật Kiểm duyệt người thật rồi thử lại; nếu không, hãy thay đầu vào.",
     "generationOutputContentPolicyBlocked": "Loại lỗi: không vượt qua kiểm duyệt an toàn nội dung (video hoặc ảnh đầu ra). Mô hình đã từ chối kết quả này. Hãy điều chỉnh các mô tả liên quan đến bạo lực, gây hại, quyền riêng tư hoặc nội dung nhạy cảm khác rồi thử lại.",
     "generationContentPolicyBlocked": "Loại lỗi: không vượt qua kiểm duyệt an toàn nội dung. Mô hình đã từ chối yêu cầu tạo này. Hãy điều chỉnh câu lệnh hoặc thay đầu vào rồi thử lại.",
-    "processing": "Đang xử lý…"
+    "processing": "Đang xử lý…",
+    "gatewayErrors": {
+      "outputRetries": "Đầu ra có cấu trúc của mô hình không vượt qua kiểm tra sau nhiều lần thử lại (có thể do bị cắt ngắn hoặc sai định dạng). Vui lòng thử lại hoặc đổi mô hình văn bản ổn định hơn."
+    }
   },
   "ingest": {
     "title": "Nguồn truyện",
@@ -2610,6 +2613,8 @@
     "pastePlaceholder": "Dán nội dung truyện vào đây, tối đa 1000 ký tự",
     "startIngest": "Bắt đầu nhập",
     "saveSettings": "Lưu cài đặt",
+    "contentHarmonize": "Chế độ tuân thủ nội dung",
+    "contentHarmonizeHint": "Mặc định bật: chỉ điều chỉnh các yếu tố nhạy cảm (phù hiệu cảnh sát, vũ khí, cờ bạc, bạo lực) mà không ảnh hưởng cảnh thường",
     "settingsSaved": "Đã lưu cài đặt dự án",
     "settingsSaveFailed": "Lưu cài đặt dự án thất bại",
     "processing": "Đang xử lý...",
@@ -2959,7 +2964,7 @@
       "identityImageNamed": "{{character}} — ảnh tạo hình “{{identity}}”",
       "identityImage": "Ảnh tạo hình {{name}}",
       "unknownCharacter": "Nhân vật",
-      "withEpisodeBeat": "{{label}} (Tập {{episode}}, Beat {{beat}})",
+      "withEpisodeBeat": "{{label}} (Tập {{episode}}, Clip {{beat}})",
       "withEpisode": "{{label}} (Tập {{episode}})"
     },
     "progress": {
@@ -3073,7 +3078,7 @@
         "project": "Dự án",
         "episode": "Tập phim",
         "scope": "Phạm vi",
-        "beat": "Beat",
+        "beat": "Clip",
         "status": "Trạng thái",
         "progress": "Tiến độ",
         "createdAt": "Tạo lúc",
@@ -3095,7 +3100,7 @@
     "io": {
       "background": "Nền",
       "backgroundCandidate": "Ứng viên nền",
-      "beatContext": "Ngữ cảnh beat",
+      "beatContext": "Ngữ cảnh clip",
       "currentBackground": "Nền hiện tại",
       "currentStoryboard": "Storyboard hiện tại",
       "directorComposite": "Ảnh ghép đạo diễn",
@@ -3225,7 +3230,7 @@
   "literalScript": {
     "generating": "Đang tạo kịch bản chi tiết...",
     "noScript": "Chưa có kịch bản chi tiết. Bấm \"Tạo\" để dựng từ nguồn truyện.",
-    "beatCount": "{{count}} beat"
+    "beatCount": "{{count}} clip"
   },
   "episode": {
     "stage": {
@@ -3249,7 +3254,7 @@
       "rhythmDuration": "Theo thời lượng",
       "rhythmLiteral": "Từng dòng một",
       "rhythmDurationHint": "Chia cảnh theo thời lượng mục tiêu",
-      "rhythmLiteralHint": "Mỗi dòng nguồn thành một beat",
+      "rhythmLiteralHint": "Mỗi dòng nguồn thành một clip",
       "identityLabel": "Tạo hình:",
       "editIdentityLabel": "Sửa tạo hình:",
       "identityRequired": "Hãy lên kế hoạch tạo hình cho tập này trước khi tạo kịch bản.",
@@ -3268,11 +3273,11 @@
       "rawLabel": "Bản gốc · Chỉ đọc (từ lúc nhập truyện)",
       "rawActionLabel": "Xem bản gốc",
       "noRawText": "Không có văn bản gốc. Hãy liên kết nội dung nguồn của tập này ở bước Nhập truyện trước.",
-      "sourceTextLabel": "Văn bản nguồn của beat",
+      "sourceTextLabel": "Văn bản nguồn của clip",
       "sourceTextLabelNarrated": "Bản AI viết lại / bản gốc",
       "sourceTextLabelDrama": "Bản gốc",
       "sourceTextMeta": "Chỉnh sửa tự động lưu, tổng cộng {{count}} dòng",
-      "sourceTextPlaceholder": "Thêm văn bản nguồn của tập phim dùng để tạo beat theo từng dòng.",
+      "sourceTextPlaceholder": "Thêm văn bản nguồn của tập phim dùng để tạo clip theo từng dòng.",
       "sourceTextPlaceholderNarrated": "Bấm AI viết lại để tạo lời dẫn, hoặc sửa bản gốc trước khi tạo kịch bản.",
       "sourceTextPlaceholderDrama": "Bản gốc được dùng để tạo kịch bản và có thể sửa trực tiếp.",
       "linePreviewLabel": "Xem trước cách tách dòng",
@@ -3315,10 +3320,10 @@
       "scenePlanComplete": "Đã lên kế hoạch {{count}} bối cảnh",
       "propPlanComplete": "Đã lên kế hoạch {{count}} đạo cụ",
       "previewTitle": "Xem trước kịch bản",
-      "previewCount": "{{count}} Beat",
+      "previewCount": "{{count}} Clip",
       "previewLoading": "Đang tải kịch bản...",
       "previewEmptyTitle": "Chưa có kịch bản",
-      "previewEmpty": "Chưa có beat kịch bản nào. Hãy tạo kịch bản để xem trước tại đây.",
+      "previewEmpty": "Chưa có clip kịch bản nào. Hãy tạo kịch bản để xem trước tại đây.",
       "previewSpeaker": "Người nói",
       "previewNoSpeaker": "Không có người nói",
       "previewDialogueLine": "Lời thoại",
@@ -3335,7 +3340,7 @@
       "minGtMax": "Số ký tự tối thiểu không được lớn hơn tối đa",
       "rewrite": "Viết lại",
       "clearAdaptedTitle": "Xoá bản chuyển thể?",
-      "clearAdaptedDesc": "Sau khi xoá, việc tạo beat theo từng dòng sẽ dùng thẳng văn bản gốc. Không thể hoàn tác.",
+      "clearAdaptedDesc": "Sau khi xoá, việc tạo clip theo từng dòng sẽ dùng thẳng văn bản gốc. Không thể hoàn tác.",
       "clearButton": "Xoá",
       "generateRewrite": "AI viết lại",
       "rewriteTargetBeats": "Số dòng mục tiêu",
@@ -3347,7 +3352,7 @@
       "scriptReviewPassed": "Đã tạo xong kịch bản",
       "scriptReviewFailed": "Kịch bản chưa qua vòng rà soát. Hãy tạo lại: {{summary}}",
       "modeLabel": "Chế độ hiện tại:",
-      "modeLiteral": "Mỗi dòng một Beat",
+      "modeLiteral": "Mỗi dòng một Clip",
       "modeS9": "Phân cảnh điện ảnh YD",
       "maxSegmentSecondsLabel": "Tối đa đoạn",
       "segmentLimit30": "30 giây",
@@ -3381,15 +3386,15 @@
       "reviewIssuesFallback": "Vẫn còn vấn đề chưa xử lý"
     },
     "beat": {
-      "badge": "Beat {{n}}",
-      "openDrawer": "Mở chi tiết beat {{n}}",
+      "badge": "Clip {{n}}",
+      "openDrawer": "Mở chi tiết clip {{n}}",
       "jumpTo": "Tới {{stage}}",
       "select": "Chọn",
       "deselect": "Bỏ chọn",
       "noNarration": "(Không có lời dẫn)",
       "stale": "Đã cũ",
-      "clickToView": "Bấm vào một beat để xem chi tiết",
-      "noMatching": "Không có beat nào khớp",
+      "clickToView": "Bấm vào một clip để xem chi tiết",
+      "noMatching": "Không có clip nào khớp",
       "sectionText": "Văn bản",
       "sectionAudio": "Âm thanh",
       "sectionVideo": "Video",
@@ -3399,14 +3404,14 @@
       "notGenerated": "Chưa tạo",
       "deleteManualShot": "Xoá",
       "deleteManualShotTitle": "Xoá cú máy thủ công?",
-      "deleteManualShotDesc": "Xoá cú máy thủ công Beat #{{n}}? Các beat phía sau sẽ được đánh số lại.",
-      "deleteManualShotSuccess": "Đã xoá cú máy thủ công Beat #{{n}}",
+      "deleteManualShotDesc": "Xoá cú máy thủ công Clip #{{n}}? Các clip phía sau sẽ được đánh số lại.",
+      "deleteManualShotSuccess": "Đã xoá cú máy thủ công Clip #{{n}}",
       "deleteManualShotFailed": "Xoá cú máy thủ công thất bại",
-      "insertBefore": "Chèn cú máy thủ công trước Beat #{{n}}",
+      "insertBefore": "Chèn cú máy thủ công trước Clip #{{n}}",
       "insertBeforeShort": "Trước",
-      "insertAfter": "Chèn cú máy thủ công sau Beat #{{n}}",
+      "insertAfter": "Chèn cú máy thủ công sau Clip #{{n}}",
       "insertAfterShort": "Sau",
-      "openFreezone": "Mở XiPaint Beat Workbench",
+      "openFreezone": "Mở XiPaint Clip Workbench",
       "openFreezoneTip": "Sửa trong Freezone",
       "openFreezoneFailed": "Không mở được XiPaint",
       "markedProps": "Đạo cụ {{count}}",
@@ -3426,7 +3431,7 @@
         "confirm": "Vẫn đổi"
       },
       "endOfBeats": "—— Hết danh sách ——",
-      "endOfBeatsCount": "Tổng cộng {{count}} beat",
+      "endOfBeatsCount": "Tổng cộng {{count}} clip",
       "jumpTo": "Tới {{stage}}",
       "save": "Lưu",
       "regenerate": "Tạo lại",
@@ -3440,8 +3445,8 @@
         "selectedCount": "Đã chọn {{count}}",
         "clear": "Bỏ chọn",
         "totalShots": "{{count}} cú máy",
-        "activeBeat": "Beat {{n}}",
-        "noMatchingBeats": "Không có beat nào khớp",
+        "activeBeat": "Clip {{n}}",
+        "noMatchingBeats": "Không có clip nào khớp",
         "dragToResize": "Kéo để chỉnh tỉ lệ bề ngang trái/phải"
       },
       "text": {
@@ -3480,8 +3485,8 @@
         "noSceneVariant": "Không có biến thể"
       },
       "insertManual": {
-        "titleBeforeFirst": "Chèn cú máy thủ công trước beat đầu tiên",
-        "titleAfter": "Chèn cú máy thủ công sau beat {{n}}",
+        "titleBeforeFirst": "Chèn cú máy thủ công trước clip đầu tiên",
+        "titleAfter": "Chèn cú máy thủ công sau clip {{n}}",
         "audioType": "Loại cú máy",
         "audioTypeSilence": "Không lời",
         "audioTypeNarration": "Lời dẫn",
@@ -3519,10 +3524,10 @@
         "propsPlaceholderEmpty": "ID đạo cụ ngăn cách bằng dấu phẩy; để trống để tự nhận diện"
       },
       "audio": {
-        "narrationEmpty": "Chưa có lời dẫn — beat này không tạo được âm thanh. Hãy điền nội dung trước.",
+        "narrationEmpty": "Chưa có lời dẫn — clip này không tạo được âm thanh. Hãy điền nội dung trước.",
         "previewing": "Đang nghe thử",
         "previewFailed": "Nghe thử thất bại",
-        "regenerated": "Đã tạo lại Beat #{{n}}",
+        "regenerated": "Đã tạo lại Clip #{{n}}",
         "regenFailed": "Tạo lại thất bại",
         "defaultLabel": "Mặc định",
         "defaultVoice": "Giọng mặc định",
@@ -3535,31 +3540,31 @@
         "genFailed": "Tạo thất bại",
         "notGenerated": "Chưa tạo",
         "regenTitle": "Tạo lại âm thanh?",
-        "regenDesc": "Tạo lại lồng tiếng TTS cho Beat #{{n}}.",
+        "regenDesc": "Tạo lại lồng tiếng TTS cho Clip #{{n}}.",
         "configureVoiceAction": "Thiết lập",
-        "beatNarrationVoice": "Âm thanh lời dẫn của beat này",
-        "beatNarrationVoiceUpload": "Tải âm thanh cho beat",
-        "beatNarrationVoiceUploaded": "Đã tải âm thanh lời dẫn của beat lên",
+        "beatNarrationVoice": "Âm thanh lời dẫn của clip này",
+        "beatNarrationVoiceUpload": "Tải âm thanh cho clip",
+        "beatNarrationVoiceUploaded": "Đã tải âm thanh lời dẫn của clip lên",
         "prereqHintCharacters": ". Hãy sang trang Nhân vật để tải giọng người dẫn truyện lên.",
         "prereqHintVoices": ". Hãy sang Asset > Giọng nói để tải lên hoặc cắt một giọng dẫn truyện mặc định."
       },
       "video": {
-        "started": "Đã bắt đầu tạo video cho Beat #{{n}}",
+        "started": "Đã bắt đầu tạo video cho Clip #{{n}}",
         "regenFailed": "Tạo lại thất bại",
         "model": "Model",
         "generating": "Đang tạo...",
         "genFailed": "Tạo thất bại",
         "notGenerated": "Chưa tạo",
         "genTitle": "Tạo video?",
-        "genDesc": "Đã kiểm tra lại ảnh tham chiếu và prompt. Tiến hành tạo đoạn video cho Beat #{{n}}.",
+        "genDesc": "Đã kiểm tra lại ảnh tham chiếu và prompt. Tiến hành tạo đoạn video cho Clip #{{n}}.",
         "regenTitle": "Tạo lại video?",
-        "regenDesc": "Tạo lại đoạn video cho Beat #{{n}}.",
+        "regenDesc": "Tạo lại đoạn video cho Clip #{{n}}.",
         "noteDefault": "Mặc định",
         "noteNarration": "Khuyến nghị dùng lời dẫn",
         "noteDialogue": "Cú máy có lời thoại",
         "candidateCount": "Các phiên bản trước ({{count}})",
         "currentBadge": "Hiện tại",
-        "switched": "Beat #{{n}} đã chuyển sang phiên bản khác",
+        "switched": "Clip #{{n}} đã chuyển sang phiên bản khác",
         "switchFailed": "Chuyển thất bại",
         "seedance2Prompt": "Prompt chủ thể của Seedance2.0",
         "seedance2Ready": "Đã cấu hình",
@@ -3668,12 +3673,12 @@
         "s9ApplyReboundPrompt": "Áp dụng prompt đã sắp xếp lại",
         "customVideoInspector": "Thông số & prompt video",
         "seedance2PromptGenerated": "Đã tối ưu prompt Seedance2",
-        "seedance2PromptGeneratedOtherBeat": "Đã tối ưu prompt chủ thể và lưu ngược về beat #{{n}}",
+        "seedance2PromptGeneratedOtherBeat": "Đã tối ưu prompt chủ thể và lưu ngược về clip #{{n}}",
         "seedance2PromptGenerateFailed": "Tạo prompt Seedance2 thất bại",
         "videoPrompt": "Prompt video",
-        "keyframePrompt": "Prompt video của riêng beat",
-        "beatVideoPromptRequired": "Beat #{{n}} chưa có prompt video. Hãy tạo prompt cho beat này trước.",
-        "seedance2PromptRequired": "Beat #{{n}} chưa có prompt chính của Seedance2.0. Hãy điền vào hoặc chạy AI tối ưu trước.",
+        "keyframePrompt": "Prompt video của riêng clip",
+        "beatVideoPromptRequired": "Clip #{{n}} chưa có prompt video. Hãy tạo prompt cho clip này trước.",
+        "seedance2PromptRequired": "Clip #{{n}} chưa có prompt chính của Seedance2.0. Hãy điền vào hoặc chạy AI tối ưu trước.",
         "seedance2OverlayEnabled": "Bật",
         "seedance2OverlayKind": "Kiểu",
         "seedance2OverlayKindAdCopy": "Chữ quảng cáo",
@@ -3731,32 +3736,32 @@
         "seedance2CropDragHandle": "Di chuyển vùng cắt"
       },
       "batch": {
-        "narrationIncompatible": "Model này chỉ hỗ trợ cú máy có lời thoại ({{count}} beat lời dẫn không tương thích)",
+        "narrationIncompatible": "Model này chỉ hỗ trợ cú máy có lời thoại ({{count}} clip lời dẫn không tương thích)",
         "toolbar": "Thanh công cụ tạo nội dung",
         "rewriteScriptTitle": "Viết lại toàn bộ kịch bản?",
-        "rewriteScriptDesc": "Tạo lại lời dẫn của mọi beat từ văn bản gốc/bản chuyển thể. Nội dung hiện có sẽ bị ảnh hưởng.",
+        "rewriteScriptDesc": "Tạo lại lời dẫn của mọi clip từ văn bản gốc/bản chuyển thể. Nội dung hiện có sẽ bị ảnh hưởng.",
         "rewriteScript": "Viết lại toàn bộ kịch bản",
         "insertManualBeforeFirst": "Trước cú máy đầu tiên",
         "insertManualBeforeFirstShort": "Trước cú máy đầu",
-        "insertManualBeforeFirstTooltip": "Chèn một cú máy thủ công trước beat đầu tiên",
+        "insertManualBeforeFirstTooltip": "Chèn một cú máy thủ công trước clip đầu tiên",
         "genMissingManualShort": "Cú máy mới",
         "genAudioTitle": "Tạo toàn bộ âm thanh?",
-        "genAudioDesc": "Tạo lồng tiếng TTS cho mọi beat còn thiếu âm thanh.",
+        "genAudioDesc": "Tạo lồng tiếng TTS cho mọi clip còn thiếu âm thanh.",
         "genAudio": "Tạo toàn bộ âm thanh",
         "genAudioShort": "Toàn bộ âm thanh",
         "genAudioUnavailableForVideoModel": "Model video hiện tại không cần tạo âm thanh riêng cho cả tập",
         "videoModel": "Model video",
         "videoSettingsLabel": "Cài đặt video",
-        "genVideoDesc": "Tạo đoạn video cho mọi beat còn thiếu video. Cần có âm thanh trước.",
+        "genVideoDesc": "Tạo đoạn video cho mọi clip còn thiếu video. Cần có âm thanh trước.",
         "genVideo": "Tạo toàn bộ video",
         "genVideoShort": "Toàn bộ video",
         "video": "Video",
-        "genBatchVideoTitle": "Tạo video cho {{count}} beat?",
+        "genBatchVideoTitle": "Tạo video cho {{count}} clip?",
         "genBatchVideoDesc": "Tạo đoạn video cho #{{beats}} lần lượt từng cái. Cần có âm thanh.",
-        "genBatchVideo": "Tạo video cho {{count}} beat",
-        "audioSuccess": "Đã tạo âm thanh cho {{ok}} beat",
+        "genBatchVideo": "Tạo video cho {{count}} clip",
+        "audioSuccess": "Đã tạo âm thanh cho {{ok}} clip",
         "audioPartial": "Âm thanh: {{ok}} thành công, {{fail}} thất bại",
-        "videoSuccess": "Đã tạo video cho {{ok}} beat",
+        "videoSuccess": "Đã tạo video cho {{ok}} clip",
         "episodeFreezone": "Freezone của tập",
         "episodeFreezoneTooltip": "Mở tập này trong Freezone",
         "episodeFreezoneOpened": "Đã mở Freezone của tập",
@@ -3773,7 +3778,7 @@
         "charFailed": "⚠ Không đạt",
         "faceScore": "Khuôn mặt {{score}}",
         "clothingScore": "Trang phục {{score}}",
-        "jumpBeat": "Nhảy tới beat {{n}}"
+        "jumpBeat": "Nhảy tới clip {{n}}"
       },
       "actionPanel": {
         "episodeFreezone": "Canvas của tập",
@@ -3795,7 +3800,7 @@
       "blockedCount": "{{count}} đang vướng",
       "composeReady": "Sẵn sàng",
       "composeBlocked": "Thiếu {{count}}",
-      "beatCount": "{{count}} beat"
+      "beatCount": "{{count}} clip"
     },
     "compose": {
       "blocked": "Còn thiếu:",
@@ -3804,7 +3809,7 @@
       "composeEpisode": "Dựng tập phim",
       "recomposeEpisode": "Dựng lại",
       "composeTitle": "Xác nhận dựng 「{{title}}」",
-      "composeDesc": "Nối toàn bộ các đoạn video của beat thành một tập phim hoàn chỉnh. Việc này có thể mất vài phút.",
+      "composeDesc": "Nối toàn bộ các đoạn video của clip thành một tập phim hoàn chỉnh. Việc này có thể mất vài phút.",
       "composeDescSubtitles": " (có phụ đề)",
       "composeDescBgm": " (có nhạc nền)",
       "composeConfirm": "Bắt đầu dựng",
@@ -3814,18 +3819,18 @@
       "downloadVideo": "Tải video về",
       "composingProgress": "Đang dựng...",
       "notComposed": "Chưa dựng",
-      "composeHint": "Hãy chắc chắn mọi beat đều đã có âm thanh và video. Bấm \"Dựng tập phim\" để tạo. Xong rồi thì xem trước và tải về ở đây, hoặc xuất SRT/ZIP ở góc trên bên phải.",
-      "beats": "Beat",
+      "composeHint": "Hãy chắc chắn mọi clip đều đã có âm thanh và video. Bấm \"Dựng tập phim\" để tạo. Xong rồi thì xem trước và tải về ở đây, hoặc xuất SRT/ZIP ở góc trên bên phải.",
+      "beats": "Clip",
       "duration": "Thời lượng ước tính",
       "options": "Tuỳ chọn",
       "resolution": "Độ phân giải",
       "resolution720": "720p",
       "resolution1080": "1080p",
       "videoCount": "Video: {{ready}}/{{total}}",
-      "beatsReady": "beat đã sẵn sàng",
-      "blockerTitle": "Còn {{count}} beat chưa sẵn sàng",
-      "blockerHint": "Bấm vào thẻ để nhảy tới beat đó",
-      "readyToCompose": "Mọi beat đã sẵn sàng — bấm \"Dựng tập phim\" ở góc trên bên phải để bắt đầu",
+      "beatsReady": "clip đã sẵn sàng",
+      "blockerTitle": "Còn {{count}} clip chưa sẵn sàng",
+      "blockerHint": "Bấm vào thẻ để nhảy tới clip đó",
+      "readyToCompose": "Mọi clip đã sẵn sàng — bấm \"Dựng tập phim\" ở góc trên bên phải để bắt đầu",
       "subtitlesOn": "có phụ đề",
       "subtitlesOff": "không phụ đề",
       "durationApprox": "~{{value}}",
@@ -3834,16 +3839,16 @@
       "finalPreview": "Xem trước bản cuối",
       "episodeHeader": "Tập {{n}}",
       "noClips": "Không có đoạn video nào để dựng",
-      "noClipsHint": "Hãy tạo video cho các beat của tập này trước, rồi quay lại đây để dựng bản cuối.",
-      "blockerCount": "{{count}} beat chưa sẵn sàng",
-      "blockerSubtitle": "Các beat sau vẫn còn thiếu asset. Hãy hoàn thiện chúng trước khi dựng.",
+      "noClipsHint": "Hãy tạo video cho các clip của tập này trước, rồi quay lại đây để dựng bản cuối.",
+      "blockerCount": "{{count}} clip chưa sẵn sàng",
+      "blockerSubtitle": "Các clip sau vẫn còn thiếu asset. Hãy hoàn thiện chúng trước khi dựng.",
       "missingItemSeparator": ", ",
       "missingItems": "Còn thiếu: {{items}}",
-      "beatLabel": "Beat"
+      "beatLabel": "Clip"
     },
     "gate": {
       "scriptIdentitiesRequired": "Tập này chưa lên kế hoạch tạo hình nào. Hãy chọn tạo hình nhân vật ở bảng nguồn trước.",
-      "seedanceDialogueOnly": "Seedance 1.5 chỉ hỗ trợ cú máy có lời thoại ({{n}} beat lời dẫn không tương thích)"
+      "seedanceDialogueOnly": "Seedance 1.5 chỉ hỗ trợ cú máy có lời thoại ({{n}} clip lời dẫn không tương thích)"
     },
     "list": {
       "subtitle": "Lên kế hoạch các tập và đưa từng tập tới video hoàn chỉnh.",
@@ -3860,7 +3865,7 @@
       "planning": "Đang lên kế hoạch tập phim",
       "refresh": "Làm mới",
       "refreshed": "Đã làm mới danh sách tập",
-      "selectedEpisodeSummary": "{{lines}} dòng nguồn · {{beats}} Beat · {{identities}} tạo hình · {{scenes}} bối cảnh · {{props}} đạo cụ · {{status}}",
+      "selectedEpisodeSummary": "{{lines}} dòng nguồn · {{beats}} Clip · {{identities}} tạo hình · {{scenes}} bối cảnh · {{props}} đạo cụ · {{status}}",
       "scriptReady": "Kịch bản đã sẵn sàng",
       "scriptPending": "Kịch bản đang chờ",
       "stats": {
@@ -3895,11 +3900,11 @@
     "beats": {
       "genFailed": "Tạo thất bại",
       "loading": "Đang tải…",
-      "noBeatsTitle": "Chưa có beat nào",
-      "noBeats": "Chưa có beat nào — hãy tạo kịch bản trước",
-      "generateBeats": "Tạo beat",
-      "generateBeatsTitle": "Tạo beat?",
-      "generateBeatsDesc": "Tách bản chuyển thể (hoặc văn bản gốc) theo từng dòng thành các beat, làm cơ sở cho âm thanh và video."
+      "noBeatsTitle": "Chưa có clip nào",
+      "noBeats": "Chưa có clip nào — hãy tạo kịch bản trước",
+      "generateBeats": "Tạo clip",
+      "generateBeatsTitle": "Tạo clip?",
+      "generateBeatsDesc": "Tách bản chuyển thể (hoặc văn bản gốc) theo từng dòng thành các clip, làm cơ sở cho âm thanh và video."
     },
     "video": {
       "switchFailed": "Đổi video thất bại"
@@ -3971,7 +3976,7 @@
     "defaultIdentity": "Mặc định"
   },
   "composeGate": {
-    "beatCount": "{{count}} beat",
+    "beatCount": "{{count}} clip",
     "goFix": "Sửa →"
   },
   "region": {
@@ -4509,7 +4514,7 @@
       "render_repair_candidate": {
         "name": "Ứng viên sửa bản render",
         "shortName": "Sửa render",
-        "description": "Sửa bản render của beat hiện tại / ứng viên render đạo diễn, rồi Commit vào slot của beat.",
+        "description": "Sửa bản render của clip hiện tại / ứng viên render đạo diễn, rồi Commit vào slot của clip.",
         "params": {
           "repair_focus": {
             "label": "Trọng tâm cần sửa"
@@ -4519,7 +4524,7 @@
       "video_start_frame_candidate": {
         "name": "Ứng viên khung đầu video",
         "shortName": "Khung đầu",
-        "description": "Tạo ứng viên khung đầu video từ bản render / khung trích xuất / ảnh mẫu, rồi Commit vào slot khung hình (khung đầu video và khung đầu của beat là cùng một file).",
+        "description": "Tạo ứng viên khung đầu video từ bản render / khung trích xuất / ảnh mẫu, rồi Commit vào slot khung hình (khung đầu video và khung đầu của clip là cùng một file).",
         "params": {
           "motion_setup": {
             "label": "Thiết lập chuyển động"
@@ -5748,7 +5753,7 @@
         "imageToImageTitle": "Thêm một node ảnh phía trên để làm tham chiếu",
         "imageToImage": "Ảnh sang ảnh"
       },
-      "cropBackgroundTitle": "Cắt một vùng 16:9 từ {{source}} và ghi vào selected_background.png của beat này",
+      "cropBackgroundTitle": "Cắt một vùng 16:9 từ {{source}} và ghi vào selected_background.png của clip này",
       "cropBackground": "📐 Cắt nền",
       "assetLibraryTitle": "Chọn một ảnh tham chiếu từ thư viện asset (nhân vật / bối cảnh / đạo cụ)",
       "assetLibrary": "Thư viện asset",
@@ -6123,7 +6128,7 @@
       "snapCurrent": "Chụp góc nhìn hiện tại",
       "snap2x2": "Chụp 4 góc",
       "snap4x3": "Chụp 12 góc",
-      "useAsBackground": "Dùng làm nguồn nền (ghi vào selected_background của beat này)",
+      "useAsBackground": "Dùng làm nguồn nền (ghi vào selected_background của clip này)",
       "resetView": "Đặt lại góc nhìn",
       "zoomOut": "Thu nhỏ",
       "zoomIn": "Phóng to",
@@ -6613,7 +6618,7 @@
       "cropReverse": "Cắt ảnh góc ngược",
       "cropReverseDetail": "Chọn {{aspects}} từ ảnh góc ngược",
       "backgroundCropperTitle": "Chọn một vùng {{aspect}} làm nguồn nền{{source}}",
-      "backgroundCropperDescription": "Kéo vùng chọn với tỉ lệ {{aspect}} đã khoá. Xác nhận sẽ gửi nó qua node nền hiện tại về beat ở luồng chính.",
+      "backgroundCropperDescription": "Kéo vùng chọn với tỉ lệ {{aspect}} đã khoá. Xác nhận sẽ gửi nó qua node nền hiện tại về clip ở luồng chính.",
       "backgroundCropperGenerated": "Đã tạo nền hiện tại và ghi về luồng chính",
       "useAsBackgroundSource": "Dùng làm nguồn nền",
       "selectedBackgroundSourceHint": "Thao tác này cập nhật node đầu ra trước. Node preset của luồng chính tự động commit; node do người dùng tạo cần xác nhận tại node đầu ra.",
@@ -6717,9 +6722,9 @@
       "localPlaceholder": "Vật giữ chỗ cục bộ",
       "scale": "Tỉ lệ {{value}}",
       "placeAtCrosshair": "Đặt diễn viên tại tâm ngắm",
-      "noBeatPalette": "Beat này chưa nhận diện được tạo hình / đạo cụ nào; Director World sẽ không tự dựng tạo hình tuỳ tiện.",
-      "noBeatActorPalette": "Chưa gán màu cho diễn viên nên không tạo được diễn viên. Hãy gán màu ở Beat trên luồng chính trước.",
-      "noBeatPropPalette": "Chưa gán màu cho đạo cụ nên không tạo được đạo cụ. Hãy gán màu ở Beat trên luồng chính trước.",
+      "noBeatPalette": "Clip này chưa nhận diện được tạo hình / đạo cụ nào; Director World sẽ không tự dựng tạo hình tuỳ tiện.",
+      "noBeatActorPalette": "Chưa gán màu cho diễn viên nên không tạo được diễn viên. Hãy gán màu ở Clip trên luồng chính trước.",
+      "noBeatPropPalette": "Chưa gán màu cho đạo cụ nên không tạo được đạo cụ. Hãy gán màu ở Clip trên luồng chính trước.",
       "noSelection": "Chưa chọn gì",
       "moveToCrosshair": "Dời tới tâm ngắm",
       "mountSelected": "Gắn vào mục tiêu ở tâm ngắm",
@@ -6737,7 +6742,7 @@
       "outputCurrentViewAsDirectorCombined": "Xuất khung nhìn hiện tại thành Director combined",
       "saveScene": "Lưu Director World",
       "clearScene": "Xoá cảnh đã lưu",
-      "outputHint": "combined giữ nguyên phần che khuất của diễn viên/đạo cụ; env_only ẩn diễn viên/đạo cụ để làm nền cho Beat hiện tại.",
+      "outputHint": "combined giữ nguyên phần che khuất của diễn viên/đạo cụ; env_only ẩn diễn viên/đạo cụ để làm nền cho Clip hiện tại.",
       "counts": "{{actor}} diễn viên / {{prop}} đạo cụ / {{staging}} dàn cảnh",
       "sourceBadge": "PLY {{sourceKind}} · Asset đầu vào được tải qua tài nguyên tĩnh OpenResty cùng nguồn gốc",
       "shortcutHint": "Chuột phải / Shift+chuột trái để đặt · Chuột trái để chọn · 1/2/3 đổi công cụ · P lưu trạng thái đạo diễn · F dời tới tâm ngắm · M gắn vào tâm ngắm · G đặt xuống đất · R/T xoay · H vừa khung nhìn",
@@ -6816,9 +6821,9 @@
         "flying_craft": "Phương tiện bay"
       },
       "statusMessages": {
-        "noActorPreset": "Chưa gán màu cho diễn viên; hãy gán màu ở Beat trên luồng chính trước",
+        "noActorPreset": "Chưa gán màu cho diễn viên; hãy gán màu ở Clip trên luồng chính trước",
         "actorPreset": "Preset diễn viên: {{label}}",
-        "noPropPreset": "Chưa gán màu cho đạo cụ; hãy gán màu ở Beat trên luồng chính trước",
+        "noPropPreset": "Chưa gán màu cho đạo cụ; hãy gán màu ở Clip trên luồng chính trước",
         "propPreset": "Preset đạo cụ: {{label}}",
         "aiStagingSelected": "Đã chọn dàn cảnh AI",
         "sceneSaved": "Đã lưu cảnh Director World",
@@ -6892,7 +6897,7 @@
       "skillSelectedBackgroundOutputUnavailable": "Node kết quả nền hiện tại không dùng được",
       "skillNoMasterImage": "Bối cảnh này chưa có ảnh gốc",
       "skillNoReverseImage": "Bối cảnh này chưa có ảnh góc ngược",
-      "skillNoDirectorBackground": "Beat này chưa có nền đạo diễn",
+      "skillNoDirectorBackground": "Clip này chưa có nền đạo diễn",
       "skillFallbackTitle": "Kỹ năng",
       "skillLoading": "Đang tải kỹ năng…",
       "skillUnknown": "Kỹ năng không rõ",
@@ -6901,7 +6906,7 @@
     "purpose": {
       "freezone": "Freezone",
       "asset": "Chụp asset luồng chính",
-      "beat": "Sản xuất beat luồng chính",
+      "beat": "Sản xuất clip luồng chính",
       "mainline": "Dây chuyền luồng chính"
     },
     "pano": {
@@ -7488,7 +7493,7 @@
     "getApiKeyLink": "bấm vào đây để lấy API key",
     "missingAnyApiKeyMessage": "Nhà cung cấp phía backend chưa được cấu hình.",
     "openProvidersSettings": "Xem các nhà cung cấp",
-    "aboutAppName": "Beat Workbench",
+    "aboutAppName": "Clip Workbench",
     "aboutIntro": "Bàn làm việc tạo ứng viên, thử nghiệm ảnh tự do và commit asset của ReelForge.",
     "aboutVersionLabel": "Phiên bản",
     "aboutVersionUnknown": "Không rõ",
@@ -8093,11 +8098,11 @@
       "kind": {
         "identity": "🎭 Identity (ảnh tạo hình nhân vật)",
         "portrait": "🖼 Portrait (chân dung nhân vật)",
-        "frame": "🎬 Frame (khung đầu của beat)",
+        "frame": "🎬 Frame (khung đầu của clip)",
         "directorRender": "📐 Asset ghép của đạo diễn"
       },
       "noCharacters": "Dự án này chưa có nhân vật nào",
-      "episodeBeat": "Tập / Beat",
+      "episodeBeat": "Tập / Clip",
       "episodeLabel": "Tập:",
       "selectAll": "Chọn tất cả",
       "selectNone": "Bỏ chọn hết",

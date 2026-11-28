@@ -386,7 +386,7 @@ function BeatRow({
           className={`h-3 w-3 shrink-0 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`}
         />
         <span className="font-medium">
-          Beat {beat}
+          Clip {beat}
         </span>
         <span className="text-[10px] text-white/30">({items.length})</span>
       </button>
@@ -1006,7 +1006,7 @@ function PresetBeatPanel({
     <div className="min-h-0 overflow-y-auto px-3 pt-1 pb-3 space-y-3">
       <BeatSectionHeader
         primary={episode !== null ? t(`${A}.episodeTitle`, { episode }) : t(`${A}.episodeUnknown`)}
-        secondary={beatNum !== null ? `Beat ${beatNum}` : t(`${A}.beatUnknown`)}
+        secondary={beatNum !== null ? `Clip ${beatNum}` : t(`${A}.beatUnknown`)}
       />
 
       {assets.length === 0 ? (
@@ -1727,7 +1727,7 @@ function beatContextFromBeat(
     episode: beat.episode,
     beat: beat.beat,
     role: "beat_context",
-    label: beat.label || `EP${beat.episode} / Beat ${beat.beat}`,
+    label: beat.label || `EP${beat.episode} / Clip ${beat.beat}`,
     visualDescription: beat.visual_description ?? "",
     narrationSegment: beat.narration_segment ?? "",
     sceneId: beat.scene_id ?? "",

@@ -247,7 +247,7 @@ function stringArrayOrUndefined(value: unknown): string[] | undefined {
 }
 
 function beatContextLabel(episode: number, beat: number): string {
-  return `EP${episode} / Beat ${beat}`;
+  return `EP${episode} / Clip ${beat}`;
 }
 
 function beatContextFromRecord(

@@ -398,13 +398,17 @@ async def generate_seedance2_prompt_for_panel(
     )
 
     if composer is None and is_s9_segment_beat(beat):
-        from novelvideo.project_config import load_project_config_from_state_dir
+        from novelvideo.project_config import (
+            load_content_harmonize_from_state_dir,
+            load_project_config_from_state_dir,
+        )
 
         subshots, s9_meta, slots = build_s9_slots_from_beat(
             beat,
             include_first_frame=bool(config.s9_include_first_frame),
         )
         proj_cfg = load_project_config_from_state_dir(state_dir)
+        content_harmonize = load_content_harmonize_from_state_dir(state_dir)
         style_context = resolve_s9_style_context(
             visual_style=proj_cfg.get("visual_style"),
             aspect_ratio=proj_cfg.get("aspect_ratio"),
@@ -617,6 +621,7 @@ async def generate_seedance2_prompt_for_panel(
             current_prompt=reference_prompt,
             scene_context_notes=scene_context_notes,
             continuity_anchor=continuity_anchor,
+            content_harmonize=content_harmonize,
         )
         config.final_prompt = mark_seedance2_prompt_references_for_editor(rendered_s9)
         if not config.duration_user_set:
@@ -671,6 +676,8 @@ async def generate_seedance2_prompt_for_panel(
         )
         return saved_json
 
+    from novelvideo.project_config import load_content_harmonize_from_state_dir
+
     generate_kwargs: dict[str, Any] = {
         "mode": config.mode,
         "beat": prompt_beat,
@@ -688,6 +695,7 @@ async def generate_seedance2_prompt_for_panel(
         "prev_beat": prev_beat,
         "next_beat": next_beat,
         "language": output_language,
+        "content_harmonize": load_content_harmonize_from_state_dir(state_dir),
     }
     if effective_style:
         generate_kwargs["prompt_style"] = effective_style

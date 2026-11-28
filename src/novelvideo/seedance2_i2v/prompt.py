@@ -1193,6 +1193,7 @@ def create_seedance2_prompt_composer_agent(
     prompt_style: str | None = None,
     min_duration: int | None = None,
     max_duration: int | None = None,
+    content_harmonize: bool = False,
 ):
     from pydantic_ai import Agent
 
@@ -1208,6 +1209,10 @@ def create_seedance2_prompt_composer_agent(
     parts = [SEEDANCE2_COMPOSER_SYSTEM_PROMPT]
     if profile.system_directive:
         parts.append(f"## Model Direction\n{profile.system_directive}")
+    if content_harmonize:
+        from novelvideo.content_harmonize import HARMONIZE_STORYBOARD_DIRECTIVE
+
+        parts.append(f"## Content Compliance\n{HARMONIZE_STORYBOARD_DIRECTIVE}")
     parts.append(
         f"## Allowed Duration Budget\nSelect `recommended_duration` between {resolved_min} and {resolved_max} integer seconds."
     )
@@ -1241,13 +1246,14 @@ async def compose_seedance2_prompt_bundle_with_agent(
     prompt_style: str | None = None,
     min_duration: int | None = None,
     max_duration: int | None = None,
+    content_harmonize: bool = False,
 ) -> tuple[str, int | None]:
     resolved_min, resolved_max = style_duration_bounds(
         prompt_style,
         min_duration=min_duration,
         max_duration=max_duration,
     )
-    if prompt_style is None and min_duration is None and max_duration is None:
+    if prompt_style is None and min_duration is None and max_duration is None and not content_harmonize:
         agent = create_seedance2_prompt_composer_agent(language)
     else:
         agent = create_seedance2_prompt_composer_agent(
@@ -1255,6 +1261,7 @@ async def compose_seedance2_prompt_bundle_with_agent(
             prompt_style=prompt_style,
             min_duration=resolved_min,
             max_duration=resolved_max,
+            content_harmonize=content_harmonize,
         )
     result = await agent.run(
         build_seedance2_prompt_composer_task(
@@ -1337,6 +1344,7 @@ async def generate_seedance2_prompt(
     prompt_style: str | None = None,
     min_duration: int | None = None,
     max_duration: int | None = None,
+    content_harmonize: bool = False,
 ) -> Seedance2PromptGeneration:
     """Generate a video prompt for the selected style, preferring AI and falling back to rules."""
 
@@ -1379,6 +1387,8 @@ async def generate_seedance2_prompt(
             compose_kwargs["min_duration"] = resolved_min
         if max_duration is not None:
             compose_kwargs["max_duration"] = resolved_max
+        if content_harmonize:
+            compose_kwargs["content_harmonize"] = True
         if composer is not None:
             raw_output = await composer(**compose_kwargs)
             prompt, recommended_duration = _extract_composer_output(

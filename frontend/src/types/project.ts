@@ -18,6 +18,7 @@ export interface ProjectConfig {
   use_director_render?: boolean;
   video_resolution?: string;
   add_subtitles?: boolean;
+  content_harmonize?: boolean;
   // Server-computed: whether a project-level scene build can produce anything.
   // Narrated structured projects have no scene headings to build a catalogue
   // from, so their scenes are created per episode during planning instead.

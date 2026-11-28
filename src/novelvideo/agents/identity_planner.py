@@ -1843,6 +1843,13 @@ class IdentityPlanner:
                     f"{system_prompt}\n\n"
                     f"{get_live_action_character_extraction_directives()}"
                 )
+            from novelvideo.content_harmonize import HARMONIZE_ASSET_DIRECTIVE
+            from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+            if load_content_harmonize_from_state_dir(
+                getattr(self.cognee_store, "state_dir", None)
+            ):
+                system_prompt = f"{system_prompt}\n\n{HARMONIZE_ASSET_DIRECTIVE}"
             appearance_agent = Agent(
                 self._identity_model("IDENTITY_PLANNER_APPEARANCE_MODEL"),
                 system_prompt=system_prompt,

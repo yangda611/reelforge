@@ -1608,13 +1608,25 @@ class AssetCompiler:
 ## 预筛命中的已有道具
 {candidate_section}
 """
+        from novelvideo.content_harmonize import (
+            HARMONIZE_ASSET_DIRECTIVE,
+            detect_sensitive_categories,
+        )
+        from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+        prop_system_prompt = BLOCK_PROP_PROMPT
+        if load_content_harmonize_from_state_dir(
+            getattr(self.store, "state_dir", None)
+        ) and detect_sensitive_categories(block_text):
+            prop_system_prompt = f"{prop_system_prompt}\n\n{HARMONIZE_ASSET_DIRECTIVE}"
+
         agent = Agent(
             get_newapi_text_pydantic_model(
                 "EPISODE_PROP_PLANNER_MODEL",
                 brainclaw_profile=BrainClawProfile.EPISODE_PROP_PLANNING,
                 capability="text.generate.agent",
             ),
-            system_prompt=BLOCK_PROP_PROMPT,
+            system_prompt=prop_system_prompt,
             model_settings=get_newapi_structured_output_model_settings(),
             output_type=BlockPropRequirements,
             output_retries=model_gateway_output_retries(2),

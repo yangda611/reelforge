@@ -33,7 +33,7 @@ function kindLabel(kind: string, t: TFn): string {
 
 function badgeText(ctx: MainlineContext, t: TFn): string {
   if (typeof ctx.episode === "number" && typeof ctx.beat === "number") {
-    if (ctx.kind === "beat") return `EP${ctx.episode} / Beat ${ctx.beat}`;
+    if (ctx.kind === "beat") return `EP${ctx.episode} / Clip ${ctx.beat}`;
     if (
       ctx.kind === "frame" ||
       ctx.kind === "video" ||

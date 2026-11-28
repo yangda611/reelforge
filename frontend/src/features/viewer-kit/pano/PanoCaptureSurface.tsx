@@ -723,7 +723,7 @@ export function PanoCaptureSurface({
     `project ${manifest.project}`,
     `scene ${manifest.scene_id}`,
     manifest.beat_context
-      ? `EP ${manifest.beat_context.episode} / Beat ${manifest.beat_context.beat}`
+      ? `EP ${manifest.beat_context.episode} / Clip ${manifest.beat_context.beat}`
       : null,
     viewerPurposeLabel(viewerPurpose ?? (manifest.mode === "beat" ? "beat" : "asset"), t),
     "canonical pano",

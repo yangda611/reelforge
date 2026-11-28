@@ -520,7 +520,7 @@ function beatUpdatePayloadFromNodeData(
 }
 
 function looksLikeEpBeatTitle(value: string): boolean {
-  return /^EP(?:\d+|\?)\s*\/\s*Beat\s*(?:\d+|\?)$/iu.test(value);
+  return /^EP(?:\d+|\?)\s*\/\s*(?:Beat|Clip)\s*(?:\d+|\?)$/iu.test(value);
 }
 
 function resolveBeatContextTitle(data: BeatContextNodeData): string {
@@ -535,13 +535,14 @@ function resolveBeatContextTitle(data: BeatContextNodeData): string {
     if (
       customTitle &&
       customTitle !== "Beat Context" &&
+      customTitle !== "Clip Context" &&
       !looksLikeEpBeatTitle(customTitle)
     ) {
       return customTitle;
     }
     return "自定义镜头上下文"; // i18n-exempt —— 规范值，渲染时会被 standaloneTitle 词条顶掉
   }
-  if (customTitle && customTitle !== "Beat Context") {
+  if (customTitle && customTitle !== "Beat Context" && customTitle !== "Clip Context") {
     return customTitle;
   }
   const contexts = extractMainlineContextsFromNode({ data });
@@ -550,7 +551,7 @@ function resolveBeatContextTitle(data: BeatContextNodeData): string {
     typeof data.episode === "number" ? data.episode : beatContext?.episode;
   const beat = typeof data.beat === "number" ? data.beat : beatContext?.beat;
   const epLabel = typeof episode === "number" ? `EP${episode}` : "EP?";
-  const beatLabel = typeof beat === "number" ? `Beat ${beat}` : "Beat ?";
+  const beatLabel = typeof beat === "number" ? `Clip ${beat}` : "Clip ?";
   return `${epLabel} / ${beatLabel}`;
 }
 
@@ -1122,7 +1123,7 @@ export const BeatContextNode = memo(
                 </div>
                 {!isStandaloneContext && (
                   <div className="mt-1 text-sm font-semibold text-amber-50">
-                    EP{episode ?? "?"} / Beat {beat ?? "?"}
+                    EP{episode ?? "?"} / Clip {beat ?? "?"}
                   </div>
                 )}
               </div>

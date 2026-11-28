@@ -147,7 +147,7 @@
         },
         "canvasOverwrite": {
           "question": "Do results in Shrimp Canvas overwrite my mainline assets automatically?",
-          "answer": "No. Anything generated or uploaded in Shrimp Canvas is a candidate by default. It only enters the project mainline once you explicitly commit it and pick a target slot — character, scene, prop, beat first frame or video."
+          "answer": "No. Anything generated or uploaded in Shrimp Canvas is a candidate by default. It only enters the project mainline once you explicitly commit it and pick a target slot — character, scene, prop, clip first frame or video."
         },
         "whyAssetsFirst": {
           "question": "Why organise characters, scenes, props and voices first?",
@@ -877,13 +877,13 @@
       "deleteFailed": "Failed to delete canvas: {{message}}",
       "noConflictSnapshot": "No local conflict snapshot is available to save.",
       "description": {
-        "freeWorkflowBeat": "Free workflow · EP{{episode}} / Beat {{beat}}",
+        "freeWorkflowBeat": "Free workflow · EP{{episode}} / Clip {{beat}}",
         "freeWorkflowAsset": "Free workflow · {{asset}}",
         "freeWorkflow": "Free workflow",
         "default": "Default canvas",
         "episode": "EP{{episode}} canvas",
         "episodeUnknown": "EP canvas",
-        "beat": "Beat canvas · EP{{episode}} / Beat {{beat}}{{slot}}",
+        "beat": "Clip canvas · EP{{episode}} / Clip {{beat}}{{slot}}",
         "asset": "Asset canvas · {{name}} / {{kind}}",
         "assetUnknown": "Asset canvas · {{kind}}",
         "assetFallback": "asset",
@@ -955,9 +955,9 @@
         "director_combined": "Director render"
       },
       "tabs": {
-        "beatAll": "All beats",
-        "beatEpisode": "Episode beats",
-        "beatCurrent": "Current beat",
+        "beatAll": "All clips",
+        "beatEpisode": "Episode clips",
+        "beatCurrent": "Current clip",
         "characters": "Characters",
         "scenes": "Scenes",
         "props": "Props"
@@ -978,7 +978,7 @@
       },
       "episodeTitle": "Episode {{episode}}",
       "episodeUnknown": "Episode ?",
-      "beatUnknown": "Beat ?",
+      "beatUnknown": "Clip ?",
       "expandDrawer": "Expand asset drawer",
       "collapseDrawer": "Collapse asset drawer",
       "expand": "Expand",
@@ -1057,7 +1057,7 @@
         "ambient_audio": "Ambience",
         "scene": "Scene",
         "prop": "Prop",
-        "beat": "Beat",
+        "beat": "Clip",
         "frame": "Frame",
         "video": "Video",
         "audio": "Audio",
@@ -1082,8 +1082,8 @@
       "directorWorldState": "Director world state",
       "directorWorldManifestHint": "Commit the current director world manifest",
       "modelCommitHint": "Commit the current 3D world to the mainline scene",
-      "loadingBeats": "Loading beats…",
-      "noBeats": "No beats",
+      "loadingBeats": "Loading clips…",
+      "noBeats": "No clips",
       "loadingIdentities": "Loading identity_id…",
       "noIdentities": "This character has no identity_id",
       "sceneIdPlaceholder": "scene_id, e.g. Lanzhou noodle shop",
@@ -1157,8 +1157,8 @@
         "scene_3gs_custom_scene": "3D world (custom scene)",
         "scene_3gs_collision_glb": "3D world collider",
         "prop_ref": "Prop Reference",
-        "video": "Video (beat video)",
-        "beat_audio": "Audio (beat audio)"
+        "video": "Video (clip video)",
+        "beat_audio": "Audio (clip audio)"
       },
       "shortKinds": {
         "frame": "First frame",
@@ -2331,7 +2331,7 @@
       "editedAgo": "{{time}}",
       "deletedAgo": "deleted {{time}}",
       "episodes": "{{count}} eps",
-      "beats": "{{count}} beats"
+      "beats": "{{count}} clips"
     },
     "view": {
       "toggle": "View",
@@ -2455,12 +2455,12 @@
       "delete": "Delete",
       "generated": "generated",
       "missing": "missing",
-      "usageCount": "Used in {{count}} beats",
-      "usageNone": "Not used in any beat yet",
+      "usageCount": "Used in {{count}} clips",
+      "usageNone": "Not used in any clip yet",
       "copyLink": "Copy asset link",
       "linkCopied": "Link copied",
-      "appearsIn": "Appears in beats",
-      "beatRef": "EP {{episode}} · Beat {{beat}}",
+      "appearsIn": "Appears in clips",
+      "beatRef": "EP {{episode}} · Clip {{beat}}",
       "search": "Search assets",
       "searchScenes": "Search scenes",
       "searchProps": "Search props",
@@ -2582,7 +2582,7 @@
       "newPropHint": "AI prop extraction runs per episode in Episode Studio",
       "editProp": "Edit prop",
       "emptyTitle": "No props yet",
-      "emptyDescription": "Create a prop or promote episode props from the beat page.",
+      "emptyDescription": "Create a prop or promote episode props from the clip page.",
       "confirmDelete": "Delete prop \"{{name}}\"?",
       "deleted": "Prop deleted",
       "reference": "Reference",
@@ -2621,7 +2621,7 @@
       },
       "explanation": {
         "firstPerson": "First-person narration uses the narrating character's voice; third-person narration uses the project narration voice.",
-        "thirdPerson": "Third-person narration uses one project-level voice for every non-dialogue beat."
+        "thirdPerson": "Third-person narration uses one project-level voice for every non-dialogue clip."
       }
     }
   },
@@ -2683,7 +2683,7 @@
     "preview": "Preview",
     "noAudio": "No audio",
     "noVideo": "No video",
-    "noBeatData": "No beat data",
+    "noBeatData": "No clip data",
     "download": "Download",
     "use": "Use",
     "confirmExecute": "Confirm",
@@ -2707,7 +2707,10 @@
     "retry": "Retry",
     "requestId": "Request ID",
     "listSeparator": ", ",
-    "processing": "Processing…"
+    "processing": "Processing…",
+    "gatewayErrors": {
+      "outputRetries": "Structured model output failed validation after multiple retries (likely truncated output or format mismatch). Retry or switch to a more reliable text model."
+    }
   },
   "ingest": {
     "title": "Story Source",
@@ -2727,6 +2730,8 @@
     "pastePlaceholder": "Paste novel text here, up to 1000 characters",
     "startIngest": "Start Import",
     "saveSettings": "Save Settings",
+    "contentHarmonize": "Content compliance mode",
+    "contentHarmonizeHint": "Enabled by default: adapts only sensitive elements (police badges, weapons, gambling, physical violence) for video moderation without altering normal scenes",
     "settingsSaved": "Project settings saved",
     "settingsSaveFailed": "Failed to save project settings",
     "processing": "Processing...",
@@ -3076,7 +3081,7 @@
       "identityImageNamed": "{{character}} — “{{identity}}” identity image",
       "identityImage": "{{name}} identity image",
       "unknownCharacter": "Character",
-      "withEpisodeBeat": "{{label}} (Ep {{episode}}, Beat {{beat}})",
+      "withEpisodeBeat": "{{label}} (Ep {{episode}}, Clip {{beat}})",
       "withEpisode": "{{label}} (Ep {{episode}})"
     },
     "progress": {
@@ -3277,7 +3282,7 @@
         "project": "Project",
         "episode": "Episode",
         "scope": "Scope",
-        "beat": "Beat",
+        "beat": "Clip",
         "status": "Status",
         "progress": "Progress",
         "createdAt": "Created",
@@ -3324,7 +3329,7 @@
     "io": {
       "background": "Background",
       "backgroundCandidate": "Background candidate",
-      "beatContext": "Beat context",
+      "beatContext": "Clip context",
       "currentBackground": "Current background",
       "currentStoryboard": "Current storyboard",
       "directorComposite": "Director composite",
@@ -3342,7 +3347,7 @@
   "literalScript": {
     "generating": "Generating literal script...",
     "noScript": "No literal script yet. Click \"Generate\" to create from source.",
-    "beatCount": "{{count}} beats"
+    "beatCount": "{{count}} clips"
   },
   "episode": {
     "stage": {
@@ -3366,7 +3371,7 @@
       "rhythmDuration": "Duration",
       "rhythmLiteral": "Line-by-line",
       "rhythmDurationHint": "Split scenes by target duration",
-      "rhythmLiteralHint": "One beat per source line",
+      "rhythmLiteralHint": "One clip per source line",
       "identityLabel": "Identities:",
       "editIdentityLabel": "Edit Identities:",
       "identityRequired": "Plan identities for this episode before generating the script.",
@@ -3385,11 +3390,11 @@
       "rawLabel": "Source · Read-only (from import)",
       "rawActionLabel": "View source",
       "noRawText": "No source text. Link this episode's source content in the Import step first.",
-      "sourceTextLabel": "Beat source text",
+      "sourceTextLabel": "Clip source text",
       "sourceTextLabelNarrated": "AI rewrite / source copy",
       "sourceTextLabelDrama": "Source copy",
       "sourceTextMeta": "Edits auto-save, {{count}} lines total",
-      "sourceTextPlaceholder": "Add the episode source text used for line-by-line beat generation.",
+      "sourceTextPlaceholder": "Add the episode source text used for line-by-line clip generation.",
       "sourceTextPlaceholderNarrated": "Click AI rewrite to generate narration, or edit the source copy before generating the script.",
       "sourceTextPlaceholderDrama": "The source copy is used to generate the script and can be edited directly.",
       "linePreviewLabel": "Line split preview",
@@ -3432,10 +3437,10 @@
       "scenePlanComplete": "{{count}} scene(s) planned",
       "propPlanComplete": "{{count}} prop(s) planned",
       "previewTitle": "Script preview",
-      "previewCount": "{{count}} Beats",
+      "previewCount": "{{count}} Clips",
       "previewLoading": "Loading script...",
       "previewEmptyTitle": "No script yet",
-      "previewEmpty": "No script beats yet. Generate the script to preview it here.",
+      "previewEmpty": "No script clips yet. Generate the script to preview it here.",
       "previewSpeaker": "Speaker",
       "previewNoSpeaker": "No speaker",
       "previewDialogueLine": "Dialogue",
@@ -3464,7 +3469,7 @@
       "scriptReviewPassed": "Script generation completed",
       "scriptReviewFailed": "Script review failed. Regenerate: {{summary}}",
       "modeLabel": "Current mode:",
-      "modeLiteral": "One line per Beat",
+      "modeLiteral": "One line per Clip",
       "modeS9": "YD Cinematic Storyboard",
       "maxSegmentSecondsLabel": "Max segment",
       "segmentLimit30": "30s",
@@ -3498,15 +3503,15 @@
       "reviewIssuesFallback": "Unresolved issues remain"
     },
     "beat": {
-      "badge": "Beat {{n}}",
-      "openDrawer": "Open beat {{n}} details",
+      "badge": "Clip {{n}}",
+      "openDrawer": "Open clip {{n}} details",
       "jumpTo": "Go to {{stage}}",
       "select": "Select",
       "deselect": "Deselect",
       "noNarration": "(No narration)",
       "stale": "Stale",
-      "clickToView": "Click a beat to view details",
-      "noMatching": "No matching beats",
+      "clickToView": "Click a clip to view details",
+      "noMatching": "No matching clips",
       "sectionText": "Text",
       "sectionAudio": "Audio",
       "sectionVideo": "Video",
@@ -3516,14 +3521,14 @@
       "notGenerated": "Not generated",
       "deleteManualShot": "Delete",
       "deleteManualShotTitle": "Delete manual shot?",
-      "deleteManualShotDesc": "Delete manual shot Beat #{{n}}? Subsequent beats will be renumbered.",
-      "deleteManualShotSuccess": "Deleted manual shot Beat #{{n}}",
+      "deleteManualShotDesc": "Delete manual shot Clip #{{n}}? Subsequent clips will be renumbered.",
+      "deleteManualShotSuccess": "Deleted manual shot Clip #{{n}}",
       "deleteManualShotFailed": "Failed to delete manual shot",
-      "insertBefore": "Insert manual shot before Beat #{{n}}",
+      "insertBefore": "Insert manual shot before Clip #{{n}}",
       "insertBeforeShort": "Pre",
-      "insertAfter": "Insert manual shot after Beat #{{n}}",
+      "insertAfter": "Insert manual shot after Clip #{{n}}",
       "insertAfterShort": "Post",
-      "openFreezone": "Open XiPaint Beat Workbench",
+      "openFreezone": "Open XiPaint Clip Workbench",
       "openFreezoneTip": "Edit in Freezone",
       "openFreezoneFailed": "Failed to open XiPaint",
       "markedProps": "Props {{count}}",
@@ -3543,7 +3548,7 @@
         "confirm": "Switch anyway"
       },
       "endOfBeats": "—— End of list ——",
-      "endOfBeatsCount": "{{count}} beats total",
+      "endOfBeatsCount": "{{count}} clips total",
       "jumpTo": "Go to {{stage}}",
       "save": "Save",
       "regenerate": "Regenerate",
@@ -3557,8 +3562,8 @@
         "selectedCount": "{{count}} selected",
         "clear": "Clear",
         "totalShots": "{{count}} shots",
-        "activeBeat": "Beat {{n}}",
-        "noMatchingBeats": "No matching beats",
+        "activeBeat": "Clip {{n}}",
+        "noMatchingBeats": "No matching clips",
         "dragToResize": "Drag to adjust the left/right width ratio"
       },
       "text": {
@@ -3597,8 +3602,8 @@
         "noSceneVariant": "No variant"
       },
       "insertManual": {
-        "titleBeforeFirst": "Insert manual shot before first beat",
-        "titleAfter": "Insert manual shot after beat {{n}}",
+        "titleBeforeFirst": "Insert manual shot before first clip",
+        "titleAfter": "Insert manual shot after clip {{n}}",
         "audioType": "Shot type",
         "audioTypeSilence": "Silent",
         "audioTypeNarration": "Narration",
@@ -3636,10 +3641,10 @@
         "propsPlaceholderEmpty": "Comma-separated prop IDs; leave blank to auto-detect"
       },
       "audio": {
-        "narrationEmpty": "Narration is empty — this beat cannot generate audio. Fill in text first.",
+        "narrationEmpty": "Narration is empty — this clip cannot generate audio. Fill in text first.",
         "previewing": "Previewing",
         "previewFailed": "Preview failed",
-        "regenerated": "Beat #{{n}} regenerated",
+        "regenerated": "Clip #{{n}} regenerated",
         "regenFailed": "Regen failed",
         "defaultLabel": "Default",
         "defaultVoice": "Default voice",
@@ -3652,31 +3657,31 @@
         "genFailed": "Generation failed",
         "notGenerated": "Not generated",
         "regenTitle": "Regenerate audio?",
-        "regenDesc": "Regenerate TTS voiceover for Beat #{{n}}.",
+        "regenDesc": "Regenerate TTS voiceover for Clip #{{n}}.",
         "configureVoiceAction": "Configure",
-        "beatNarrationVoice": "This beat's narration audio",
-        "beatNarrationVoiceUpload": "Upload beat audio",
-        "beatNarrationVoiceUploaded": "Beat narration audio uploaded",
+        "beatNarrationVoice": "This clip's narration audio",
+        "beatNarrationVoiceUpload": "Upload clip audio",
+        "beatNarrationVoiceUploaded": "Clip narration audio uploaded",
         "prereqHintCharacters": ". Go to Characters to upload the narrator voice.",
         "prereqHintVoices": ". Go to Assets > Voices to upload or trim a default narrator voice."
       },
       "video": {
-        "started": "Beat #{{n}} video started",
+        "started": "Clip #{{n}} video started",
         "regenFailed": "Regen failed",
         "model": "Model",
         "generating": "Generating...",
         "genFailed": "Generation failed",
         "notGenerated": "Not generated",
         "genTitle": "Generate video?",
-        "genDesc": "References and prompt double-checked. Generate video clip for Beat #{{n}}.",
+        "genDesc": "References and prompt double-checked. Generate video clip for Clip #{{n}}.",
         "regenTitle": "Regenerate video?",
-        "regenDesc": "Regenerate video clip for Beat #{{n}}.",
+        "regenDesc": "Regenerate video clip for Clip #{{n}}.",
         "noteDefault": "Default",
         "noteNarration": "Narration recommended",
         "noteDialogue": "Dialogue shot",
         "candidateCount": "Previous versions ({{count}})",
         "currentBadge": "Current",
-        "switched": "Beat #{{n}} switched to another version",
+        "switched": "Clip #{{n}} switched to another version",
         "switchFailed": "Switch failed",
         "seedance2Prompt": "Seedance2.0 subject prompt",
         "seedance2Ready": "Configured",
@@ -3779,12 +3784,12 @@
         "s9ApplyReboundPrompt": "Apply renumbered prompt",
         "customVideoInspector": "Video Inspector",
         "seedance2PromptGenerated": "Seedance2 prompt optimized",
-        "seedance2PromptGeneratedOtherBeat": "Subject prompt optimized and saved back to beat #{{n}}",
+        "seedance2PromptGeneratedOtherBeat": "Subject prompt optimized and saved back to clip #{{n}}",
         "seedance2PromptGenerateFailed": "Seedance2 prompt generation failed",
         "videoPrompt": "Video prompt",
-        "keyframePrompt": "Single-beat video prompt",
-        "beatVideoPromptRequired": "Beat #{{n}} is missing a video prompt. Generate this beat prompt first.",
-        "seedance2PromptRequired": "Beat #{{n}} is missing the Seedance2.0 main prompt. Fill it in or run AI optimize first.",
+        "keyframePrompt": "Single-clip video prompt",
+        "beatVideoPromptRequired": "Clip #{{n}} is missing a video prompt. Generate this clip prompt first.",
+        "seedance2PromptRequired": "Clip #{{n}} is missing the Seedance2.0 main prompt. Fill it in or run AI optimize first.",
         "seedance2OverlayEnabled": "Enable",
         "seedance2OverlayKind": "Kind",
         "seedance2OverlayKindAdCopy": "Ad copy",
@@ -3848,32 +3853,32 @@
         "seedance2GuidanceNoSubtitleTemplate": "No subtitles: Do not generate any text or subtitles; keep the frame visually clean."
       },
       "batch": {
-        "narrationIncompatible": "This model only supports dialogue shots ({{count}} narration beats incompatible)",
+        "narrationIncompatible": "This model only supports dialogue shots ({{count}} narration clips incompatible)",
         "toolbar": "Generation toolbar",
         "rewriteScriptTitle": "Rewrite all scripts?",
-        "rewriteScriptDesc": "Regenerate all beat narrations from source/adapted text. Existing text will be affected.",
+        "rewriteScriptDesc": "Regenerate all clip narrations from source/adapted text. Existing text will be affected.",
         "rewriteScript": "Rewrite all scripts",
         "insertManualBeforeFirst": "Before first shot",
         "insertManualBeforeFirstShort": "Before first shot",
-        "insertManualBeforeFirstTooltip": "Insert a manual shot before the first beat",
+        "insertManualBeforeFirstTooltip": "Insert a manual shot before the first clip",
         "genMissingManualShort": "New shots",
         "genAudioTitle": "Generate all audio?",
-        "genAudioDesc": "Generate TTS voiceover for all beats missing audio.",
+        "genAudioDesc": "Generate TTS voiceover for all clips missing audio.",
         "genAudio": "Generate all audio",
         "genAudioShort": "All audio",
         "genAudioUnavailableForVideoModel": "The current video model does not need separate full-episode audio generation",
         "videoModel": "Video model",
         "videoSettingsLabel": "Video settings",
-        "genVideoDesc": "Generate video clips for all beats missing video. Requires audio first.",
+        "genVideoDesc": "Generate video clips for all clips missing video. Requires audio first.",
         "genVideo": "Generate all videos",
         "genVideoShort": "All videos",
         "video": "Video",
-        "genBatchVideoTitle": "Generate video for {{count}} beats?",
+        "genBatchVideoTitle": "Generate video for {{count}} clips?",
         "genBatchVideoDesc": "Generate video clips for #{{beats}} one by one. Requires audio.",
-        "genBatchVideo": "Generate video for {{count}} beats",
-        "audioSuccess": "Generated audio for {{ok}} beats",
+        "genBatchVideo": "Generate video for {{count}} clips",
+        "audioSuccess": "Generated audio for {{ok}} clips",
         "audioPartial": "Audio: {{ok}} ok, {{fail}} failed",
-        "videoSuccess": "Generated video for {{ok}} beats",
+        "videoSuccess": "Generated video for {{ok}} clips",
         "episodeFreezone": "EP Freezone",
         "episodeFreezoneTooltip": "Open this episode in Freezone",
         "episodeFreezoneOpened": "EP Freezone opened",
@@ -3890,7 +3895,7 @@
         "charFailed": "⚠ Failed",
         "faceScore": "Face {{score}}",
         "clothingScore": "Clothing {{score}}",
-        "jumpBeat": "Jump to beat {{n}}"
+        "jumpBeat": "Jump to clip {{n}}"
       },
       "actionPanel": {
         "episodeFreezone": "Episode canvas",
@@ -3912,7 +3917,7 @@
       "blockedCount": "{{count}} blocked",
       "composeReady": "Ready",
       "composeBlocked": "Missing {{count}}",
-      "beatCount": "{{count}} beats"
+      "beatCount": "{{count}} clips"
     },
     "compose": {
       "blocked": "Missing:",
@@ -3921,7 +3926,7 @@
       "composeEpisode": "Compose Episode",
       "recomposeEpisode": "Re-compose",
       "composeTitle": "Confirm compose 「{{title}}」",
-      "composeDesc": "Concatenate all beat video clips into a complete episode. This may take a few minutes.",
+      "composeDesc": "Concatenate all clip video clips into a complete episode. This may take a few minutes.",
       "composeDescSubtitles": " (with subtitles)",
       "composeDescBgm": " (with BGM)",
       "composeConfirm": "Start Compose",
@@ -3931,18 +3936,18 @@
       "downloadVideo": "Download Video",
       "composingProgress": "Composing...",
       "notComposed": "Not composed yet",
-      "composeHint": "Make sure all beats have audio and video. Click \"Compose Episode\" to generate. Once done, preview and download here, or export SRT/ZIP from the top right.",
-      "beats": "Beats",
+      "composeHint": "Make sure all clips have audio and video. Click \"Compose Episode\" to generate. Once done, preview and download here, or export SRT/ZIP from the top right.",
+      "beats": "Clips",
       "duration": "Est. Duration",
       "options": "Options",
       "resolution": "Resolution",
       "resolution720": "720p",
       "resolution1080": "1080p",
       "videoCount": "Video: {{ready}}/{{total}}",
-      "beatsReady": "beats ready",
-      "blockerTitle": "{{count}} beat(s) still not ready",
-      "blockerHint": "Click a card to jump to that beat",
-      "readyToCompose": "All beats ready — click \"Compose Episode\" in the top right to start",
+      "beatsReady": "clips ready",
+      "blockerTitle": "{{count}} clip(s) still not ready",
+      "blockerHint": "Click a card to jump to that clip",
+      "readyToCompose": "All clips ready — click \"Compose Episode\" in the top right to start",
       "subtitlesOn": "with subtitles",
       "subtitlesOff": "no subtitles",
       "durationApprox": "~{{value}}",
@@ -3951,16 +3956,16 @@
       "finalPreview": "Final preview",
       "episodeHeader": "Episode {{n}}",
       "noClips": "No video clips available to compose",
-      "noClipsHint": "Generate videos for this episode's beats first, then return here to compose the final cut.",
-      "blockerCount": "{{count}} beat(s) not ready",
-      "blockerSubtitle": "The following beats are still missing assets. Complete them before composing.",
+      "noClipsHint": "Generate videos for this episode's clips first, then return here to compose the final cut.",
+      "blockerCount": "{{count}} clip(s) not ready",
+      "blockerSubtitle": "The following clips are still missing assets. Complete them before composing.",
       "missingItemSeparator": ", ",
       "missingItems": "Missing: {{items}}",
-      "beatLabel": "Beat"
+      "beatLabel": "Clip"
     },
     "gate": {
       "scriptIdentitiesRequired": "This episode has no identities planned. Select character identities in the source panel first.",
-      "seedanceDialogueOnly": "Seedance 1.5 only supports dialogue shots ({{n}} narration beats incompatible)"
+      "seedanceDialogueOnly": "Seedance 1.5 only supports dialogue shots ({{n}} narration clips incompatible)"
     },
     "list": {
       "subtitle": "Plan episodes and drive each to the final video.",
@@ -3977,7 +3982,7 @@
       "planning": "Planning episodes",
       "refresh": "Refresh",
       "refreshed": "Episodes refreshed",
-      "selectedEpisodeSummary": "{{lines}} source lines · {{beats}} Beats · {{identities}} identities · {{scenes}} scenes · {{props}} props · {{status}}",
+      "selectedEpisodeSummary": "{{lines}} source lines · {{beats}} Clips · {{identities}} identities · {{scenes}} scenes · {{props}} props · {{status}}",
       "scriptReady": "Script ready",
       "scriptPending": "Script pending",
       "stats": {
@@ -4012,11 +4017,11 @@
     "beats": {
       "genFailed": "Generation failed",
       "loading": "Loading…",
-      "noBeatsTitle": "No beats yet",
-      "noBeats": "No beats yet — generate a script first",
-      "generateBeats": "Generate beats",
-      "generateBeatsTitle": "Generate beats?",
-      "generateBeatsDesc": "Split the adapted (or source) text line by line into beats as the basis for audio and video."
+      "noBeatsTitle": "No clips yet",
+      "noBeats": "No clips yet — generate a script first",
+      "generateBeats": "Generate clips",
+      "generateBeatsTitle": "Generate clips?",
+      "generateBeatsDesc": "Split the adapted (or source) text line by line into clips as the basis for audio and video."
     },
     "video": {
       "switchFailed": "Failed to switch video"
@@ -4088,7 +4093,7 @@
     "defaultIdentity": "Default"
   },
   "composeGate": {
-    "beatCount": "{{count}} beats",
+    "beatCount": "{{count}} clips",
     "goFix": "Fix →"
   },
   "region": {
@@ -4626,7 +4631,7 @@
       "render_repair_candidate": {
         "name": "Render repair candidate",
         "shortName": "Render repair",
-        "description": "Repair the current beat render / director render candidate, then Commit it to the beat slot.",
+        "description": "Repair the current clip render / director render candidate, then Commit it to the clip slot.",
         "params": {
           "repair_focus": {
             "label": "Repair focus"
@@ -4636,7 +4641,7 @@
       "video_start_frame_candidate": {
         "name": "Video start-frame candidate",
         "shortName": "Start frame",
-        "description": "Generate a video first-frame candidate from a render / extracted frame / reference, then Commit it to the frame slot (the video start frame and the beat first frame are the same file).",
+        "description": "Generate a video first-frame candidate from a render / extracted frame / reference, then Commit it to the frame slot (the video start frame and the clip first frame are the same file).",
         "params": {
           "motion_setup": {
             "label": "Motion setup"
@@ -5874,7 +5879,7 @@
         "imageToImageTitle": "Add an upstream image node to use as a reference",
         "imageToImage": "Image to image"
       },
-      "cropBackgroundTitle": "Pick a 16:9 region from {{source}} and write it to this beat’s selected_background.png",
+      "cropBackgroundTitle": "Pick a 16:9 region from {{source}} and write it to this clip’s selected_background.png",
       "cropBackground": "📐 Crop background",
       "assetLibraryTitle": "Pick a reference image from the asset library (characters / scenes / props)",
       "assetLibrary": "Asset library",
@@ -6249,7 +6254,7 @@
       "snapCurrent": "Capture current view",
       "snap2x2": "Capture 4 views",
       "snap4x3": "Capture 12 views",
-      "useAsBackground": "Use as background source (writes this beat's selected_background)",
+      "useAsBackground": "Use as background source (writes this clip's selected_background)",
       "resetView": "Reset view",
       "zoomOut": "Zoom out",
       "zoomIn": "Zoom in",
@@ -6739,7 +6744,7 @@
       "cropReverse": "Crop Reverse",
       "cropReverseDetail": "Pick {{aspects}} from reverse image",
       "backgroundCropperTitle": "Select a {{aspect}} region as background source{{source}}",
-      "backgroundCropperDescription": "Drag the selection with locked {{aspect}}. Confirming submits it through the current background node to the mainline beat.",
+      "backgroundCropperDescription": "Drag the selection with locked {{aspect}}. Confirming submits it through the current background node to the mainline clip.",
       "backgroundCropperGenerated": "Generated the current background and wrote it to mainline",
       "useAsBackgroundSource": "Use as background source",
       "selectedBackgroundSourceHint": "This updates the output node first. Preset mainline nodes auto-commit; user-created nodes need confirmation on the output node.",
@@ -6843,9 +6848,9 @@
       "localPlaceholder": "Local placeholder",
       "scale": "Scale {{value}}",
       "placeAtCrosshair": "Place actor at crosshair",
-      "noBeatPalette": "This Beat has no detected identities / props; Director World will not create arbitrary identities.",
-      "noBeatActorPalette": "Assigned actor colors are missing, so actors cannot be created. Assign colors in the mainline Beat first.",
-      "noBeatPropPalette": "Assigned prop colors are missing, so props cannot be created. Assign colors in the mainline Beat first.",
+      "noBeatPalette": "This Clip has no detected identities / props; Director World will not create arbitrary identities.",
+      "noBeatActorPalette": "Assigned actor colors are missing, so actors cannot be created. Assign colors in the mainline Clip first.",
+      "noBeatPropPalette": "Assigned prop colors are missing, so props cannot be created. Assign colors in the mainline Clip first.",
       "noSelection": "No selection",
       "moveToCrosshair": "Move to crosshair",
       "mountSelected": "Mount to crosshair target",
@@ -6863,7 +6868,7 @@
       "outputCurrentViewAsDirectorCombined": "Output current view as Director combined",
       "saveScene": "Save Director World",
       "clearScene": "Clear saved scene",
-      "outputHint": "combined keeps actor/prop occlusion; env_only hides actors/props for the current Beat background.",
+      "outputHint": "combined keeps actor/prop occlusion; env_only hides actors/props for the current Clip background.",
       "counts": "{{actor}} actors / {{prop}} props / {{staging}} staging",
       "sourceBadge": "{{sourceKind}} PLY · Input asset loaded through same-origin OpenResty static resources",
       "shortcutHint": "Right click / Shift+left click to place · Left click to select · 1/2/3 switch tools · P save director state · F move to crosshair · M mount to crosshair · G ground · R/T rotate · H fit view",
@@ -6942,9 +6947,9 @@
         "flying_craft": "Flying craft"
       },
       "statusMessages": {
-        "noActorPreset": "Assigned actor colors are missing; assign colors in the mainline Beat first",
+        "noActorPreset": "Assigned actor colors are missing; assign colors in the mainline Clip first",
         "actorPreset": "Actor preset: {{label}}",
-        "noPropPreset": "Assigned prop colors are missing; assign colors in the mainline Beat first",
+        "noPropPreset": "Assigned prop colors are missing; assign colors in the mainline Clip first",
         "propPreset": "Prop preset: {{label}}",
         "aiStagingSelected": "AI staging selected",
         "sceneSaved": "Director World scene saved",
@@ -7018,7 +7023,7 @@
       "skillSelectedBackgroundOutputUnavailable": "The current-background output node is unavailable",
       "skillNoMasterImage": "This scene has no master image",
       "skillNoReverseImage": "This scene has no reverse image",
-      "skillNoDirectorBackground": "This beat has no director background yet",
+      "skillNoDirectorBackground": "This clip has no director background yet",
       "skillFallbackTitle": "Skill",
       "skillLoading": "Loading skill…",
       "skillUnknown": "Unknown skill",
@@ -7027,7 +7032,7 @@
     "purpose": {
       "freezone": "Freezone",
       "asset": "Mainline asset shoot",
-      "beat": "Mainline beat production",
+      "beat": "Mainline clip production",
       "mainline": "Mainline pipeline"
     },
     "pano": {
@@ -7838,7 +7843,7 @@
     "getApiKeyLink": "click here to get API key",
     "missingAnyApiKeyMessage": "Backend provider is not configured.",
     "openProvidersSettings": "View providers",
-    "aboutAppName": "Beat Workbench",
+    "aboutAppName": "Clip Workbench",
     "aboutIntro": "ReelForge candidate generation, free image experimentation, and asset commit workbench.",
     "aboutVersionLabel": "Version",
     "aboutVersionUnknown": "Unknown",
@@ -8219,11 +8224,11 @@
       "kind": {
         "identity": "🎭 Identity (character identity image)",
         "portrait": "🖼 Portrait (character portrait)",
-        "frame": "🎬 Frame (beat first frame)",
+        "frame": "🎬 Frame (clip first frame)",
         "directorRender": "📐 Director composite asset"
       },
       "noCharacters": "This project has no characters",
-      "episodeBeat": "Episode / Beat",
+      "episodeBeat": "Episode / Clip",
       "episodeLabel": "Episode:",
       "selectAll": "Select all",
       "selectNone": "Select none",

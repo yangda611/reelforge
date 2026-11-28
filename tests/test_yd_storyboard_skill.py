@@ -1105,3 +1105,130 @@ async def test_panel_service_s9_ai_optimize_forwards_current_prompt_and_template
     assert "增强紧张感" in guidance
     assert "镜头：" in guidance
     assert "光影：" in guidance
+
+
+def test_seedance_2_5_prompt_norms_in_stage2_directives_and_fallback():
+    s2 = build_s9_stage2_system_prompt(
+        tail_anchor=False,
+        include_first_frame=False,
+        include_scene_layout=True,
+    )
+    # 1. Anti-bloat without rigid 150-280 word cap; bans camera gear & empty quality buzzwords.
+    assert "150～280" not in s2
+    assert "去重不压戏" in s2
+    assert "三脚架" in s2 and "拍摄设备词" in s2
+    assert "8K" in s2 and "稀释注意力" in s2
+    # 2. Anti-subtitle rule: no repeated dialogue lines in 【角色声音】.
+    assert "严禁在 `【角色声音】` 中摘录、复述" in s2
+    # 3. Dual-anchor BGM synonym suppression + positive-only visual constraints.
+    assert "无背景音乐、无BGM、无配乐、无器乐、无旋律、无合成器铺底音、无氛围铺底音" in s2
+    assert "全程纯人声对白与现场物理拟音，无任何配乐或背景音乐" in s2
+    assert "负向禁令仅用于禁字幕与无音乐/BGM" in s2
+    assert "眼神自然贴合当前画风" in s2
+
+    # Style context adapts across live_action, 3D animation, and 2D anime without leaking T2I negative ban lists.
+    for style_id, expected_marker in (
+        ("realistic", "写实摄影光学成像"),
+        ("guoman_fantasy", "三维CG建模"),
+        ("anime", "二维手绘/赛璐璐"),
+    ):
+        ctx = resolve_s9_style_context(visual_style=style_id, aspect_ratio="16:9")
+        assert expected_marker in ctx.s9_style_anchor
+        assert "器材词" in ctx.s9_style_anchor
+        assert "规避项" not in ctx.s9_style_anchor
+        assert "mutated hands" not in ctx.s9_style_anchor.lower()
+        assert "plastic toy" not in ctx.s9_style_anchor.lower()
+
+    # Fallback prompt mirrors the same Seedance 2.5 rules cleanly.
+    style = resolve_s9_style_context(visual_style="realistic_modern", aspect_ratio="16:9")
+    seg = S9SegmentPlan(
+        segment_number=1,
+        title="对峙",
+        planned_duration_seconds=8,
+        story_beat="两人隔门对峙",
+        exit_state="艾莉森握紧门把直视门外",
+        shots=[
+            S9SubShot(
+                shot_number=1,
+                planned_duration_seconds=8,
+                start_seconds=0,
+                end_seconds=8,
+                audio_type="dialogue",
+                speaker="艾莉森",
+                spoken_text="你没有搜查令。",
+                content="艾莉森站在门内直视门外。",
+            )
+        ],
+    )
+    fallback = build_s9_stage2_fallback_prompt(segment=seg, slots=[], style_context=style)
+    assert "无背景音乐、无BGM、无配乐、无器乐、无旋律、无合成器铺底音、无氛围铺底音" in fallback
+    assert "全程纯人声对白与现场物理拟音，无任何配乐或背景音乐" in fallback
+    assert "不要表情突变" not in fallback
+    assert "人物五官、比例与身份全程稳定" in fallback
+
+
+def test_normalize_orders_character_slots_by_first_appearance_for_seedance_2_5():
+    from novelvideo.models import CharacterIdentity, NovelCharacter, NovelEpisode
+    from novelvideo.s9_storyboard import normalize_s9_storyboard_plan
+
+    c1 = NovelCharacter(name="艾莉森")
+    c1.identities = [CharacterIdentity(identity_id="艾莉森_青年", character_name="艾莉森", identity_name="青年")]
+    c2 = NovelCharacter(name="乔瑟夫")
+    c2.identities = [CharacterIdentity(identity_id="乔瑟夫_中年", character_name="乔瑟夫", identity_name="中年")]
+    ep = NovelEpisode(number=1, title="敲门", identity_ids=["艾莉森_青年", "乔瑟夫_中年"])
+
+    # In Shot 1, 乔瑟夫 appears BEFORE 艾莉森 in the visual description, even though DB order
+    # and raw shot.identity_ids list 艾莉森 first.
+    raw = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="门外敲门",
+                planned_duration_seconds=8,
+                story_beat="乔瑟夫敲门，艾莉森走近门后应答。",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=8,
+                        start_seconds=0,
+                        end_seconds=8,
+                        content="乔瑟夫在门外大力拍门，门内的艾莉森放下咖啡杯快步走向门前。",
+                        identity_ids=["艾莉森_青年", "乔瑟夫_中年"],
+                    )
+                ],
+            )
+        ]
+    )
+    _plan, per_seg_slots = normalize_s9_storyboard_plan(
+        raw, max_segment_seconds=30, characters=[c1, c2], episode=ep
+    )
+    identity_slots = [s for s in per_seg_slots[0] if s.asset_kind == "identity"]
+    assert [s.asset_id for s in identity_slots] == ["乔瑟夫_中年", "艾莉森_青年"]
+    assert [s.slot for s in identity_slots] == [1, 2]
+
+    # Same first-appearance order when identity_ids is omitted and inferred from prose.
+    raw_inferred = S9StoryboardPlan(
+        segments=[
+            S9SegmentPlan(
+                segment_number=1,
+                title="门外敲门",
+                planned_duration_seconds=8,
+                story_beat="乔瑟夫敲门，艾莉森走近门后应答。",
+                shots=[
+                    S9SubShot(
+                        shot_number=1,
+                        planned_duration_seconds=8,
+                        start_seconds=0,
+                        end_seconds=8,
+                        content="乔瑟夫在门外大力拍门，门内的艾莉森放下咖啡杯快步走向门前。",
+                        identity_ids=[],
+                    )
+                ],
+            )
+        ]
+    )
+    _plan2, per_seg_slots2 = normalize_s9_storyboard_plan(
+        raw_inferred, max_segment_seconds=30, characters=[c1, c2], episode=ep
+    )
+    identity_slots2 = [s for s in per_seg_slots2[0] if s.asset_kind == "identity"]
+    assert [s.asset_id for s in identity_slots2] == ["乔瑟夫_中年", "艾莉森_青年"]

@@ -11655,7 +11655,7 @@ function canvasCommandPlanPrimary(command: CanvasChatCommand): string | undefine
     case "run_node_action":
       return command.node_id;
     case "open_mainline_projection":
-      if (command.request.scope === "beat") return `EP${command.request.episode ?? ""} / Beat ${command.request.beat ?? ""}`;
+      if (command.request.scope === "beat") return `EP${command.request.episode ?? ""} / Clip ${command.request.beat ?? ""}`;
       if (command.request.scope === "episode") return `EP${command.request.episode ?? ""}`;
       return command.request.asset_id ?? command.request.identity_id ?? command.request.character ?? command.request.asset_kind ?? "主线素材";
     case "delete_nodes":

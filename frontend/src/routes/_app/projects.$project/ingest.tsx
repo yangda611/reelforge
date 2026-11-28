@@ -56,6 +56,7 @@ import { CreditCostInline } from "@/components/credit-cost-inline";
 import type { CreditPromotionDisplay } from "@/components/credits/credit-visual";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -97,6 +98,7 @@ const settingsSchema = z.object({
   visual_style: z.string().optional(),
   narration_style: z.string().optional(),
   ethnicity: z.string().optional(),
+  content_harmonize: z.boolean().optional(),
 });
 
 // Option sources — value is persisted to the API; label is what the user sees.
@@ -174,18 +176,21 @@ const INGEST_SETTING_FIELDS = [
   "visual_style",
   "narration_style",
   "ethnicity",
+  "content_harmonize",
 ] as const;
 type IngestSettingsValues = {
   spine_template: SpineTemplate;
   visual_style: string;
   narration_style: string;
   ethnicity: string;
+  content_harmonize: boolean;
 };
 
 const DEFAULT_SPINE_TEMPLATE: SpineTemplate = SPINE_TEMPLATE_OPTIONS[0].value;
 const DEFAULT_VISUAL_STYLE = VISUAL_STYLE_OPTIONS[0].value;
 const DEFAULT_NARRATION_STYLE = NARRATION_STYLE_OPTIONS[0].value;
 const DEFAULT_ETHNICITY = ETHNICITY_OPTIONS[0].value;
+const DEFAULT_CONTENT_HARMONIZE = true;
 const LEGACY_DEFAULT_VISUAL_STYLE = "post_apocalyptic";
 const LEGACY_DEFAULT_NARRATION_STYLE = "third_person";
 const LEGACY_DEFAULT_ETHNICITY = "Japanese";
@@ -209,6 +214,7 @@ function normalizeLegacyDefaults(
     ethnicity: isLegacyDefault
       ? DEFAULT_ETHNICITY
       : (config?.ethnicity ?? DEFAULT_ETHNICITY),
+    content_harmonize: config?.content_harmonize ?? DEFAULT_CONTENT_HARMONIZE,
   };
 }
 
@@ -221,6 +227,7 @@ function resolveIngestSettings(
     visual_style: values.visual_style ?? defaults.visual_style,
     narration_style: values.narration_style ?? defaults.narration_style,
     ethnicity: values.ethnicity ?? defaults.ethnicity,
+    content_harmonize: values.content_harmonize ?? defaults.content_harmonize,
   };
 }
 
@@ -240,7 +247,11 @@ function hasIngestSettingsChanges(
     if (field === "narration_style" && settings.spine_template !== "narrated") {
       return false;
     }
-    return (config?.[field] ?? "") !== settings[field];
+    const baseline =
+      field === "content_harmonize"
+        ? (config?.content_harmonize ?? DEFAULT_CONTENT_HARMONIZE)
+        : (config?.[field] ?? "");
+    return baseline !== settings[field];
   });
 }
 
@@ -1307,8 +1318,8 @@ export function IngestPageContent({ project }: { project: string }) {
   const showNarrationStyle = settingsValues.spine_template === "narrated";
 
   const handleFieldChange = useCallback(
-    (field: keyof SettingsForm, value: string | undefined) => {
-      setValue(field, value, { shouldDirty: true });
+    (field: keyof SettingsForm, value: string | boolean | undefined) => {
+      setValue(field, value as SettingsForm[typeof field], { shouldDirty: true });
     },
     [setValue],
   );
@@ -1440,6 +1451,12 @@ export function IngestPageContent({ project }: { project: string }) {
     // 避免给后续流程（如人物声线的「第一人称解说声线」判断）留下误导性的脏值。
     if (currentSettings.spine_template !== "narrated") {
       delete payload.narration_style;
+    }
+    if (
+      config?.content_harmonize === undefined &&
+      currentSettings.content_harmonize === DEFAULT_CONTENT_HARMONIZE
+    ) {
+      delete payload.content_harmonize;
     }
     if (hasImportedContent && reimporting) {
       delete payload.spine_template;
@@ -1882,6 +1899,28 @@ export function IngestPageContent({ project }: { project: string }) {
                     ))}
                   </SelectContent>
                 </Select>
+
+                <label
+                  htmlFor="ingest-content-harmonize"
+                  title={t("ingest.contentHarmonizeHint", {
+                    defaultValue:
+                      "默认开启：仅对涉警徽/武器/赌博/暴力冲突等高敏内容做合规等价替换，常规剧情不受影响",
+                  })}
+                  className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Checkbox
+                    id="ingest-content-harmonize"
+                    checked={settingsValues.content_harmonize}
+                    onCheckedChange={(checked) =>
+                      handleFieldChange("content_harmonize", checked === true)
+                    }
+                  />
+                  <span>
+                    {t("ingest.contentHarmonize", {
+                      defaultValue: "合规和谐模式",
+                    })}
+                  </span>
+                </label>
 
                 {/* 导入标准格式只对精品剧成立，解说剧走的是另一套解析。 */}
                 {settingsValues.spine_template === "drama" && (

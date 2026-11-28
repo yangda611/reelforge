@@ -877,13 +877,13 @@
       "deleteFailed": "Falha ao eliminar o ecrã: {{message}}",
       "noConflictSnapshot": "Nenhum instantâneo de conflito local está disponível para guardar.",
       "description": {
-        "freeWorkflowBeat": "Fluxo de trabalho livre · EP{{episode}} / Beat {{beat}}",
+        "freeWorkflowBeat": "Fluxo de trabalho livre · EP{{episode}} / Clip {{beat}}",
         "freeWorkflowAsset": "Fluxo de trabalho livre · {{asset}}",
         "freeWorkflow": "Fluxo de trabalho livre",
         "default": "Ecrã predefinido",
         "episode": "Ecrã do EP{{episode}}",
         "episodeUnknown": "Ecrã de episódio",
-        "beat": "Ecrã de Beat · EP{{episode}} / Beat {{beat}}{{slot}}",
+        "beat": "Ecrã de Clip · EP{{episode}} / Clip {{beat}}{{slot}}",
         "asset": "Ecrã de recurso · {{name}} / {{kind}}",
         "assetUnknown": "Ecrã de recurso · {{kind}}",
         "assetFallback": "recurso",
@@ -955,9 +955,9 @@
         "director_combined": "Renderização do realizador"
       },
       "tabs": {
-        "beatAll": "Todos os beats",
-        "beatEpisode": "Beats do episódio",
-        "beatCurrent": "Beat atual",
+        "beatAll": "Todos os clips",
+        "beatEpisode": "Clips do episódio",
+        "beatCurrent": "Clip atual",
         "characters": "Personagens",
         "scenes": "Cenas",
         "props": "Adereços"
@@ -978,7 +978,7 @@
       },
       "episodeTitle": "Episódio {{episode}}",
       "episodeUnknown": "Episódio ?",
-      "beatUnknown": "Beat ?",
+      "beatUnknown": "Clip ?",
       "expandDrawer": "Expandir painel de recursos",
       "collapseDrawer": "Recolher painel de recursos",
       "expand": "Expandir",
@@ -1057,7 +1057,7 @@
         "ambient_audio": "Ambiente",
         "scene": "Cena",
         "prop": "Adereço",
-        "beat": "Beat",
+        "beat": "Clip",
         "frame": "Fotograma",
         "video": "Vídeo",
         "audio": "Áudio",
@@ -1082,8 +1082,8 @@
       "directorWorldState": "Estado do mundo do realizador",
       "directorWorldManifestHint": "Integrar o manifesto atual do mundo do realizador",
       "modelCommitHint": "Integrar o mundo 3D atual na cena da linha principal",
-      "loadingBeats": "A carregar beats…",
-      "noBeats": "Sem beats",
+      "loadingBeats": "A carregar clips…",
+      "noBeats": "Sem clips",
       "loadingIdentities": "A carregar identity_id…",
       "noIdentities": "Esta personagem não tem identity_id",
       "sceneIdPlaceholder": "scene_id, por exemplo, restaurante de noodles de Lanzhou",
@@ -1157,8 +1157,8 @@
         "scene_3gs_custom_scene": "Mundo 3D (cena personalizada)",
         "scene_3gs_collision_glb": "Colisor do mundo 3D",
         "prop_ref": "Referência do adereço",
-        "video": "Vídeo (vídeo do beat)",
-        "beat_audio": "Áudio (áudio do beat)"
+        "video": "Vídeo (vídeo do clip)",
+        "beat_audio": "Áudio (áudio do clip)"
       },
       "shortKinds": {
         "frame": "Primeiro fotograma",
@@ -2329,7 +2329,7 @@
       "editedAgo": "{{time}}",
       "deletedAgo": "eliminado {{time}}",
       "episodes": "{{count}} eps",
-      "beats": "{{count}} beats"
+      "beats": "{{count}} clips"
     },
     "view": {
       "toggle": "Ver",
@@ -2455,12 +2455,12 @@
       "delete": "Eliminar",
       "generated": "gerado",
       "missing": "em falta",
-      "usageCount": "Usado em {{count}} beats",
-      "usageNone": "Ainda não utilizado em nenhum beat",
+      "usageCount": "Usado em {{count}} clips",
+      "usageNone": "Ainda não utilizado em nenhum clip",
       "copyLink": "Copiar ligação do recurso",
       "linkCopied": "Ligação copiada",
-      "appearsIn": "Aparece em beats",
-      "beatRef": "EP {{episode}} · Beat {{beat}}",
+      "appearsIn": "Aparece em clips",
+      "beatRef": "EP {{episode}} · Clip {{beat}}",
       "search": "Pesquisar recursos",
       "searchScenes": "Pesquisar cenas",
       "searchProps": "Pesquisar adereços",
@@ -2582,7 +2582,7 @@
       "newPropHint": "A extração de adereços por IA é executada por episódio no Episode Studio",
       "editProp": "Editar adereço",
       "emptyTitle": "Ainda não há adereços",
-      "emptyDescription": "Crie um adereço ou promova os adereços do episódio na página do beat.",
+      "emptyDescription": "Crie um adereço ou promova os adereços do episódio na página do clip.",
       "confirmDelete": "Eliminar o adereço \"{{name}}\"?",
       "deleted": "Adereço eliminado",
       "reference": "Referência",
@@ -2621,7 +2621,7 @@
       },
       "explanation": {
         "firstPerson": "A narração na primeira pessoa utiliza a voz da personagem narradora; a narração na terceira pessoa utiliza a voz de narração do projeto.",
-        "thirdPerson": "A narração na terceira pessoa utiliza uma única voz ao nível do projeto para cada beat sem diálogo."
+        "thirdPerson": "A narração na terceira pessoa utiliza uma única voz ao nível do projeto para cada clip sem diálogo."
       }
     }
   },
@@ -2683,7 +2683,7 @@
     "preview": "Visualização",
     "noAudio": "Sem áudio",
     "noVideo": "Nenhum vídeo",
-    "noBeatData": "Sem dados do beat",
+    "noBeatData": "Sem dados do clip",
     "download": "Transferir",
     "use": "Utilizar",
     "confirmExecute": "Confirmar",
@@ -2707,7 +2707,10 @@
     "retry": "Tentar novamente",
     "requestId": "ID do pedido",
     "listSeparator": ", ",
-    "processing": "A processar…"
+    "processing": "A processar…",
+    "gatewayErrors": {
+      "outputRetries": "A saída estruturada do modelo falhou na validação após várias tentativas (possível truncamento ou formato incorreto). Tente novamente ou troque de modelo de texto."
+    }
   },
   "ingest": {
     "title": "Fonte da história",
@@ -2727,6 +2730,8 @@
     "pastePlaceholder": "Cole aqui o texto do romance, com até 1.000 caracteres",
     "startIngest": "Iniciar importação",
     "saveSettings": "Guardar definições",
+    "contentHarmonize": "Modo de conformidade de conteúdo",
+    "contentHarmonizeHint": "Ativado por predefinição: adapta apenas elementos sensíveis (insígnias policiais, armas, apostas, violência física) sem alterar cenas normais",
     "settingsSaved": "Definições do projeto guardadas",
     "settingsSaveFailed": "Falha ao guardar as definições do projeto",
     "processing": "A processar...",
@@ -3076,7 +3081,7 @@
       "identityImageNamed": "{{character}} — imagem da identidade “{{identity}}”",
       "identityImage": "Imagem da identidade {{name}}",
       "unknownCharacter": "Personagem",
-      "withEpisodeBeat": "{{label}} (Ep. {{episode}}, beat {{beat}})",
+      "withEpisodeBeat": "{{label}} (Ep. {{episode}}, clip {{beat}})",
       "withEpisode": "{{label}} (Ep. {{episode}})"
     },
     "progress": {
@@ -3281,7 +3286,7 @@
         "project": "Projeto",
         "episode": "Episódio",
         "scope": "Âmbito",
-        "beat": "Beat",
+        "beat": "Clip",
         "status": "Estado",
         "progress": "Progresso",
         "createdAt": "Criada",
@@ -3328,7 +3333,7 @@
     "io": {
       "background": "Fundo",
       "backgroundCandidate": "Fundo candidato",
-      "beatContext": "Contexto do beat",
+      "beatContext": "Contexto do clip",
       "currentBackground": "Fundo atual",
       "currentStoryboard": "Storyboard atual",
       "directorComposite": "Composição do realizador",
@@ -3523,7 +3528,7 @@
       "insertBeforeShort": "Antes",
       "insertAfter": "Inserir plano manual depois da batida n.º {{n}}",
       "insertAfterShort": "Depois",
-      "openFreezone": "Abrir o XiPaint Beat Workbench",
+      "openFreezone": "Abrir o XiPaint Clip Workbench",
       "openFreezoneTip": "Editar no Freezone",
       "openFreezoneFailed": "Falha ao abrir o XiPaint",
       "markedProps": "Adereços {{count}}",
@@ -3779,12 +3784,12 @@
         "s9ApplyReboundPrompt": "Aplicar prompt renumerado",
         "customVideoInspector": "Parâmetros e prompt de vídeo",
         "seedance2PromptGenerated": "Prompt do Seedance2 otimizado",
-        "seedance2PromptGeneratedOtherBeat": "Prompt de assunto otimizado e guardado no Beat #{{n}}",
+        "seedance2PromptGeneratedOtherBeat": "Prompt de assunto otimizado e guardado no Clip #{{n}}",
         "seedance2PromptGenerateFailed": "Falha na geração do prompt do Seedance2",
         "videoPrompt": "Prompt de vídeo",
-        "keyframePrompt": "Prompt de vídeo de um único Beat",
-        "beatVideoPromptRequired": "O Beat #{{n}} não tem um prompt de vídeo. Gere primeiro o prompt deste Beat.",
-        "seedance2PromptRequired": "Falta o prompt principal do Seedance2.0 no Beat #{{n}}. Preencha-o ou execute primeiro a otimização com IA.",
+        "keyframePrompt": "Prompt de vídeo de um único Clip",
+        "beatVideoPromptRequired": "O Clip #{{n}} não tem um prompt de vídeo. Gere primeiro o prompt deste Clip.",
+        "seedance2PromptRequired": "Falta o prompt principal do Seedance2.0 no Clip #{{n}}. Preencha-o ou execute primeiro a otimização com IA.",
         "seedance2OverlayEnabled": "Ativar",
         "seedance2OverlayKind": "Tipo",
         "seedance2OverlayKindAdCopy": "Texto publicitário",
@@ -3848,29 +3853,29 @@
         "seedance2GuidanceNoSubtitleTemplate": "Sem legendas: não gerar texto nem legendas; manter o enquadramento visualmente limpo."
       },
       "batch": {
-        "narrationIncompatible": "Este modelo só suporta planos com diálogo ({{count}} beats de narração incompatíveis)",
+        "narrationIncompatible": "Este modelo só suporta planos com diálogo ({{count}} clips de narração incompatíveis)",
         "toolbar": "Barra de ferramentas de geração",
         "rewriteScriptTitle": "Reescrever todos os guiões?",
-        "rewriteScriptDesc": "Regenerar todas as narrações dos beats a partir do texto de origem ou adaptado. O texto existente será afetado.",
+        "rewriteScriptDesc": "Regenerar todas as narrações dos clips a partir do texto de origem ou adaptado. O texto existente será afetado.",
         "rewriteScript": "Reescrever todos os guiões",
         "insertManualBeforeFirst": "Antes do primeiro plano",
         "insertManualBeforeFirstShort": "Antes do primeiro plano",
-        "insertManualBeforeFirstTooltip": "Inserir um plano manual antes do primeiro Beat",
+        "insertManualBeforeFirstTooltip": "Inserir um plano manual antes do primeiro Clip",
         "genMissingManualShort": "Novos planos",
         "genAudioTitle": "Gerar todo o áudio?",
-        "genAudioDesc": "Gerar locução TTS para todos os beats sem áudio.",
+        "genAudioDesc": "Gerar locução TTS para todos os clips sem áudio.",
         "genAudio": "Gerar todo o áudio",
         "genAudioShort": "Todo o áudio",
         "genAudioUnavailableForVideoModel": "O modelo de vídeo atual não precisa de geração de áudio de episódio completo separada",
         "videoModel": "Modelo de vídeo",
         "videoSettingsLabel": "Definições de vídeo",
-        "genVideoDesc": "Gerar clips de vídeo para todos os beats sem vídeo. Requer primeiro o áudio.",
+        "genVideoDesc": "Gerar clips de vídeo para todos os clips sem vídeo. Requer primeiro o áudio.",
         "genVideo": "Gerar todos os vídeos",
         "genVideoShort": "Todos os vídeos",
         "video": "Vídeo",
-        "genBatchVideoTitle": "Gerar vídeo para {{count}} beats?",
+        "genBatchVideoTitle": "Gerar vídeo para {{count}} clips?",
         "genBatchVideoDesc": "Gerar clips de vídeo para #{{beats}}, um a um. Requer áudio.",
-        "genBatchVideo": "Gerar vídeo para {{count}} beats",
+        "genBatchVideo": "Gerar vídeo para {{count}} clips",
         "audioSuccess": "Áudio gerado para {{ok}} batidas",
         "audioPartial": "Áudio: {{ok}} com êxito, {{fail}} com falha",
         "videoSuccess": "Vídeo gerado para {{ok}} batidas",
@@ -4626,7 +4631,7 @@
       "render_repair_candidate": {
         "name": "Candidato de reparação de renderização",
         "shortName": "Reparar renderização",
-        "description": "Repare o candidato de renderização atual do beat / do realizador e, em seguida, confirme-o na posição do beat.",
+        "description": "Repare o candidato de renderização atual do clip / do realizador e, em seguida, confirme-o na posição do clip.",
         "params": {
           "repair_focus": {
             "label": "Foco da reparação"
@@ -4636,7 +4641,7 @@
       "video_start_frame_candidate": {
         "name": "Candidato a fotograma inicial do vídeo",
         "shortName": "Fotograma inicial",
-        "description": "Gere um candidato ao primeiro fotograma do vídeo a partir de uma renderização / fotograma extraído / referência e, em seguida, confirme-o na posição do fotograma (o fotograma inicial do vídeo e o primeiro fotograma do beat são o mesmo ficheiro).",
+        "description": "Gere um candidato ao primeiro fotograma do vídeo a partir de uma renderização / fotograma extraído / referência e, em seguida, confirme-o na posição do fotograma (o fotograma inicial do vídeo e o primeiro fotograma do clip são o mesmo ficheiro).",
         "params": {
           "motion_setup": {
             "label": "Configuração do movimento"
@@ -6013,7 +6018,7 @@
         "imageToImageTitle": "Adicione um nó de imagem anterior para o utilizar como referência",
         "imageToImage": "Imagem para imagem"
       },
-      "cropBackgroundTitle": "Escolha uma região 16:9 de {{source}} e grave-a no selected_background.png deste beat",
+      "cropBackgroundTitle": "Escolha uma região 16:9 de {{source}} e grave-a no selected_background.png deste clip",
       "cropBackground": "📐 Recortar fundo",
       "assetLibraryTitle": "Escolha uma imagem de referência na biblioteca de recursos (personagens / cenas / adereços)",
       "assetLibrary": "Biblioteca de recursos",
@@ -6390,7 +6395,7 @@
       "snapCurrent": "Capturar vista atual",
       "snap2x2": "Capturar 4 vistas",
       "snap4x3": "Capturar 12 vistas",
-      "useAsBackground": "Utilizar como origem do fundo (grava em selected_background deste beat)",
+      "useAsBackground": "Utilizar como origem do fundo (grava em selected_background deste clip)",
       "resetView": "Repor vista",
       "zoomOut": "Reduzir zoom",
       "zoomIn": "Aumentar zoom",
@@ -6964,9 +6969,9 @@
       "localPlaceholder": "Marcador de posição local",
       "scale": "Escala {{value}}",
       "placeAtCrosshair": "Colocar ator na mira",
-      "noBeatPalette": "Este Beat não tem identidades/adereços detetados; o Director World não criará identidades arbitrárias.",
-      "noBeatActorPalette": "Faltam as cores atribuídas aos atores, pelo que não é possível criar atores. Atribua primeiro as cores no Beat da linha principal.",
-      "noBeatPropPalette": "Faltam as cores atribuídas aos adereços, pelo que não é possível criar adereços. Atribua primeiro as cores no Beat da linha principal.",
+      "noBeatPalette": "Este Clip não tem identidades/adereços detetados; o Director World não criará identidades arbitrárias.",
+      "noBeatActorPalette": "Faltam as cores atribuídas aos atores, pelo que não é possível criar atores. Atribua primeiro as cores no Clip da linha principal.",
+      "noBeatPropPalette": "Faltam as cores atribuídas aos adereços, pelo que não é possível criar adereços. Atribua primeiro as cores no Clip da linha principal.",
       "noSelection": "Nenhuma seleção",
       "moveToCrosshair": "Mover para a mira",
       "mountSelected": "Montar no alvo da mira",
@@ -6984,7 +6989,7 @@
       "outputCurrentViewAsDirectorCombined": "Enviar a vista atual como composição do Director",
       "saveScene": "Guardar Director World",
       "clearScene": "Apagar a cena guardada",
-      "outputHint": "combined mantém a oclusão de atores/adereços; env_only oculta atores/adereços no fundo do Beat atual.",
+      "outputHint": "combined mantém a oclusão de atores/adereços; env_only oculta atores/adereços no fundo do Clip atual.",
       "counts": "{{actor}} atores / {{prop}} adereços / {{staging}} elementos de cena",
       "sourceBadge": "{{sourceKind}} PLY · Recurso de entrada carregado através dos recursos estáticos do OpenResty com a mesma origem",
       "shortcutHint": "Clique com o botão direito/Shift+clique com o botão esquerdo para colocar · Clique com o botão esquerdo para selecionar · 1/2/3 para mudar de ferramenta · P para guardar o estado do Director · F para mover para a mira · M para montar na mira · G para colocar no chão · R/T para rodar · H para ajustar a vista",
@@ -7063,9 +7068,9 @@
         "flying_craft": "Veículo aéreo"
       },
       "statusMessages": {
-        "noActorPreset": "Faltam as cores atribuídas aos atores; atribua primeiro as cores no Beat da linha principal",
+        "noActorPreset": "Faltam as cores atribuídas aos atores; atribua primeiro as cores no Clip da linha principal",
         "actorPreset": "Predefinição de ator: {{label}}",
-        "noPropPreset": "Faltam as cores atribuídas aos adereços; atribua primeiro as cores no Beat da linha principal",
+        "noPropPreset": "Faltam as cores atribuídas aos adereços; atribua primeiro as cores no Clip da linha principal",
         "propPreset": "Predefinição de adereço: {{label}}",
         "aiStagingSelected": "Encenação por IA selecionada",
         "sceneSaved": "Cena do Director World guardada",
@@ -7962,7 +7967,7 @@
     "getApiKeyLink": "clique aqui para obter a chave de API",
     "missingAnyApiKeyMessage": "O fornecedor de backend não está configurado.",
     "openProvidersSettings": "Ver fornecedores",
-    "aboutAppName": "Beat Workbench",
+    "aboutAppName": "Clip Workbench",
     "aboutIntro": "Ambiente de trabalho para gerar candidatos do ReelForge, experimentar livremente com imagens e consolidar recursos.",
     "aboutVersionLabel": "Versão",
     "aboutVersionUnknown": "Desconhecida",

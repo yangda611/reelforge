@@ -122,7 +122,7 @@ function targetLabel(target: PushTarget, t: TFn): string {
     target.kind === "video" ||
     target.kind === "beat_audio"
   ) {
-    return `EP${target.episode} / Beat ${target.beat} / ${suffix}`;
+    return `EP${target.episode} / Clip ${target.beat} / ${suffix}`;
   }
   if (
     target.kind === "identity" ||

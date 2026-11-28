@@ -10,11 +10,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from novelvideo.models import NarrationScript, VisualBeat, build_scene_ref
-from novelvideo.project_config import load_project_config_from_state_dir
+from novelvideo.project_config import (
+    load_content_harmonize_from_state_dir,
+    load_project_config_from_state_dir,
+)
 from novelvideo.s9_storyboard import (
     DEFAULT_S9_MAX_SEGMENT_SECONDS,
     S9EpisodePreviewMeta,
@@ -133,6 +137,7 @@ class S9ScriptWritingWorkflow:
             self.cognee_store, "state_dir", None
         )
         proj_cfg = load_project_config_from_state_dir(state_dir) if state_dir else {}
+        content_harmonize = load_content_harmonize_from_state_dir(state_dir)
         effective_style = visual_style or str(proj_cfg.get("visual_style") or "chinese_period_drama")
         effective_ratio = aspect_ratio or str(proj_cfg.get("aspect_ratio") or "2:3")
         effective_backend = video_backend or str(proj_cfg.get("video_backend") or "")
@@ -214,11 +219,13 @@ class S9ScriptWritingWorkflow:
         max_audios = int(limits["max_audios"])
 
         log(
-            f"开始按 YD 分镜（紧凑节奏）拆分第 {episode_num} 集：单段上限 {cap} 秒（非凑满目标），"
-            f"画风 {style_context.style_label}（{style_context.aspect_ratio}），"
+            f"开始按 YD 分镜（紧凑节奏）拆分第 {episode_num} 集：正文 {len(resolved_text)} 字，"
+            f"角色 {len(characters)} 个 / 场景 {len(scenes)} 个 / 道具 {len(props)} 个，"
+            f"单段上限 {cap} 秒（非凑满目标），画风 {style_context.style_label}（{style_context.aspect_ratio}），"
             f"尾帧锚点={'开启' if tail_anchor else '关闭'}"
         )
-        report_progress(0.22, f"Stage 1：按 YD 紧凑节奏（≤{cap}秒）拆分大段并构建分镜预览")
+        report_progress(0.22, f"Stage 1：按 YD 紧凑节奏（≤{cap}秒）拆分 Clip 并构建分镜预览")
+        stage1_started = time.monotonic()
         raw_plan = await run_s9_stage1_plan(
             source_text=resolved_text,
             episode_num=episode_num,
@@ -234,6 +241,9 @@ class S9ScriptWritingWorkflow:
             spine_template=effective_spine,
             tail_anchor=bool(tail_anchor),
             prev_episode_context=prev_episode_context,
+            content_harmonize=content_harmonize,
+            on_log=log,
+            on_progress=report_progress,
         )
         plan, per_segment_slots = normalize_s9_storyboard_plan(
             raw_plan,
@@ -249,9 +259,11 @@ class S9ScriptWritingWorkflow:
         if not plan.segments:
             raise ValueError("s9 Stage 1 未产出有效大段分镜")
 
+        total_subshots = sum(len(seg.shots or []) for seg in plan.segments)
+        stage1_elapsed = time.monotonic() - stage1_started
         log(
-            f"Stage 1 完成：共 {len(plan.segments)} 大段，"
-            f"预计成片总长 {plan.duration_assessment.estimated_total_seconds} 秒"
+            f"Stage 1 完成（总耗时 {stage1_elapsed:.1f}s）：共 {len(plan.segments)} 个 Clip / {total_subshots} 镜，"
+            f"预计成片总长 {plan.duration_assessment.estimated_total_seconds} 秒，正在保存分镜预览..."
         )
         plan.continuity_bible = enrich_s9_continuity_bible(
             plan.continuity_bible,
@@ -441,7 +453,7 @@ class S9ScriptWritingWorkflow:
 
         report_progress(
             0.50,
-            f"Stage 1 完成：已保存 {len(plan.segments)} 个大段预览，正在并发生成视频提示词",
+            f"Stage 1 预览已落库：共 {len(plan.segments)} 个 Clip，进入 Stage 2 并发编译 Seedance 提示词",
         )
 
         has_multi_segments = len(plan.segments) > 1
@@ -467,11 +479,14 @@ class S9ScriptWritingWorkflow:
         persist_lock = asyncio.Lock()
         persisted_indices: set[int] = set()
         total_segments = len(plan.segments)
+        stage2_started = time.monotonic()
 
         async def _on_segment_done(idx: int, prompt_text: str) -> None:
             if not (0 <= idx < len(beats)):
                 return
             segment_num = int(beats[idx].beat_number)
+            seg_title_short = str(plan.segments[idx].title or "").strip() if idx < len(plan.segments) else ""
+            title_suffix = f"《{seg_title_short}》" if seg_title_short else ""
             marked_prompt = mark_seedance2_prompt_references_for_editor(prompt_text or "")
             updated_cfg = segment_configs[idx].model_copy(
                 update={"final_prompt": marked_prompt}
@@ -493,7 +508,7 @@ class S9ScriptWritingWorkflow:
                 progress_val = min(0.96, 0.50 + 0.46 * (done_count / max(1, total_segments)))
                 report_progress(
                     progress_val,
-                    f"Stage 2：已完成 {done_count}/{total_segments} 个大段视频提示词",
+                    f"Stage 2：已完成 {done_count}/{total_segments} 个 Clip 提示词（最新：Clip {segment_num}{title_suffix}，{len(prompt_text or '')} 字）",
                 )
 
         stage2_prompts = await generate_all_s9_segment_prompts(
@@ -507,6 +522,12 @@ class S9ScriptWritingWorkflow:
             source_slices_by_segment=source_slices_by_segment,
             scene_context_notes_by_segment=scene_context_notes_by_segment,
             on_segment_done=_on_segment_done,
+            on_log=log,
+            content_harmonize=content_harmonize,
+        )
+        log(
+            f"Stage 2 全部完成（总耗时 {time.monotonic() - stage2_started:.1f}s）："
+            f"已编译 {len(stage2_prompts)}/{total_segments} 个 Clip 提示词"
         )
 
         needs_full_repersist = not has_update_beat

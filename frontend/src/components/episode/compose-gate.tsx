@@ -68,7 +68,7 @@ export function ComposeGate({ project, episode }: ComposeGateProps) {
         {grouped.map(({ stage, beats }) => (
           <li key={stage} className="flex items-center gap-2">
             <span className="flex-1 text-amber-800 dark:text-amber-100">
-              · {beats.length} {t(`episode.stage.${stage}`)} (beat{" "}
+              · {beats.length} {t(`episode.stage.${stage}`)} (Clip{" "}
               {beats.slice(0, MAX_BEATS_DISPLAYED).join(", ")}
               {beats.length > MAX_BEATS_DISPLAYED ? "..." : ""})
             </span>

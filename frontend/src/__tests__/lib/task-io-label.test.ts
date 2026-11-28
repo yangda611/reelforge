@@ -14,9 +14,9 @@ describe("taskIoLabel", () => {
     expect(taskIoLabel("360 全景", en)).toBe("360° panorama");
   });
 
-  it("renders identically to the source string in Chinese", () => {
+  it("renders localized labels in Chinese", () => {
+    expect(taskIoLabel("Beat 上下文", zh)).toBe("Clip 上下文");
     for (const raw of [
-      "Beat 上下文",
       "Master + Reverse",
       "场景 Master + Reverse",
       "导演合成图",

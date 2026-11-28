@@ -12,6 +12,7 @@ export type GatewayErrorKind =
   | "timeout"
   | "model_not_found"
   | "rate_limit"
+  | "output_retries"
   | "unknown";
 
 export interface ClassifiedGatewayError {
@@ -64,6 +65,13 @@ export function classifyGatewayError(
   if (statusCode === 429 || /\brate[\s-]?limit/.test(lowered)) {
     return { kind: "rate_limit", statusCode, model };
   }
+  if (
+    /exceeded maximum output retries|structuredoutputfailure|unexpectedmodelbehavior/.test(
+      lowered,
+    )
+  ) {
+    return { kind: "output_retries", statusCode, model };
+  }
   return { kind: "unknown", statusCode, model };
 }
 
@@ -92,6 +100,11 @@ export function gatewayErrorHumanMessage(
     case "rate_limit":
       return t("common.generationRateLimited", {
         defaultValue: "模型服务暂时限流（HTTP 429），请稍后重试。",
+      });
+    case "output_retries":
+      return t("common.gatewayErrors.outputRetries", {
+        defaultValue:
+          "模型结构化输出多次校验未通过（可能因输出过长被截断或模型未按约定格式返回），请重试或更换更稳定的文本模型。",
       });
     default:
       return null;

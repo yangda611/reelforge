@@ -5,7 +5,8 @@
 
 import inspect
 import os
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -295,15 +296,75 @@ def get_effective_newapi_text_model_name(
     return model_name
 
 
-def _get_newapi_text_model_profile(model_name: str):
-    """Attach Gemini-compatible model profile while routing through newAPI."""
-    normalized = (model_name or "").strip()
-    if not normalized.startswith("gemini-") or "image" in normalized:
+_OPENAI_NATIVE_MODEL_PREFIXES = (
+    "gpt-",
+    "chatgpt-",
+    "o1-",
+    "o3-",
+    "o4-",
+)
+_OPENAI_NATIVE_EXACT_NAMES = frozenset({"o1", "o3", "o4"})
+_PROFILE_OVERRIDE: ContextVar[Any] = ContextVar(
+    "novelvideo_openai_profile_override",
+    default=None,
+)
+
+
+def _split_model_vendor_prefix(model_name: str) -> tuple[str, str]:
+    raw = (model_name or "").strip()
+    if "/" not in raw:
+        return "", raw
+    vendor, _, bare = raw.partition("/")
+    return vendor.strip().lower(), bare.strip()
+
+
+def _is_openai_native_text_model(model_name: str, *, provider: str = "") -> bool:
+    vendor, bare = _split_model_vendor_prefix(model_name)
+    lower = bare.lower()
+    if not lower:
+        return False
+    # Opaque NewAPI aliases and BrainClaw preserve standard OpenAI wire behavior
+    # by default; if an alias maps to a stricter model, 400 fallback adapts.
+    if lower == "brainclaw" or bare.startswith("DC-"):
+        return True
+    if vendor == "openai":
+        return True
+    if vendor and vendor != "openai":
+        return False
+    clean_provider = (provider or "").strip().lower()
+    if clean_provider and clean_provider not in {"openai", "azure", "openrouter", "custom"}:
+        return False
+    return lower in _OPENAI_NATIVE_EXACT_NAMES or lower.startswith(
+        _OPENAI_NATIVE_MODEL_PREFIXES
+    )
+
+
+def _get_newapi_text_model_profile(model_name: str, *, provider: str = ""):
+    """Return an OpenAI-compatible model profile tailored for the target model."""
+    vendor, bare = _split_model_vendor_prefix(model_name)
+    lower = bare.lower()
+    if not lower:
+        return None
+    if lower.startswith("gemini-") and vendor in {"", "google"}:
+        if "image" in lower:
+            return None
+        from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+        return OpenRouterProvider.model_profile(f"google/{bare}")
+    if _is_openai_native_text_model(model_name, provider=provider):
         return None
 
-    from pydantic_ai.providers.openrouter import OpenRouterProvider
+    # Non-OpenAI / non-Gemini models (Claude, DeepSeek, Qwen, GLM, Kimi, etc.)
+    # often reject tool_choice="required" or strict tool schemas on relays,
+    # especially when reasoning/thinking is active. Fall back to tool_choice="auto".
+    from pydantic_ai.profiles.openai import OpenAIModelProfile, openai_model_profile
 
-    return OpenRouterProvider.model_profile(f"google/{normalized}")
+    base_profile = OpenAIModelProfile.from_profile(openai_model_profile(bare))
+    return replace(
+        base_profile,
+        openai_supports_tool_choice_required=False,
+        openai_supports_strict_tool_definition=False,
+    )
 
 
 def _newapi_text_http_client_factory(
@@ -429,6 +490,7 @@ def _newapi_text_openai_model(
 ):
     from contextlib import asynccontextmanager
 
+    from pydantic_ai.models import Model
     from pydantic_ai.models.openai import OpenAIChatModel
     from novelvideo.utils.model_context_budget import TextContextBudget
 
@@ -438,6 +500,89 @@ def _newapi_text_openai_model(
     )
 
     class _AutoClosingOpenAIChatModel(OpenAIChatModel):
+        @property
+        def profile(self):
+            override = _PROFILE_OVERRIDE.get()
+            if override is not None:
+                return override
+            cached = getattr(self, "_base_profile_cache", None)
+            if cached is None:
+                cached = Model.profile.func(self)
+                self._base_profile_cache = cached
+            return cached
+
+        @profile.setter
+        def profile(self, value: Any) -> None:
+            self._base_profile_cache = value
+
+        @staticmethod
+        def _next_compat_relaxation(
+            exc: BaseException,
+            *,
+            settings: dict[str, Any] | None,
+            current_profile: Any,
+            parameters: Any,
+        ) -> tuple[dict[str, Any] | None, Any] | None:
+            from pydantic_ai.exceptions import ModelHTTPError
+            from pydantic_ai.profiles.openai import OpenAIModelProfile
+
+            from novelvideo.model_gateway_runtime import current_model_gateway_context
+
+            # Only downgrade request parameters on definite no-cost 400/422 rejections,
+            # and never issue extra HTTP attempts inside an organization egress claim.
+            if not isinstance(exc, ModelHTTPError) or exc.status_code not in {400, 422}:
+                return None
+            ctx = current_model_gateway_context()
+            if ctx is not None and ctx.is_organization:
+                return None
+
+            openai_profile = OpenAIModelProfile.from_profile(current_profile)
+            has_tools = bool(
+                getattr(parameters, "function_tools", None)
+                or getattr(parameters, "output_tools", None)
+            )
+            can_relax_tool_forcing = (
+                openai_profile.openai_supports_tool_choice_required and has_tools
+            )
+            can_drop_reasoning = isinstance(settings, dict) and bool(
+                settings.get("openai_reasoning_effort")
+            )
+            can_drop_json_object = (
+                getattr(parameters, "output_mode", None) == "prompted"
+                and openai_profile.supports_json_object_output
+            )
+
+            body_text = str(getattr(exc, "body", None) or exc).lower()
+            mentions_reasoning = any(
+                tok in body_text for tok in ("reasoning", "thinking", "effort")
+            )
+            mentions_tool = any(tok in body_text for tok in ("tool_choice", "tool"))
+            mentions_response_format = (
+                "response_format" in body_text or "json_object" in body_text
+            )
+
+            if can_drop_json_object and mentions_response_format:
+                return settings, replace(openai_profile, supports_json_object_output=False)
+            if can_drop_reasoning and mentions_reasoning and not mentions_tool:
+                next_settings = {
+                    k: v for k, v in settings.items() if k != "openai_reasoning_effort"
+                }
+                return next_settings, current_profile
+            if can_relax_tool_forcing:
+                return settings, replace(
+                    openai_profile,
+                    openai_supports_tool_choice_required=False,
+                    openai_supports_strict_tool_definition=False,
+                )
+            if can_drop_reasoning:
+                next_settings = {
+                    k: v for k, v in settings.items() if k != "openai_reasoning_effort"
+                }
+                return next_settings, current_profile
+            if can_drop_json_object:
+                return settings, replace(openai_profile, supports_json_object_output=False)
+            return None
+
         async def _checked_settings(self, messages, settings, parameters):
             if context_budget is None:
                 return settings
@@ -468,6 +613,18 @@ def _newapi_text_openai_model(
             # carrying forward only our explicit output reservation.
             return {**(settings or {}), "max_tokens": checked["max_tokens"]}
 
+        async def _prepare_checked_settings(
+            self, messages, model_settings, model_request_parameters
+        ):
+            effective_settings = _apply_configured_reasoning_effort(
+                model_settings,
+                model_env=model_env,
+                is_managed_brainclaw=is_managed_brainclaw,
+            )
+            return await self._checked_settings(
+                messages, effective_settings, model_request_parameters
+            )
+
         async def request(
             self, messages, model_settings, model_request_parameters
         ) -> Any:
@@ -480,17 +637,32 @@ def _newapi_text_openai_model(
             token = begin_request_outcomes()
             try:
                 async with self:
-                    effective_settings = _apply_configured_reasoning_effort(
-                        model_settings,
-                        model_env=model_env,
-                        is_managed_brainclaw=is_managed_brainclaw,
+                    cur_settings = await self._prepare_checked_settings(
+                        messages, model_settings, model_request_parameters
                     )
-                    checked = await self._checked_settings(
-                        messages, effective_settings, model_request_parameters
-                    )
-                    result = await super().request(
-                        messages, checked, model_request_parameters
-                    )
+                    cur_profile: Any = None
+                    while True:
+                        active_profile = (
+                            cur_profile if cur_profile is not None else self.profile
+                        )
+                        profile_token = _PROFILE_OVERRIDE.set(cur_profile)
+                        try:
+                            result = await super().request(
+                                messages, cur_settings, model_request_parameters
+                            )
+                            break
+                        except BaseException as exc:
+                            nxt = self._next_compat_relaxation(
+                                exc,
+                                settings=cur_settings,
+                                current_profile=active_profile,
+                                parameters=model_request_parameters,
+                            )
+                            if nxt is None:
+                                raise
+                            cur_settings, cur_profile = nxt
+                        finally:
+                            _PROFILE_OVERRIDE.reset(profile_token)
                 report_request_outcomes(passed=True)
                 return result
             except BaseException:
@@ -517,18 +689,41 @@ def _newapi_text_openai_model(
             token = begin_request_outcomes()
             try:
                 async with self:
-                    effective_settings = _apply_configured_reasoning_effort(
-                        model_settings,
-                        model_env=model_env,
-                        is_managed_brainclaw=is_managed_brainclaw,
+                    cur_settings = await self._prepare_checked_settings(
+                        messages, model_settings, model_request_parameters
                     )
-                    checked = await self._checked_settings(
-                        messages, effective_settings, model_request_parameters
-                    )
-                    async with super().request_stream(
-                        messages, checked, model_request_parameters, *args, **kwargs
-                    ) as response:
-                        yield response
+                    cur_profile: Any = None
+                    yielded = False
+                    while True:
+                        active_profile = (
+                            cur_profile if cur_profile is not None else self.profile
+                        )
+                        profile_token = _PROFILE_OVERRIDE.set(cur_profile)
+                        try:
+                            async with super().request_stream(
+                                messages,
+                                cur_settings,
+                                model_request_parameters,
+                                *args,
+                                **kwargs,
+                            ) as response:
+                                yielded = True
+                                yield response
+                                break
+                        except BaseException as exc:
+                            if yielded:
+                                raise
+                            nxt = self._next_compat_relaxation(
+                                exc,
+                                settings=cur_settings,
+                                current_profile=active_profile,
+                                parameters=model_request_parameters,
+                            )
+                            if nxt is None:
+                                raise
+                            cur_settings, cur_profile = nxt
+                        finally:
+                            _PROFILE_OVERRIDE.reset(profile_token)
                 report_request_outcomes(passed=True)
             except BaseException:
                 report_request_outcomes(passed=False)
@@ -574,7 +769,9 @@ def get_newapi_text_pydantic_model(
             _env_float("NEWAPI_TEXT_TIMEOUT_SECONDS", 300.0),
         )
     )
-    profile = _get_newapi_text_model_profile(model_name)
+    profile = _get_newapi_text_model_profile(
+        model_name, provider=getattr(llm_config, "provider", "")
+    )
     # CE resolves its own route from the settings database, so it knows when
     # Advanced mode should stay clean. EE only hands a logical alias to NewAPI
     # and cannot know which upstream NewAPI maps it to, so it always declares

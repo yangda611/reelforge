@@ -2182,6 +2182,167 @@ async def test_s9_workflow_syncs_reused_project_props_into_episode_prop_menu(mon
     assert synced_ids == ["啤酒瓶", "公文包"]
 
 
+@pytest.mark.asyncio
+async def test_s9_streaming_falls_back_to_prompted_output_on_output_retries(monkeypatch):
+    from pydantic_ai import Agent, PromptedOutput
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+    from pydantic_ai.models.test import TestModel
+
+    from novelvideo.s9_storyboard import (
+        S9DurationAssessment,
+        S9Stage1SkeletonPlan,
+        S9Stage1SkeletonSegment,
+        _run_s9_agent_streaming,
+    )
+
+    seen_calls: list[dict] = []
+    expected = S9Stage1SkeletonPlan(
+        duration_assessment=S9DurationAssessment(estimated_total_seconds=12, segment_count=1),
+        segments=[
+            S9Stage1SkeletonSegment(
+                segment_number=1,
+                title="推门对峙",
+                planned_duration_seconds=12,
+                source_excerpt="艾莉森快步走向门口。",
+                story_beat="门外响起急促敲门声，艾莉森开门对峙。",
+            )
+        ],
+    )
+
+    agent = Agent(
+        TestModel(),
+        output_type=S9Stage1SkeletonPlan,
+        model_settings={"openai_reasoning_effort": "high"},
+        retries=3,
+    )
+
+    async def fake_run(prompt, **kwargs):
+        seen_calls.append(dict(kwargs))
+        if len(seen_calls) == 1:
+            raise UnexpectedModelBehavior("Exceeded maximum output retries (3)")
+        return SimpleNamespace(output=expected)
+
+    monkeypatch.setattr(agent, "run", fake_run)
+
+    res = await _run_s9_agent_streaming(agent, "拆分本集")
+    assert res.output == expected
+    assert len(seen_calls) == 2
+    assert "output_type" not in seen_calls[0]
+    assert isinstance(seen_calls[1].get("output_type"), PromptedOutput)
+    assert seen_calls[1]["model_settings"]["openai_reasoning_effort"] == "low"
+
+
+def test_normalize_s9_stage2_prompt_structure_unifies_drifted_formats():
+    from novelvideo.s9_storyboard import normalize_s9_stage2_prompt_structure
+
+    # Mirrors the drifted Beat 1 vs Beat 2 screenshot formats (multi-paragraph layout,
+    # `---` separator, newline after `- 空间与主体：`, multi-paragraph `- 动态时间轴：`, ASCII `()`).
+    beat1_like = """**【参考职责】**
+@图片1 是艾莉森形象参考。
+
+【全局光影画风】
+视觉风格：三维CG写实渲染。
+全局主光：冷白自然日光。
+色彩与材质：冷白基调。
+
+【场景布局】
+本场景为艾莉森公寓客厅。
+
+人物站位与活动空间：艾莉森站在吧台后侧。
+
+机位工作轴与视线关系：镜头固定在吧台同侧。
+
+【注意事项】
+画面全域禁止生成任何硬字幕。
+
+【角色声音】
+艾莉森 (@音频1)：冷静克制。
+
+---
+
+分镜1 (0秒到5秒): 敲门与开门，中景转全景，35mm平视。
+- 空间与主体：
+艾莉森站在吧台后侧转身。
+
+- 动态时间轴：
+0秒-2秒：门外响起急促敲门声。
+
+2秒-5秒：艾莉森走近门前推开门。
+
+- 音频与对白：
+0秒—2秒，急促敲门声。
+- 尾帧与转场：门开，硬切。"""
+
+    normalized = normalize_s9_stage2_prompt_structure(beat1_like)
+    assert "---" not in normalized
+    assert "**【参考职责】**" not in normalized
+    assert "【参考职责】" in normalized
+    assert "- 视觉风格：三维CG写实渲染。" in normalized
+    assert "- 全局主光：冷白自然日光。" in normalized
+    assert "- 色彩与材质：冷白基调。" in normalized
+    assert "本场景为艾莉森公寓客厅。人物站位与活动空间：艾莉森站在吧台后侧。机位工作轴与视线关系：镜头固定在吧台同侧。" in normalized
+    assert "分镜1（0秒到5秒）：敲门与开门，中景转全景，35mm平视。" in normalized
+    assert "- 空间与主体：艾莉森站在吧台后侧转身。" in normalized
+    assert "- 动态时间轴：0秒-2秒：门外响起急促敲门声。2秒-5秒：艾莉森走近门前推开门。" in normalized
+    assert "- 音频与对白：0秒—2秒，急促敲门声。" in normalized
+    assert "- 尾帧与转场：门开，硬切。" in normalized
+
+
+def test_stage2_model_settings_caps_inherited_high_reasoning_and_concurrency_is_bounded(monkeypatch):
+    from novelvideo import config as cfg_mod
+    from novelvideo.s9_storyboard import (
+        _s9_stage2_model_settings,
+        get_s9_llm_concurrency,
+    )
+
+    monkeypatch.delenv("S9_LLM_CONCURRENCY", raising=False)
+    monkeypatch.delenv("S9_STAGE2_REASONING_EFFORT", raising=False)
+    monkeypatch.setattr(
+        cfg_mod,
+        "get_newapi_structured_output_model_settings",
+        lambda *_a, **_kw: {"openai_reasoning_effort": "high"},
+    )
+    assert get_s9_llm_concurrency() == 4
+    s2 = _s9_stage2_model_settings("SEEDANCE2_PROMPT_COMPOSER_MODEL")
+    assert s2["openai_reasoning_effort"] == "low"
+    assert s2["max_tokens"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_s9_streaming_emits_heartbeat_logs_with_chunk_count(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from novelvideo import s9_storyboard as s9_mod
+
+    monkeypatch.setattr(s9_mod, "_S9_STREAM_HEARTBEAT_SECONDS", 0.03)
+    logs: list[str] = []
+
+    class _SlowStreamAgent:
+        name = "YD Stage1A Skeleton Planner"
+
+        async def run(self, prompt, *, event_stream_handler=None, **kwargs):
+            async def _events():
+                for i in range(4):
+                    await asyncio.sleep(0.02)
+                    yield i
+
+            if event_stream_handler is not None:
+                await event_stream_handler(None, _events())
+            return SimpleNamespace(output="done")
+
+    res = await s9_mod._run_s9_agent_streaming(
+        _SlowStreamAgent(),
+        "test",
+        on_log=logs.append,
+        stage_label="Stage 1A · 全局骨架规划",
+    )
+    assert res.output == "done"
+    assert any("Stage 1A · 全局骨架规划" in line and "流式" in line for line in logs)
+
+
+
+
 
 
 

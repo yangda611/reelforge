@@ -422,7 +422,7 @@ export function validatePropagatingEdgeCandidate(
 
   const labels = beatContextNodes.map((node) => {
     const beat = extractMainlineContextsFromNode(node).find((ctx) => ctx.kind === "beat");
-    return `EP${beat?.episode ?? "?"}/Beat ${beat?.beat ?? "?"}`;
+    return `EP${beat?.episode ?? "?"}/Clip ${beat?.beat ?? "?"}`;
   });
 
   return {

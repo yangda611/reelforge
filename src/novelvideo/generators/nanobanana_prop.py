@@ -87,6 +87,15 @@ def build_prop_reference_prompt(
     all_style = ", ".join(filter(None, [preset_style, style_keywords]))
     all_negative = preset_negative
 
+    from novelvideo.content_harmonize import build_image_compliance_guard
+    from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+    compliance_guard = build_image_compliance_guard(
+        visual_prompt,
+        enabled=load_content_harmonize_from_state_dir(state_dir or None),
+    )
+    guard_block = f"\n\n{compliance_guard}" if compliance_guard else ""
+
     return f"""Generate a 3-PANEL product reference sheet for a story prop.
 
 LAYOUT (1x3, 16:9 overall):
@@ -127,7 +136,7 @@ MUST AVOID:
 - Do NOT add text, labels, panel titles, captions, numbers, arrows, logos, watermarks, signatures, readable letters, Chinese characters, or English words
 - Do NOT include any people, hands, or body parts
 - Do NOT show the prop being held or worn
-- Do NOT add busy or distracting backgrounds"""
+- Do NOT add busy or distracting backgrounds{guard_block}"""
 
 
 async def generate_prop_reference(

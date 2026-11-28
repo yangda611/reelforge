@@ -154,7 +154,7 @@
         },
         "canvasOverwrite": {
           "question": "虾画里的结果会自动覆盖主线资产吗？",
-          "answer": "不会。虾画里的生成或上传内容默认是候选结果。只有明确点击写回，并选择角色、场景、道具、Beat 首帧或视频等目标槽位后，结果才会进入正式项目主线。"
+          "answer": "不会。虾画里的生成或上传内容默认是候选结果。只有明确点击写回，并选择角色、场景、道具、Clip 首帧或视频等目标槽位后，结果才会进入正式项目主线。"
         },
         "whyAssetsFirst": {
           "question": "为什么要先整理角色、场景、道具和声线？",
@@ -891,13 +891,13 @@
       "deleteFailed": "删除画布失败：{{message}}",
       "noConflictSnapshot": "没有可另存的本地冲突快照",
       "description": {
-        "freeWorkflowBeat": "自由工作流 · EP{{episode}} / Beat {{beat}}",
+        "freeWorkflowBeat": "自由工作流 · EP{{episode}} / Clip {{beat}}",
         "freeWorkflowAsset": "自由工作流 · {{asset}}",
         "freeWorkflow": "自由工作流",
         "default": "默认画布",
         "episode": "EP{{episode}} 画布",
         "episodeUnknown": "EP 画布",
-        "beat": "Beat 画布 · EP{{episode}} / Beat {{beat}}{{slot}}",
+        "beat": "Clip 画布 · EP{{episode}} / Clip {{beat}}{{slot}}",
         "asset": "资产画布 · {{name}} / {{kind}}",
         "assetUnknown": "资产画布 · {{kind}}",
         "assetFallback": "资产",
@@ -969,9 +969,9 @@
         "director_combined": "导演合成图"
       },
       "tabs": {
-        "beatAll": "全部Beat",
-        "beatEpisode": "本集Beat",
-        "beatCurrent": "当前Beat",
+        "beatAll": "全部Clip",
+        "beatEpisode": "本集Clip",
+        "beatCurrent": "当前Clip",
         "characters": "人物",
         "scenes": "场景",
         "props": "道具"
@@ -992,7 +992,7 @@
       },
       "episodeTitle": "第{{episode}}集",
       "episodeUnknown": "第?集",
-      "beatUnknown": "Beat ?",
+      "beatUnknown": "Clip ?",
       "expandDrawer": "展开素材抽屉",
       "collapseDrawer": "收起素材抽屉",
       "expand": "展开",
@@ -1071,7 +1071,7 @@
         "ambient_audio": "环境音",
         "scene": "场景",
         "prop": "道具",
-        "beat": "Beat",
+        "beat": "Clip",
         "frame": "分镜",
         "video": "视频",
         "audio": "音频",
@@ -1096,8 +1096,8 @@
       "directorWorldState": "导演世界状态",
       "directorWorldManifestHint": "提交当前导演世界 manifest",
       "modelCommitHint": "提交当前 3D 世界到主线场景",
-      "loadingBeats": "加载 beat…",
-      "noBeats": "无 beat",
+      "loadingBeats": "加载 Clip…",
+      "noBeats": "无 Clip",
       "loadingIdentities": "加载 identity_id…",
       "noIdentities": "当前角色没有 identity_id",
       "sceneIdPlaceholder": "scene_id，例如：兰州拉面馆",
@@ -1171,8 +1171,8 @@
         "scene_3gs_custom_scene": "3D 世界（自定义场景）",
         "scene_3gs_collision_glb": "3D 世界碰撞体",
         "prop_ref": "Prop Reference（道具参考）",
-        "video": "Video（beat 视频）",
-        "beat_audio": "Audio（beat 音频）"
+        "video": "Video（Clip 视频）",
+        "beat_audio": "Audio（Clip 音频）"
       },
       "shortKinds": {
         "frame": "首帧",
@@ -2604,7 +2604,7 @@
       "newPropHint": "AI自动提取道具需要在虾镜中按集数分集提取",
       "editProp": "编辑道具",
       "emptyTitle": "暂无道具数据",
-      "emptyDescription": "新建道具，或在 beat 页把本集道具加入全局。",
+      "emptyDescription": "新建道具，或在 Clip 页把本集道具加入全局。",
       "confirmDelete": "删除道具「{{name}}」？",
       "deleted": "道具已删除",
       "reference": "参考图",
@@ -2643,7 +2643,7 @@
       },
       "explanation": {
         "firstPerson": "第一人称解说使用解说主角声线；第三人称解说使用项目解说声线。",
-        "thirdPerson": "第三人称解说使用项目级声线；所有非对白 Beat 使用同一声线。"
+        "thirdPerson": "第三人称解说使用项目级声线；所有非对白 Clip 使用同一声线。"
       }
     }
   },
@@ -2695,7 +2695,8 @@
       "timeout": "网关超时，请稍后重试或更换模型。",
       "modelNotFound": "网关没有该模型，请在设置中更换文本模型。",
       "viewDetails": "查看详情",
-      "goToSettings": "去设置"
+      "goToSettings": "去设置",
+      "outputRetries": "模型结构化输出多次校验未通过（可能因输出过长被截断或模型未按约定格式返回），请重试或更换更稳定的文本模型。"
     },
     "refreshed": "内容已刷新",
     "save": "保存",
@@ -2757,6 +2758,8 @@
     "startIngest": "开始导入",
     "startHint": "请先上传文件或粘贴文本",
     "saveSettings": "保存设置",
+    "contentHarmonize": "合规和谐模式",
+    "contentHarmonizeHint": "默认开启：仅对涉警徽/武器/赌博/暴力冲突等高敏内容做合规等价替换，常规剧情不受影响",
     "settingsSaved": "项目设置已保存",
     "settingsSaveFailed": "项目设置保存失败",
     "processing": "处理中...",
@@ -3106,7 +3109,7 @@
       "identityImageNamed": "{{character}}「{{identity}}」身份图",
       "identityImage": "{{name}}身份图",
       "unknownCharacter": "角色",
-      "withEpisodeBeat": "{{label}}（第 {{episode}} 集 Beat {{beat}}）",
+      "withEpisodeBeat": "{{label}}（第 {{episode}} 集 Clip {{beat}}）",
       "withEpisode": "{{label}}（第 {{episode}} 集）"
     },
     "progress": {
@@ -3355,7 +3358,7 @@
     "io": {
       "background": "背景",
       "backgroundCandidate": "背景候选",
-      "beatContext": "Beat 上下文",
+      "beatContext": "Clip 上下文",
       "currentBackground": "当前背景",
       "currentStoryboard": "当前分镜",
       "directorComposite": "导演合成图",
@@ -3463,10 +3466,10 @@
       "scenePlanComplete": "已规划 {{count}} 个场景",
       "propPlanComplete": "已规划 {{count}} 个道具",
       "previewTitle": "脚本预览",
-      "previewCount": "{{count}} 个 Beat",
+      "previewCount": "{{count}} 个 Clip",
       "previewLoading": "加载脚本中...",
       "previewEmptyTitle": "暂无脚本",
-      "previewEmpty": "暂无脚本 beat。生成脚本后将在这里预览。",
+      "previewEmpty": "暂无脚本 Clip。生成脚本后将在这里预览。",
       "previewSpeaker": "说话人",
       "previewNoSpeaker": "无说话人",
       "previewDialogueLine": "对白台词",
@@ -3495,7 +3498,7 @@
       "scriptReviewPassed": "脚本生成完成",
       "scriptReviewFailed": "脚本审核未通过，请重新生成: {{summary}}",
       "modeLabel": "当前模式：",
-      "modeLiteral": "一行一个 Beat",
+      "modeLiteral": "一行一个 Clip",
       "modeS9": "YD 电影级分镜",
       "maxSegmentSecondsLabel": "单段上限",
       "segmentLimit30": "30 秒",
@@ -3529,7 +3532,7 @@
       "reviewIssuesFallback": "存在未修复问题"
     },
     "beat": {
-      "badge": "Beat {{n}}",
+      "badge": "Clip {{n}}",
       "openDrawer": "打开第 {{n}} 分镜详情",
       "jumpTo": "跳到{{stage}}",
       "select": "选择",
@@ -3547,14 +3550,14 @@
       "notGenerated": "未生成",
       "deleteManualShot": "删除",
       "deleteManualShotTitle": "删除手工镜头？",
-      "deleteManualShotDesc": "确认删除 Beat #{{n}} 这个手工镜头吗？删除后后续 beat 编号会重排。",
-      "deleteManualShotSuccess": "已删除手工镜头 Beat #{{n}}",
+      "deleteManualShotDesc": "确认删除 Clip #{{n}} 这个手工镜头吗？删除后后续 Clip 编号会重排。",
+      "deleteManualShotSuccess": "已删除手工镜头 Clip #{{n}}",
       "deleteManualShotFailed": "删除手工镜头失败",
-      "insertBefore": "在 Beat #{{n}} 前插入手工镜头",
+      "insertBefore": "在 Clip #{{n}} 前插入手工镜头",
       "insertBeforeShort": "前",
-      "insertAfter": "在 Beat #{{n}} 后插入手工镜头",
+      "insertAfter": "在 Clip #{{n}} 后插入手工镜头",
       "insertAfterShort": "后",
-      "openFreezone": "进入虾画 Beat 工作台",
+      "openFreezone": "进入虾画 Clip 工作台",
       "openFreezoneTip": "进入虾画编辑",
       "openFreezoneFailed": "打开虾画失败",
       "markedProps": "道具 {{count}}",
@@ -3588,7 +3591,7 @@
         "selectedCount": "已选 {{count}}",
         "clear": "清除",
         "totalShots": "共{{count}}个镜头",
-        "activeBeat": "Beat {{n}}",
+        "activeBeat": "Clip {{n}}",
         "noMatchingBeats": "无符合条件的节拍",
         "dragToResize": "拖动调节左右宽度占比"
       },
@@ -3628,8 +3631,8 @@
         "noSceneVariant": "无变体"
       },
       "insertManual": {
-        "titleBeforeFirst": "在首个 Beat 前插入手工镜头",
-        "titleAfter": "在 Beat {{n}} 后插入手工镜头",
+        "titleBeforeFirst": "在首个 Clip 前插入手工镜头",
+        "titleAfter": "在 Clip {{n}} 后插入手工镜头",
         "audioType": "镜头类型",
         "audioTypeSilence": "无声",
         "audioTypeNarration": "旁白",
@@ -3667,10 +3670,10 @@
         "propsPlaceholderEmpty": "逗号分隔道具ID；留空自动从画面描述提取"
       },
       "audio": {
-        "narrationEmpty": "旁白为空，此 beat 无法生成音频。请先到「文案」填写。",
+        "narrationEmpty": "旁白为空，此 Clip 无法生成音频。请先到「文案」填写。",
         "previewing": "试听中",
         "previewFailed": "试听失败",
-        "regenerated": "Beat #{{n}} 已重新生成",
+        "regenerated": "Clip #{{n}} 已重新生成",
         "regenFailed": "重生失败",
         "defaultLabel": "默认",
         "defaultVoice": "默认声线",
@@ -3683,7 +3686,7 @@
         "genFailed": "生成失败",
         "notGenerated": "尚未生成",
         "regenTitle": "重新生成音频？",
-        "regenDesc": "将为 Beat #{{n}} 重新生成 TTS 配音。",
+        "regenDesc": "将为 Clip #{{n}} 重新生成 TTS 配音。",
         "configureVoiceAction": "去配置",
         "beatNarrationVoice": "本条解说音频",
         "beatNarrationVoiceUpload": "上传本条音频",
@@ -3692,22 +3695,22 @@
         "prereqHintVoices": "。请到「资产 > 声线」上传或裁剪默认解说声线。"
       },
       "video": {
-        "started": "Beat #{{n}} 视频已启动",
+        "started": "Clip #{{n}} 视频已启动",
         "regenFailed": "重生失败",
         "model": "模型",
         "generating": "生成中...",
         "genFailed": "生成失败",
         "notGenerated": "尚未生成",
         "genTitle": "生成视频？",
-        "genDesc": "已仔细检查参考图与提示词，将为 Beat #{{n}} 生成视频片段。",
+        "genDesc": "已仔细检查参考图与提示词，将为 Clip #{{n}} 生成视频片段。",
         "regenTitle": "重新生成视频？",
-        "regenDesc": "将为 Beat #{{n}} 重新生成视频片段。",
+        "regenDesc": "将为 Clip #{{n}} 重新生成视频片段。",
         "noteDefault": "默认",
         "noteNarration": "解说词推荐",
         "noteDialogue": "对白镜头",
         "candidateCount": "历史版本（{{count}}）",
         "currentBadge": "当前",
-        "switched": "Beat #{{n}} 已切换版本",
+        "switched": "Clip #{{n}} 已切换版本",
         "switchFailed": "切换失败",
         "seedance2Prompt": "Seedance2.0主体提示词",
         "seedance2Ready": "已配置",
@@ -3813,9 +3816,9 @@
         "seedance2PromptGeneratedOtherBeat": "主体提示词已优化，已写回镜头 #{{n}}",
         "seedance2PromptGenerateFailed": "Seedance2 提示词 生成失败",
         "videoPrompt": "视频提示词",
-        "keyframePrompt": "单个 Beat 视频提示词",
-        "beatVideoPromptRequired": "Beat #{{n}} 缺少视频提示词，请先点击“生成本 Beat 提示词”。",
-        "seedance2PromptRequired": "Beat #{{n}} 缺少 Seedance2.0主体提示词，请先填写或点击“AI 优化”。",
+        "keyframePrompt": "单个 Clip 视频提示词",
+        "beatVideoPromptRequired": "Clip #{{n}} 缺少视频提示词，请先点击“生成本 Clip 提示词”。",
+        "seedance2PromptRequired": "Clip #{{n}} 缺少 Seedance2.0主体提示词，请先填写或点击“AI 优化”。",
         "seedance2OverlayEnabled": "启用",
         "seedance2OverlayKind": "类型",
         "seedance2OverlayKindAdCopy": "广告语",
@@ -3882,29 +3885,29 @@
         "narrationIncompatible": "此模型仅支持对白镜头 ({{count}} 个旁白不兼容)",
         "toolbar": "生成工具栏",
         "rewriteScriptTitle": "重写全集脚本？",
-        "rewriteScriptDesc": "将根据原文/改写稿重新生成所有 beat 文案。现有文案将受影响。",
+        "rewriteScriptDesc": "将根据原文/改写稿重新生成所有 Clip 文案。现有文案将受影响。",
         "rewriteScript": "重写全集脚本",
         "insertManualBeforeFirst": "首镜前插入",
         "insertManualBeforeFirstShort": "首镜前插入",
-        "insertManualBeforeFirstTooltip": "在首个 Beat 之前插入一个手工镜头",
+        "insertManualBeforeFirstTooltip": "在首个 Clip 之前插入一个手工镜头",
         "genMissingManualShort": "新增镜头",
         "genAudioTitle": "生成全集音频？",
-        "genAudioDesc": "将为所有缺少音频的 beat 生成 TTS 配音。",
+        "genAudioDesc": "将为所有缺少音频的 Clip 生成 TTS 配音。",
         "genAudio": "生成全集音频",
         "genAudioShort": "全集音频",
         "genAudioUnavailableForVideoModel": "当前视频模型不需要单独生成全集音频",
         "videoModel": "视频模型",
         "videoSettingsLabel": "视频设置",
-        "genVideoDesc": "将为所有缺少视频的 beat 生成视频片段。需要先有音频。",
+        "genVideoDesc": "将为所有缺少视频的 Clip 生成视频片段。需要先有音频。",
         "genVideo": "生成全集视频",
         "genVideoShort": "全集视频",
         "video": "视频",
-        "genBatchVideoTitle": "生成 {{count}} 个 beat 的视频？",
+        "genBatchVideoTitle": "生成 {{count}} 个 Clip 的视频？",
         "genBatchVideoDesc": "将为 #{{beats}} 逐个生成视频片段。需要先有音频。",
-        "genBatchVideo": "生成选中 {{count}} 个 beat 视频",
-        "audioSuccess": "已生成 {{ok}} 个 beat 的音频",
+        "genBatchVideo": "生成选中 {{count}} 个 Clip 视频",
+        "audioSuccess": "已生成 {{ok}} 个 Clip 的音频",
         "audioPartial": "音频生成：{{ok}} 成功, {{fail}} 失败",
-        "videoSuccess": "已生成 {{ok}} 个 beat 的视频",
+        "videoSuccess": "已生成 {{ok}} 个 Clip 的视频",
         "episodeFreezone": "EP Freezone",
         "episodeFreezoneTooltip": "打开本集虾画工作区",
         "episodeFreezoneOpened": "已打开 EP Freezone",
@@ -3921,7 +3924,7 @@
         "charFailed": "⚠ 未通过",
         "faceScore": "面部 {{score}}",
         "clothingScore": "服装 {{score}}",
-        "jumpBeat": "跳 beat {{n}}"
+        "jumpBeat": "跳 Clip {{n}}"
       },
       "actionPanel": {
         "episodeFreezone": "本集虾画",
@@ -3943,7 +3946,7 @@
       "blockedCount": "{{count}} 未就绪",
       "composeReady": "已就绪",
       "composeBlocked": "缺 {{count}}",
-      "beatCount": "{{count}} 个 beat"
+      "beatCount": "{{count}} 个 Clip"
     },
     "compose": {
       "blocked": "还缺少以下内容:",
@@ -4008,7 +4011,7 @@
       "planning": "规划剧集",
       "refresh": "刷新",
       "refreshed": "剧集已刷新",
-      "selectedEpisodeSummary": "{{lines}} 行原文 · {{beats}} 个 Beat · {{identities}} 个身份 · {{scenes}} 个场景 · {{props}} 个道具 · {{status}}",
+      "selectedEpisodeSummary": "{{lines}} 行原文 · {{beats}} 个 Clip · {{identities}} 个身份 · {{scenes}} 个场景 · {{props}} 个道具 · {{status}}",
       "scriptReady": "脚本已就绪",
       "scriptPending": "脚本待生成",
       "stats": {
@@ -4119,7 +4122,7 @@
     "defaultIdentity": "默认"
   },
   "composeGate": {
-    "beatCount": "{{count}} 个 beat",
+    "beatCount": "{{count}} 个 Clip",
     "goFix": "处理 →"
   },
   "region": {
@@ -4668,7 +4671,7 @@
       "render_repair_candidate": {
         "name": "Render 修复候选",
         "shortName": "Render修复",
-        "description": "修复当前 beat render / director render 候选图，满意后 Commit 到 beat slot。",
+        "description": "修复当前 Clip render / director render 候选图，满意后 Commit 到 Clip slot。",
         "params": {
           "repair_focus": {
             "label": "修复重点"
@@ -4678,7 +4681,7 @@
       "video_start_frame_candidate": {
         "name": "视频起手帧候选",
         "shortName": "起手帧",
-        "description": "从 render / 抽帧 / 参考图生成视频首帧候选，满意后 Commit 到 frame slot（视频起手帧 = beat 首帧，同一份文件）。",
+        "description": "从 render / 抽帧 / 参考图生成视频首帧候选，满意后 Commit 到 frame slot（视频起手帧 = Clip 首帧，同一份文件）。",
         "params": {
           "motion_setup": {
             "label": "运动起势"
@@ -5933,7 +5936,7 @@
         "imageToImageTitle": "新建一个上游图片节点用作参考",
         "imageToImage": "图生图"
       },
-      "cropBackgroundTitle": "从 {{source}} 选一个 16:9 区域写入本 beat 的 selected_background.png",
+      "cropBackgroundTitle": "从 {{source}} 选一个 16:9 区域写入本 Clip 的 selected_background.png",
       "cropBackground": "📐 截取背景",
       "assetLibraryTitle": "从资产库选择参考图（人物 / 场景 / 道具）",
       "assetLibrary": "资产库",
@@ -6308,7 +6311,7 @@
       "snapCurrent": "当前视角截图",
       "snap2x2": "4 大视角截图",
       "snap4x3": "12 大视角截图",
-      "useAsBackground": "用作背景源(写入本 beat selected_background)",
+      "useAsBackground": "用作背景源(写入本 Clip selected_background)",
       "resetView": "复位视角",
       "zoomOut": "缩小",
       "zoomIn": "放大",
@@ -6798,7 +6801,7 @@
       "cropReverse": "截取背面图",
       "cropReverseDetail": "从反面图选择 {{aspects}}",
       "backgroundCropperTitle": "选取 {{aspect}} 区域作为背景源{{source}}",
-      "backgroundCropperDescription": "拖动选区，锁定 {{aspect}}。确认后会通过当前背景节点提交到本 Beat 主线。",
+      "backgroundCropperDescription": "拖动选区，锁定 {{aspect}}。确认后会通过当前背景节点提交到本 Clip 主线。",
       "backgroundCropperGenerated": "已生成当前背景并写入主线",
       "useAsBackgroundSource": "用作背景源",
       "selectedBackgroundSourceHint": "这里会先更新输出节点；预设主线节点会自动提交，用户新建节点需在输出节点上确认提交。",
@@ -7077,7 +7080,7 @@
       "skillSelectedBackgroundOutputUnavailable": "当前背景输出节点不可用",
       "skillNoMasterImage": "当前场景没有 master 图",
       "skillNoReverseImage": "当前场景没有 reverse 图",
-      "skillNoDirectorBackground": "当前 Beat 还没有导演背景图",
+      "skillNoDirectorBackground": "当前 Clip 还没有导演背景图",
       "skillFallbackTitle": "技能",
       "skillLoading": "加载技能...",
       "skillUnknown": "未知技能",
@@ -7086,7 +7089,7 @@
     "purpose": {
       "freezone": "自由世界",
       "asset": "主线资产取景",
-      "beat": "主线 Beat 制作",
+      "beat": "主线 Clip 制作",
       "mainline": "主线 pipeline"
     },
     "pano": {
@@ -7901,7 +7904,7 @@
     "getApiKeyLink": "点击这里获取密钥",
     "missingAnyApiKeyMessage": "后端 provider 未配置。",
     "openProvidersSettings": "查看 provider",
-    "aboutAppName": "Beat Workbench",
+    "aboutAppName": "Clip Workbench",
     "aboutIntro": "ReelForge 的候选图生成、自由实验与资产提交工作台。",
     "aboutVersionLabel": "版本",
     "aboutVersionUnknown": "未知",
@@ -8282,11 +8285,11 @@
       "kind": {
         "identity": "🎭 Identity (角色身份图)",
         "portrait": "🖼 Portrait (角色肖像)",
-        "frame": "🎬 Frame (beat 首帧)",
+        "frame": "🎬 Frame (Clip 首帧)",
         "directorRender": "📐 导演合成资产"
       },
       "noCharacters": "该项目没有角色",
-      "episodeBeat": "集 / Beat",
+      "episodeBeat": "集 / Clip",
       "episodeLabel": "集:",
       "selectAll": "全选",
       "selectNone": "全不选",

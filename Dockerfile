@@ -141,15 +141,28 @@ RUN test -f src/novelvideo/assets/login_bgm.mp3 \
 # 模型权重不烤进镜像:运行时自动下载到可写卷(Apple 研究许可,绝不再分发)。
 # 注:slim base 为 CPU;GPU 加速需 CUDA base + nvidia runtime。
 ARG INSTALL_WORLD=0
+ARG UV_DEFAULT_INDEX=""
+ARG UV_HTTP_TIMEOUT="300"
+ARG UV_HTTP_RETRIES="5"
 # The SDK declares its stock runtime as a dependency. Exclude that unused
 # binary so an operator cannot bypass CODEX_BIN and re-enable metadata logs.
 # Skip uv's git clone of openai/codex.git (Debian git's GnuTLS backend often
 # fails mid-transfer on that monorepo behind proxies) and install sdk/python
 # from the exact uv.lock-pinned commit archive via deploy/install_codex_sdk.py.
 # Keep git in this build layer for INSTALL_WORLD=1 git dependencies only.
-RUN set -eux; \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends git; \
+    uv_index="${UV_DEFAULT_INDEX}"; \
+    if [ -z "$uv_index" ]; then \
+        case "${DEBIAN_APT_MIRROR}" in \
+            *mirrors.tuna.tsinghua.edu.cn*) uv_index="https://pypi.tuna.tsinghua.edu.cn/simple" ;; \
+            *mirrors.aliyun.com*) uv_index="https://mirrors.aliyun.com/pypi/simple/" ;; \
+        esac; \
+    fi; \
+    if [ -n "$uv_index" ]; then export UV_DEFAULT_INDEX="$uv_index"; fi; \
+    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_HTTP_RETRIES="${UV_HTTP_RETRIES}"; \
     if [ "$INSTALL_WORLD" = "1" ]; then \
         apt-get install -y --no-install-recommends nodejs npm; \
         npm install -g @playcanvas/splat-transform; \
@@ -186,10 +199,20 @@ RUN set -eux; \
 # the image is built. Pass a commit sha to make a build reproducible.
 ARG HERMES_REPO="https://github.com/dramaclaw/hermes-agent.git"
 ARG HERMES_REF="brainclaw/evidence-plane"
-RUN set -eux; \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends git; \
     rm -rf /var/lib/apt/lists/*; \
+    uv_index="${UV_DEFAULT_INDEX}"; \
+    if [ -z "$uv_index" ]; then \
+        case "${DEBIAN_APT_MIRROR}" in \
+            *mirrors.tuna.tsinghua.edu.cn*) uv_index="https://pypi.tuna.tsinghua.edu.cn/simple" ;; \
+            *mirrors.aliyun.com*) uv_index="https://mirrors.aliyun.com/pypi/simple/" ;; \
+        esac; \
+    fi; \
+    if [ -n "$uv_index" ]; then export UV_DEFAULT_INDEX="$uv_index"; fi; \
+    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT}" UV_HTTP_RETRIES="${UV_HTTP_RETRIES}"; \
     git clone --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" /opt/hermes-agent \
       || { git clone "$HERMES_REPO" /opt/hermes-agent; git -C /opt/hermes-agent checkout "$HERMES_REF"; }; \
     HERMES_SHA="$(git -C /opt/hermes-agent rev-parse HEAD)"; \

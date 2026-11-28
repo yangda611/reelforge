@@ -1098,6 +1098,15 @@ STRICT REQUIREMENTS (MUST AVOID):
 - No text, labels, or panel numbers on the image
 - Do not add environment scenery, props, or poster composition
 """
+            from novelvideo.content_harmonize import build_image_compliance_guard
+            from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+            guard = build_image_compliance_guard(
+                [character_name, character_prompt],
+                enabled=load_content_harmonize_from_state_dir(state_dir or None),
+            )
+            if guard:
+                prompt = f"{prompt.strip()}\n\n{guard}"
             return prompt.strip()
 
         skill_directives = get_live_action_character_sheet_skill_directives()
@@ -1174,6 +1183,15 @@ AVOID:
 - LIGHT & RENDER: no ambient colour spill, no rim-light drama, no CG or 3D-render look.
 - TEXT & LAYOUT: no text other than the four corner labels ("FACE FRONT", "FACE SIDE", "BODY FRONT", "BACK"), no extra panels or views, no multiple characters.
 """
+        from novelvideo.content_harmonize import build_image_compliance_guard
+        from novelvideo.project_config import load_content_harmonize_from_state_dir
+
+        guard = build_image_compliance_guard(
+            [character_name, character_prompt],
+            enabled=load_content_harmonize_from_state_dir(state_dir or None),
+        )
+        if guard:
+            prompt = f"{prompt.strip()}\n\n{guard}"
         return prompt.strip()
 
     async def _generate_single_image(

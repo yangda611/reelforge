@@ -39,9 +39,12 @@ describe("classifyGatewayError", () => {
     );
   });
 
-  it("classifies 429 as rate_limit and unknown text as unknown", () => {
+  it("classifies 429 as rate_limit, output retries as output_retries, and unknown text as unknown", () => {
     expect(classifyGatewayError("status_code: 429, body: too many requests").kind).toBe(
       "rate_limit",
+    );
+    expect(classifyGatewayError("Exceeded maximum output retries (3)").kind).toBe(
+      "output_retries",
     );
     expect(classifyGatewayError("something went wrong").kind).toBe("unknown");
     expect(classifyGatewayError(null).kind).toBe("unknown");
@@ -59,6 +62,9 @@ describe("gatewayErrorHumanMessage", () => {
     );
     expect(gatewayErrorHumanMessage("model_not_found", t)).toBe(
       "common.gatewayErrors.modelNotFound",
+    );
+    expect(gatewayErrorHumanMessage("Exceeded maximum output retries (3)", t)).toBe(
+      "common.gatewayErrors.outputRetries",
     );
     expect(gatewayErrorHumanMessage("unrelated failure", t)).toBeNull();
   });

@@ -20,6 +20,8 @@ services:
       # 注：权重运行时下载不入镜像；slim base 为 CPU，GPU 加速需 CUDA base；Mac Docker 无 GPU。
       args:
         DEBIAN_APT_MIRROR: "${DEBIAN_APT_MIRROR:-}"
+        UV_DEFAULT_INDEX: "${UV_DEFAULT_INDEX:-}"
+        UV_HTTP_TIMEOUT: "${UV_HTTP_TIMEOUT:-300}"
         INSTALL_WORLD: "${INSTALL_WORLD:-0}"
         # Build the ReelForge Hermes fork used by the default assistant.
         HERMES_REPO: "${HERMES_REPO:-https://github.com/dramaclaw/hermes-agent.git}"

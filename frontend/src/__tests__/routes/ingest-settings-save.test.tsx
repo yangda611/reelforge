@@ -152,6 +152,8 @@ beforeAll(async () => {
             firstPerson: "First person",
             thirdPerson: "Third person",
             ethnicity: "Default unspecified people",
+            contentHarmonize: "Content compliance mode",
+            contentHarmonizeHint: "Enabled by default",
             visualStyles: {
               chinesePeriodDrama: "Chinese period drama",
               anime: "Anime",
@@ -547,6 +549,36 @@ describe("IngestPage settings save", () => {
       visual_style: "anime",
       ethnicity: "Chinese",
     });
+  });
+
+  it("defaults content compliance mode to checked and persists when toggled off", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <Wrapper>
+        <IngestPageContent project="demo" />
+      </Wrapper>,
+    );
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /content compliance mode/i,
+    });
+    expect(checkbox).toBeChecked();
+
+    await user.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    const saveButton = screen.getByRole("button", { name: /save settings/i });
+    expect(saveButton).toBeEnabled();
+    await user.click(saveButton);
+
+    await waitFor(() =>
+      expect(mocks.updateProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content_harmonize: false,
+        }),
+      ),
+    );
   });
 
   it("allows re-import once chapters are imported but hides delete", async () => {
