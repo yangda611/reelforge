@@ -38,6 +38,9 @@ export const queryKeys = {
   userSearch: (project: string, q: string) =>
     ["users", "search", project, q] as const,
   pipelineStatus: (p: string) => ["projects", p, "pipeline-status"] as const,
+  autopilotRuns: (p: string) => ["projects", p, "autopilot", "runs"] as const,
+  autopilotEpisode: (p: string, ep: number) =>
+    ["projects", p, "autopilot", "episodes", ep] as const,
   characters: (p: string) => ["projects", p, "characters"] as const,
   characterDetails: (p: string, name: string) =>
     ["projects", p, "characters", "details", name] as const,

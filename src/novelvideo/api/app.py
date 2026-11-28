@@ -71,6 +71,24 @@ async def _resume_director_auto_best_effort(application: FastAPI) -> None:
         application.state.director_auto_startup_error = ""
 
 
+async def _resume_episode_autopilot_best_effort(application: FastAPI) -> None:
+    """Resume active per-project two-stage autopilot runs after API restart."""
+
+    try:
+        from novelvideo.services.episode_autopilot import (
+            episode_autopilot_coordinator,
+        )
+
+        await episode_autopilot_coordinator.resume_active_runs()
+    except Exception as exc:
+        application.state.episode_autopilot_available = False
+        application.state.episode_autopilot_startup_error = str(exc)
+        logger.exception("Episode Autopilot recovery failed (non-fatal)")
+    else:
+        application.state.episode_autopilot_available = True
+        application.state.episode_autopilot_startup_error = ""
+
+
 def _request_body_limit(request: Request) -> int:
     content_type = request.headers.get("content-type", "").lower()
     if (
@@ -459,6 +477,7 @@ def create_app() -> FastAPI:
             raise
 
         await _resume_director_auto_best_effort(application)
+        await _resume_episode_autopilot_best_effort(application)
 
         from novelvideo.api.workflow_reads import observe_workflow_event_loop
 
@@ -489,6 +508,12 @@ def create_app() -> FastAPI:
         from novelvideo.chat.director_auto import coordinator as director_auto_coordinator
 
         await director_auto_coordinator.shutdown()
+
+        from novelvideo.services.episode_autopilot import (
+            episode_autopilot_coordinator,
+        )
+
+        await episode_autopilot_coordinator.shutdown()
 
         try:
             lifecycle = get_port("lifecycle")

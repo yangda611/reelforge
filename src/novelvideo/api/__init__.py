@@ -44,6 +44,7 @@ from novelvideo.api.routes import (  # noqa: E402
     assets,
     assistant,
     auth,
+    autopilot,
     characters,
     chat,
     config,
@@ -132,6 +133,7 @@ api_router.include_router(voice_design.router, tags=["voice-design"])
 api_router.include_router(files.router, tags=["files"])
 api_router.include_router(styles.router, tags=["styles"])
 api_router.include_router(pipeline.router, tags=["pipeline"])
+api_router.include_router(autopilot.router, tags=["autopilot"])
 api_router.include_router(model_gateway.router, tags=["model-gateway"])
 api_router.include_router(model_credits.router, tags=["model-credits"])
 api_router.include_router(freezone.router)

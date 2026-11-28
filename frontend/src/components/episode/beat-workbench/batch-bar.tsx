@@ -3,9 +3,10 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Loader2, Mic2 } from "lucide-react";
+import { Film, Link2, Loader2, Mic2 } from "lucide-react";
 
 import { useAudioBillingQuote, useGenerateAudio } from "@/lib/queries/audio";
+import { useBatchGenerateEpisodeVideos } from "@/lib/queries/autopilot";
 import { useVideoBackends } from "@/lib/queries/video";
 import { useTaskController } from "@/hooks/use-task-controller";
 import { queryKeys } from "@/lib/query-keys";
@@ -126,6 +127,12 @@ export function BatchBar({
   const { t } = useTranslation();
 
   const generateAudio = useGenerateAudio(project, episode);
+  const batchVideos = useBatchGenerateEpisodeVideos(project, episode);
+  const [tailAnchorChain, setTailAnchorChain] = useState(false);
+  const missingVideoCount = useMemo(
+    () => beats.filter((beat) => !beat.video_url).length,
+    [beats],
+  );
   const episodeAudioRevision = useMemo(
     () =>
       beats
@@ -180,16 +187,18 @@ export function BatchBar({
     title: string;
     description: string;
     onConfirm: () => void;
+    showAudioCost?: boolean;
   } | null>(null);
 
   const askConfirm = (
     title: string,
     description: string,
     onConfirm: () => void,
+    showAudioCost = false,
   ) => {
-    setConfirm({ title, description, onConfirm });
+    setConfirm({ title, description, onConfirm, showAudioCost });
   };
-  const confirmCostDisplay = episodeAudioCostDisplay;
+  const confirmCostDisplay = confirm?.showAudioCost ? episodeAudioCostDisplay : "";
 
   const handleGenAllAudio = async () => {
     try {
@@ -199,6 +208,56 @@ export function BatchBar({
         return;
       }
       audioTask.start({ scope: res.scope, taskId: res.task_id });
+    } catch (error) {
+      toast.error(backendErrorToastMessage(error, t));
+    }
+  };
+
+  const handleBatchGenMissingVideos = async () => {
+    try {
+      const res = await batchVideos.mutateAsync({
+        only_missing: true,
+        video_backend: videoBackend,
+        ratio: aspectRatio,
+        tail_anchor: tailAnchorChain,
+      });
+      if (res.ok === false) {
+        showError(
+          t("episode.workbench.batch.genMissingVideosFailed"),
+          res.error || t("common.error"),
+        );
+        return;
+      }
+      const data = res.data;
+      if (data.tail_anchor_chain) {
+        toast.success(
+          t("episode.workbench.batch.tailChainStarted", {
+            count: data.target_beats?.length ?? missingVideoCount,
+          }),
+        );
+        return;
+      }
+      const enqueuedCount = data.enqueued?.length ?? 0;
+      const deferredCount = data.deferred_beats?.length ?? 0;
+      const errCount = data.errors?.length ?? 0;
+      if (enqueuedCount === 0 && errCount === 0) {
+        toast.info(t("episode.workbench.batch.allVideosReady"));
+        return;
+      }
+      let msg = t("episode.workbench.batch.videosEnqueued", {
+        count: enqueuedCount,
+      });
+      if (deferredCount > 0) {
+        msg += t("episode.workbench.batch.videosDeferredSuffix", {
+          count: deferredCount,
+        });
+      }
+      if (errCount > 0) {
+        msg += t("episode.workbench.batch.videosErrorsSuffix", {
+          count: errCount,
+        });
+      }
+      toast.success(msg);
     } catch (error) {
       toast.error(backendErrorToastMessage(error, t));
     }
@@ -219,6 +278,61 @@ export function BatchBar({
         </div>
 
         <span className="hidden h-5 w-px shrink-0 bg-border/75 lg:block" aria-hidden />
+
+        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setTailAnchorChain((v) => !v)}
+            className={cn(
+              TOOLBAR_CONTROL_CLASS,
+              "inline-flex items-center",
+              tailAnchorChain &&
+                "border-primary/45 bg-primary/12 text-primary hover:bg-primary/15 hover:text-primary",
+            )}
+            title={t("episode.workbench.batch.tailAnchorTooltip")}
+          >
+            <Link2 className="size-3" />
+            {t("episode.workbench.batch.tailAnchor")}
+          </button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={batchVideos.isPending || missingVideoCount === 0}
+            onClick={() => {
+              askConfirm(
+                tailAnchorChain
+                  ? t("episode.workbench.batch.genMissingVideosChainTitle", {
+                      count: missingVideoCount,
+                    })
+                  : t("episode.workbench.batch.genMissingVideosParallelTitle", {
+                      count: missingVideoCount,
+                    }),
+                tailAnchorChain
+                  ? t("episode.workbench.batch.genMissingVideosChainDesc", {
+                      count: missingVideoCount,
+                    })
+                  : t("episode.workbench.batch.genMissingVideosParallelDesc", {
+                      count: missingVideoCount,
+                    }),
+                handleBatchGenMissingVideos,
+                false,
+              );
+            }}
+            className={cn(
+              TOOLBAR_CONTROL_CLASS,
+              missingVideoCount > 0 && "border-primary/35 text-primary hover:bg-primary/12",
+            )}
+          >
+            {batchVideos.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Film className="size-3.5" />
+            )}
+            {t("episode.workbench.batch.genMissingVideos", {
+              count: missingVideoCount,
+            })}
+          </Button>
+        </div>
 
         <div className="flex min-w-0 flex-wrap items-center gap-4">
           {/* 精品剧 (spine_template === "drama") 把解说烘进渲染视频，没有独立音频阶段 —— 隐藏「生成全集音频」 */}
@@ -244,6 +358,7 @@ export function BatchBar({
                       t("episode.workbench.batch.genAudioTitle"),
                       t("episode.workbench.batch.genAudioDesc"),
                       handleGenAllAudio,
+                      true,
                     );
                   }}
                   disabled={!audioUnavailableForVideoBackend && (audioTask.started || generateAudio.isPending)}

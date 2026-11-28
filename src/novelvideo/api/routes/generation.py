@@ -28,6 +28,7 @@ from novelvideo.api.schemas import (
     TTSPreviewRequest,
     SystemVoicePrepareRequest,
     SingleVideoRequest,
+    BatchEpisodeVideoRequest,
     VideoPoolSelectRequest,
     OperatorPasswordVerifyRequest,
     BeatBackgroundAnchorUpdate,
@@ -2622,9 +2623,35 @@ async def generate_single_video(
         if ctx
         else await make_sqlite_store(username, project_name)
     )
+    return await enqueue_single_beat_video_for_context(
+        ctx=ctx,
+        username=username,
+        project_name=project_name,
+        output_dir=output_dir,
+        state_dir=resolved.state_dir,
+        store=store,
+        episode_num=episode_num,
+        beat_num=beat_num,
+        body=body,
+    )
 
+
+async def enqueue_single_beat_video_for_context(
+    *,
+    ctx: ProjectContext | None,
+    username: str,
+    project_name: str,
+    output_dir: str,
+    state_dir: str | Path,
+    store: Any,
+    episode_num: int,
+    beat_num: int,
+    body: SingleVideoRequest,
+    beats: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Validate and enqueue a single-beat video generation task."""
     # 加载 beat 数据
-    beats = await store.get_beats_as_dicts(episode_num)
+    beats = list(beats) if beats is not None else await store.get_beats_as_dicts(episode_num)
     beat = next((b for b in beats if b.get("beat_number") == beat_num), None)
     if not beat:
         return {"ok": False, "error": f"Beat {beat_num} not found"}
@@ -2938,7 +2965,7 @@ async def generate_single_video(
                         beat=beat,
                         mode=Seedance2I2VMode.MULTIMODAL_REFERENCE,
                         state_dir=Path(
-                            getattr(store, "state_dir", None) or resolved.state_dir
+                            getattr(store, "state_dir", None) or state_dir
                         ),
                         next_beat=next_beat,
                         prop_menu=prop_menu,
@@ -3180,6 +3207,225 @@ async def generate_single_video(
         }
 
     return {"ok": False, "error": "单条视频生成需要 project context"}
+
+
+@router.post("/projects/{project}/episodes/{episode_num}/videos/batch-generate")
+async def batch_generate_episode_videos(
+    project: str,
+    episode_num: int,
+    body: BatchEpisodeVideoRequest | None = None,
+    user: dict = Depends(get_api_user),
+):
+    """批量生成本集缺失或选中的分镜视频（支持普通并发或尾帧锚点接力链）。"""
+    from novelvideo.project_config import load_project_config_from_state_dir
+    from novelvideo.task_backend.limits import (
+        ChannelTaskLimitExceeded,
+        GlobalLaneQueueLimitExceeded,
+        ProjectTaskLimitExceeded,
+        ProjectUserTaskLimitExceeded,
+        UserTaskLimitExceeded,
+    )
+    from novelvideo.utils.path_resolver import PathResolver
+
+    body = body or BatchEpisodeVideoRequest()
+    resolved = await _resolve_generation_project(project, user, required_role="editor")
+    ctx = resolved.ctx
+    if ctx is None:
+        return {"ok": False, "error": "批量视频生成需要 project context"}
+
+    store = await make_sqlite_store_for_context(ctx)
+    try:
+        beats = sorted(
+            await store.get_beats_as_dicts(episode_num),
+            key=lambda item: int(item.get("beat_number") or 0),
+        )
+        if not beats:
+            return {"ok": False, "error": f"第 {episode_num} 集尚未生成分镜脚本"}
+
+        project_config = load_project_config_from_state_dir(
+            ctx.state_dir,
+            username=ctx.owner_username,
+            project=ctx.project_name,
+        )
+        video_backend = (
+            str(body.video_backend or "").strip()
+            or str(project_config.get("video_backend") or "").strip()
+            or "newapi_seedance-1.0-pro-fast"
+        )
+        paths = PathResolver(resolved.output_dir, episode_num)
+        requested_set = {
+            int(n) for n in (body.beat_numbers or []) if int(n) > 0
+        }
+        target_beats: list[int] = []
+        skipped_beats: list[int] = []
+        for beat in beats:
+            beat_num = int(beat.get("beat_number") or 0)
+            if beat_num <= 0:
+                continue
+            if requested_set and beat_num not in requested_set:
+                continue
+            if body.only_missing and paths.video(beat_num).exists():
+                skipped_beats.append(beat_num)
+                continue
+            target_beats.append(beat_num)
+
+        from novelvideo.i18n_message import lmsg, message_text
+
+        if not target_beats:
+            empty_msg = lmsg(
+                "episode.workbench.batch.allVideosReady",
+                "所有目标分镜均已有视频，无需重新生成",
+            )
+            return {
+                "ok": True,
+                "data": {
+                    "episode": episode_num,
+                    "enqueued": [],
+                    "skipped_beats": skipped_beats,
+                    "deferred_beats": [],
+                    "errors": [],
+                },
+                "message": message_text(empty_msg),
+                "message_code": empty_msg.code,
+            }
+
+        if body.tail_anchor and len(target_beats) > 1:
+            from novelvideo.services.episode_autopilot import (
+                AutopilotOptions,
+                episode_autopilot_coordinator,
+            )
+
+            options = AutopilotOptions(
+                mode="two_stage",
+                video_backend=video_backend,
+                resolution=body.resolution,
+                ratio=body.ratio,
+                tail_anchor=True,
+                use_director_render=bool(body.use_director_render),
+                force_regenerate_videos=not bool(body.only_missing),
+                target_beat_numbers=tuple(target_beats),
+                skip_compose=True,
+            )
+            run = await episode_autopilot_coordinator.start_episode(
+                ctx,
+                episode=episode_num,
+                options=options,
+                start_phase="phase2",
+            )
+            chain_msg = lmsg(
+                "episode.workbench.batch.tailChainStarted",
+                f"已启动 {len(target_beats)} 个分镜的尾帧接力链式生成",
+                count=len(target_beats),
+                episode=episode_num,
+            )
+            return {
+                "ok": True,
+                "data": {
+                    "episode": episode_num,
+                    "tail_anchor_chain": True,
+                    "autopilot_run": run.to_dict(),
+                    "target_beats": target_beats,
+                    "skipped_beats": skipped_beats,
+                },
+                "message": message_text(chain_msg),
+                "message_code": chain_msg.code,
+                "message_params": dict(chain_msg.params or {}),
+            }
+
+        enqueued: list[dict[str, Any]] = []
+        deferred_beats: list[int] = []
+        errors: list[dict[str, Any]] = []
+        limit_hit = False
+        for beat_num in target_beats:
+            if limit_hit:
+                deferred_beats.append(beat_num)
+                continue
+            req_kwargs: dict[str, Any] = {
+                "video_backend": video_backend,
+                "use_director_render": bool(body.use_director_render),
+            }
+            if body.resolution is not None:
+                req_kwargs["resolution"] = body.resolution
+            if body.ratio is not None:
+                req_kwargs["ratio"] = body.ratio
+            if body.generate_audio is not None:
+                req_kwargs["generate_audio"] = body.generate_audio
+            if body.human_review is not None:
+                req_kwargs["human_review"] = body.human_review
+            if body.scene_optimize is not None:
+                req_kwargs["scene_optimize"] = body.scene_optimize
+            if body.audio_setting is not None:
+                req_kwargs["audio_setting"] = body.audio_setting
+            single_req = SingleVideoRequest(**req_kwargs)
+            try:
+                res = await enqueue_single_beat_video_for_context(
+                    ctx=ctx,
+                    username=resolved.username,
+                    project_name=resolved.project_name,
+                    output_dir=resolved.output_dir,
+                    state_dir=resolved.state_dir,
+                    store=store,
+                    episode_num=episode_num,
+                    beat_num=beat_num,
+                    body=single_req,
+                    beats=beats,
+                )
+            except (
+                ProjectTaskLimitExceeded,
+                ProjectUserTaskLimitExceeded,
+                GlobalLaneQueueLimitExceeded,
+                ChannelTaskLimitExceeded,
+                UserTaskLimitExceeded,
+            ):
+                limit_hit = True
+                deferred_beats.append(beat_num)
+                continue
+            if res.get("ok"):
+                enqueued.append(
+                    {
+                        "beat_number": beat_num,
+                        "task_id": res.get("task_id"),
+                        "task_key": res.get("task_key"),
+                    }
+                )
+            else:
+                errors.append(
+                    {
+                        "beat_number": beat_num,
+                        "error": str(res.get("error") or "视频入队失败"),
+                    }
+                )
+
+        ok = bool(enqueued) or not errors
+        msg_text = f"第 {episode_num} 集已入队 {len(enqueued)} 个分镜视频"  # i18n-exempt
+        if deferred_beats:
+            msg_text += f"，{len(deferred_beats)} 个因队列已满暂缓（可启动两段式托管自动排队补齐）"  # i18n-exempt
+        if errors:
+            msg_text += f"，{len(errors)} 个预检未通过"  # i18n-exempt
+        batch_msg = lmsg(
+            "episode.workbench.batch.videosEnqueued",
+            msg_text,
+            episode=episode_num,
+            enqueued=len(enqueued),
+            deferred=len(deferred_beats),
+            errors=len(errors),
+        )
+        return {
+            "ok": ok,
+            "data": {
+                "episode": episode_num,
+                "enqueued": enqueued,
+                "skipped_beats": skipped_beats,
+                "deferred_beats": deferred_beats,
+                "errors": errors,
+            },
+            "error": errors[0]["error"] if not ok and errors else None,
+            "message": message_text(batch_msg),
+            "message_code": batch_msg.code,
+            "message_params": dict(batch_msg.params or {}),
+        }
+    finally:
+        await store.close()
 
 
 # ── 视频池查看 & 选择 ─────────────────────────────────────────────────────────

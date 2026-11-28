@@ -316,6 +316,21 @@ class SingleVideoRequest(BaseModel):
     batch_size: Optional[int] = Field(default=None, ge=1, le=9)
 
 
+class BatchEpisodeVideoRequest(BaseModel):
+    beat_numbers: Optional[list[int]] = None
+    only_missing: bool = True
+    resolution: Optional[str] = None
+    ratio: Optional[str] = None
+    video_backend: Optional[str] = None
+    use_director_render: bool = False
+    tail_anchor: bool = False
+    generate_audio: Optional[bool] = None
+    human_review: Optional[bool] = None
+    scene_optimize: Optional[str] = None
+    audio_setting: Optional[str] = None
+
+
+
 # ── 风格 ──────────────────────────────────────────────────────────────────────
 
 

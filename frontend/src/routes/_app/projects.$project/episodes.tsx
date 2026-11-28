@@ -53,6 +53,15 @@ import {
 import { useGenerationCreditCost } from "@/lib/queries/generation-credit-cost";
 import { HealthBar } from "@/components/episode/health-bar";
 import {
+  BatchAutopilotBar,
+  EpisodeAutopilotBar,
+  EpisodeCardAutopilotControl,
+} from "@/components/episode/autopilot-bar";
+import {
+  useProjectAutopilotRuns,
+  type AutopilotRun,
+} from "@/lib/queries/autopilot";
+import {
   EpisodeActionsSlotProvider,
   useEpisodeActionsSlotActive,
   useEpisodeActionsSlotSetter,
@@ -130,6 +139,7 @@ function EpisodeHeaderLayout({
     <CollapsibleHeaderRegion className="bg-background">
       <div className="flex min-w-0 flex-col">
         <HealthBar project={project} episode={episode.number} />
+        <EpisodeAutopilotBar project={project} episode={episode.number} />
         {slotActive && (
           <div
             ref={setSlotTarget}
@@ -538,6 +548,7 @@ function EpisodePlanShortcut({
 function EpisodeListItem({
   project,
   episode,
+  autopilotRun,
   onSelect,
   identityCostDisplay,
   identityPromotion,
@@ -550,6 +561,7 @@ function EpisodeListItem({
 }: {
   project: string;
   episode: Episode;
+  autopilotRun?: AutopilotRun | null;
   onSelect: () => void;
   identityCostDisplay?: string | null;
   identityPromotion?: CreditPromotionDisplay | null;
@@ -806,7 +818,12 @@ function EpisodeListItem({
         />
       </div>
 
-      <div className="mt-auto pt-3">
+      <div className="mt-auto space-y-2 pt-3">
+        <EpisodeCardAutopilotControl
+          project={project}
+          episodeNumber={episode.number}
+          run={autopilotRun ?? null}
+        />
         <Button
           type="button"
           variant="outline"
@@ -852,6 +869,16 @@ export function EpisodesPage() {
   } = usePipelineStatus(project);
   const { data: charactersRes, isLoading: charactersLoading } =
     useCharacters(project);
+  const { data: autopilotRunsRes } = useProjectAutopilotRuns(
+    project,
+    selectedEpisodeNum === null,
+  );
+  const autopilotRuns = autopilotRunsRes?.data?.runs ?? [];
+  const autopilotRunByEpisode = useMemo(() => {
+    const map = new Map<number, AutopilotRun>();
+    for (const run of autopilotRuns) map.set(run.episode, run);
+    return map;
+  }, [autopilotRuns]);
   const characterBuildActivity = useTaskActivity(TASK_TYPES.BUILD_CHARACTERS, {
     episode: 0,
   });
@@ -1065,6 +1092,11 @@ export function EpisodesPage() {
                   totalCharacters={totalCharacters}
                   completedEpisodes={completedEpisodes}
                 />
+                <BatchAutopilotBar
+                  project={project}
+                  episodes={displayEpisodes}
+                  runs={autopilotRuns}
+                />
               </div>
             )}
             <div className="flex-1 overflow-y-auto p-6">
@@ -1111,6 +1143,7 @@ export function EpisodesPage() {
                         project={project}
                         key={ep.number}
                         episode={ep}
+                        autopilotRun={autopilotRunByEpisode.get(ep.number) ?? null}
                         onSelect={() => handleSelectEpisode(ep.number)}
                         identityCostDisplay={planIdentitiesCostDisplay}
                         identityPromotion={planIdentitiesCost.data?.data.promotion}
